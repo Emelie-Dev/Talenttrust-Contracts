@@ -3,7 +3,7 @@
 
 use soroban_sdk::{testutils::Address as _, vec, Address, Env};
 
-use crate::{Escrow, EscrowClient, EscrowError, ReleaseAuthorization};
+use crate::{ContractStatus, Escrow, EscrowClient, EscrowError, Milestone, ReleaseAuthorization};
 
 // --- Submodules ---
 
@@ -13,6 +13,9 @@ mod persistence;
 mod reputation;
 mod release_authorization;
 mod client_migration;
+mod release;
+mod refund;
+mod deposit;
 
 // --- Shared constants ---
 
@@ -21,6 +24,62 @@ pub const MILESTONE_TWO: i128 = 400_0000000;
 pub const MILESTONE_THREE: i128 = 600_0000000;
 
 // --- Shared helpers ---
+
+pub fn setup() -> (Env, Address, Address) {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client_addr = Address::generate(&env);
+    let freelancer_addr = Address::generate(&env);
+    (env, client_addr, freelancer_addr)
+}
+
+pub fn create_client(env: &Env) -> EscrowClient<'_> {
+    let id = env.register(Escrow, ());
+    EscrowClient::new(env, &id)
+}
+
+/// Create a 3-milestone contract (200 / 400 / 600 = 1 200 total) with ClientOnly auth.
+pub fn create_default_contract(
+    env: &Env,
+    client: &EscrowClient,
+    client_addr: &Address,
+    freelancer_addr: &Address,
+) -> u32 {
+    let milestones = vec![env, MILESTONE_ONE, MILESTONE_TWO, MILESTONE_THREE];
+    client.create_contract(
+        client_addr,
+        freelancer_addr,
+        &None,
+        &milestones,
+        &ReleaseAuthorization::ClientOnly,
+    )
+}
+
+/// Assert contract accounting fields match expected values.
+pub fn assert_contract_state(
+    contract: crate::Contract,
+    expected_status: ContractStatus,
+    expected_funded: i128,
+    expected_released: i128,
+    expected_refunded: i128,
+) {
+    assert_eq!(contract.status, expected_status);
+    assert_eq!(contract.funded_amount, expected_funded);
+    assert_eq!(contract.released_amount, expected_released);
+    assert_eq!(contract.refunded_amount, expected_refunded);
+}
+
+/// Assert the released/refunded flags for a specific milestone index.
+pub fn assert_milestone_flags(
+    milestones: soroban_sdk::Vec<Milestone>,
+    index: u32,
+    expected_released: bool,
+    expected_refunded: bool,
+) {
+    let m = milestones.get(index).unwrap();
+    assert_eq!(m.released, expected_released);
+    assert_eq!(m.refunded, expected_refunded);
+}
 
 pub fn register_client(env: &Env) -> EscrowClient<'_> {
     let id = env.register(Escrow, ());
@@ -80,7 +139,6 @@ pub fn create_contract_with_arbiter(
 }
 
 /// Create and fully complete a contract (all milestones released).
-/// Caller is the client address for deposit and release operations.
 pub fn complete_contract(env: &Env, client: &EscrowClient) -> (Address, Address, u32) {
     let (client_addr, freelancer_addr, id) = create_contract(env, client);
     assert!(client.deposit_funds(&id, &client_addr, &total_milestone_amount()));
@@ -89,19 +147,11 @@ pub fn complete_contract(env: &Env, client: &EscrowClient) -> (Address, Address,
     assert!(client.approve_milestone_release(&id, &client_addr, &1));
     assert!(client.release_milestone(&id, &client_addr, &1));
     assert!(client.approve_milestone_release(&id, &client_addr, &2));
-    assert!(client.release_milestone(&id, &client_addr, &0));
-    assert!(client.release_milestone(&id, &client_addr, &1));
     assert!(client.release_milestone(&id, &client_addr, &2));
     (client_addr, freelancer_addr, id)
 }
 
 /// Assert that a `try_*` call returns the expected contract error.
-///
-/// Soroban `try_*` methods return:
-///   `Result<Result<T, ConversionError>, Result<soroban_sdk::Error, InvokeError>>`
-/// A contract-level `panic_with_error` surfaces as `Err(Ok(soroban_sdk::Error))`.
-/// The `expected` argument can be any type convertible to `soroban_sdk::Error`,
-/// including both `EscrowError` and the canonical `Error` from `types.rs`.
 pub fn assert_contract_error<T, E: Into<soroban_sdk::Error> + core::fmt::Debug>(
     result: Result<
         Result<T, soroban_sdk::ConversionError>,

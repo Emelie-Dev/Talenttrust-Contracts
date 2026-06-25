@@ -9,7 +9,7 @@ issues so integrators can distinguish live API from roadmap.
 - `contracts/escrow/src/lib.rs`: contract type, shared API surface, reads, controls, cancellation, reputation, and module wiring.
 - `contracts/escrow/src/create_contract.rs`: `create_contract` lifecycle entrypoint.
 - `contracts/escrow/src/deposit.rs`: `deposit_funds` lifecycle entrypoint.
-- `contracts/escrow/src/release.rs`: `release_milestone` lifecycle entrypoint.
+- `contracts/escrow/src/release.rs`: `release_milestone` and `release_milestones_batch` lifecycle entrypoints.
 - `contracts/escrow/src/refund.rs`: `refund_unreleased_milestones` lifecycle entrypoint.
 
 ## Implemented API Surface
@@ -18,7 +18,8 @@ Lifecycle and reputation:
 
 - `create_contract(client, freelancer, milestone_amounts, deposit_mode) -> u32`
 - `deposit_funds(contract_id, amount) -> bool`
-- `release_milestone(contract_id, milestone_index) -> bool`
+- `release_milestone(contract_id, caller, milestone_index) -> bool`
+- `release_milestones_batch(contract_id, caller, milestone_indices: Vec<u32>) -> i128`
 - `issue_reputation(contract_id, caller, freelancer, rating) -> bool`
 - `cancel_contract(contract_id, caller) -> bool`
 - `finalize_contract(contract_id, finalizer) -> bool`
@@ -81,18 +82,42 @@ reached. Deposits that exceed the required total fail closed.
 
 ### 4. Release Milestones
 
+**Single release:**
+
 ```rust
-escrow.release_milestone(&contract_id, &0);
+escrow.release_milestone(&contract_id, &caller, &0);
 ```
 
-Current implementation note: `release_milestone` does not yet authenticate the
-client or an arbiter. It validates the contract id, milestone index, unreleased
-state, available funded balance, and paused state, then marks the milestone as
-released. This authorization gap is intentionally documented here until the auth
-fix lands.
+**Batch release** (`release_milestones_batch` — resolves [#392](https://github.com/Talenttrust/Talenttrust-Contracts/issues/392)):
 
-When the final milestone is released, status becomes `Completed` and one pending
-reputation credit is added for the freelancer.
+```rust
+let total_released = escrow.release_milestones_batch(
+    &contract_id,
+    &caller,
+    &vec![&env, 0_u32, 1_u32, 2_u32],
+);
+```
+
+`release_milestones_batch` validates and releases a deduplicated set of
+milestone indices atomically in a single transaction.
+
+**All-or-nothing guarantee:** every index is fully validated (role check,
+per-milestone approval, state, balance) before any state is mutated. If any
+index fails, the entire call reverts with no partial side-effects.
+
+**Errors specific to the batch entrypoint:**
+- `EmptyBatchRelease` — index list was empty.
+- `DuplicateMilestoneInBatch` — the same index appeared more than once.
+
+All other errors (`UnauthorizedRole`, `IndexOutOfBounds`, `MilestoneAlreadyReleased`,
+`AlreadyRefunded`, `InsufficientApprovals`, `InsufficientFunds`) carry the same
+semantics as `release_milestone` but abort the entire batch.
+
+**Events:** a single `("release", "batch")` event carrying `(contract_id,
+total_amount)` is emitted on success. A `("protocol_fee", "batch")` event is
+emitted when fees are configured.
+
+When the last unsettled milestone is released, status becomes `Completed`.
 
 ### 5. Issue Reputation
 
@@ -146,7 +171,9 @@ Implemented events:
 - `("emergency", "activated")` and `("emergency", "resolved")`
 - `("audit", contract_id)` for lifecycle state transitions
 - `("created", contract_id)` on contract creation
-- `("released", contract_id, milestone_index)` on release
+- `("released", contract_id, milestone_index)` on `release_milestone`
+- `("release", "batch") -> (contract_id, total_amount)` on `release_milestones_batch`
+- `("protocol_fee", "batch") -> (contract_id, total_fee)` on batch release when fees are configured
 - `("rep_issd", contract_id)` on reputation issuance
 - `("cancelled", contract_id)` on cancellation
 - `("finalized", contract_id)` on finalization

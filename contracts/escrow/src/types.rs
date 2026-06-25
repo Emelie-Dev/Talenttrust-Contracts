@@ -119,6 +119,10 @@ pub enum Error {
     InvalidMilestoneAmount = 26,
     ContractIdCollision = 27,
     ContractIdOverflow = 28,
+    /// `release_milestones_batch` was called with an empty index list.
+    EmptyBatchRelease = 29,
+    /// `release_milestones_batch` received the same milestone index more than once.
+    DuplicateMilestoneInBatch = 30,
 }
 
 #[contracttype]
