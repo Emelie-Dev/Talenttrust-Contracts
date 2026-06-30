@@ -1031,6 +1031,42 @@ impl Escrow {
         total_refund_amount
     }
 
+    /// Checks whether a contract with the given ID exists in storage.
+    ///
+    /// This is a cheap, non-panicking existence probe that returns `true` if
+    /// the contract record is present and `false` otherwise. Unlike [`get_contract`],
+    /// this function does **not** panic with `ContractNotFound` for missing IDs,
+    /// making it safe for indexers and clients iterating over ID ranges.
+    ///
+    /// # Security
+    /// This is a read-only operation that does **not** extend the contract's TTL.
+    /// Probing for contract existence cannot be abused to keep entries alive.
+    /// Only actual contract operations (reads/writes) extend TTL.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `contract_id` - The contract ID to check
+    ///
+    /// # Returns
+    /// * `true` if the contract exists
+    /// * `false` if the contract does not exist
+    ///
+    /// # Examples
+    /// ```
+    /// // Safe iteration over a range of IDs
+    /// for id in 1..=100 {
+    ///     if escrow.contract_exists(id) {
+    ///         let contract = escrow.get_contract(id);
+    ///         // process contract
+    ///     }
+    /// }
+    /// ```
+    pub fn contract_exists(env: Env, contract_id: u32) -> bool {
+        env.storage()
+            .persistent()
+            .has(&DataKey::Contract(contract_id))
+    }
+
     /// Retrieves contract information.
     pub fn get_contract(env: Env, contract_id: u32) -> Contract {
         let contract = env
@@ -1042,6 +1078,41 @@ impl Escrow {
         // Extend TTL on contract read
         ttl::extend_contract_ttl(&env, contract_id);
         contract
+    }
+
+    /// Returns the next contract ID to be allocated (the high-water mark).
+    ///
+    /// This reader returns the current value of `NextContractId`, which represents
+    /// the next ID that will be assigned when [`create_contract`] is called.
+    /// Indexers can use this to determine the allocation high-water mark and
+    /// safely iterate over the allocated ID range `[1, get_next_contract_id() - 1]`.
+    ///
+    /// # Security
+    /// This is a read-only operation that does not mutate contract state or extend TTL.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    ///
+    /// # Returns
+    /// The next contract ID to be allocated (always ≥ 1)
+    ///
+    /// # Examples
+    /// ```
+    /// // Get the high-water mark
+    /// let next_id = escrow.get_next_contract_id();
+    /// // All allocated IDs are in the range [1, next_id - 1]
+    /// for id in 1..next_id {
+    ///     if escrow.contract_exists(id) {
+    ///         let contract = escrow.get_contract(id);
+    ///         // process contract
+    ///     }
+    /// }
+    /// ```
+    pub fn get_next_contract_id(env: Env) -> u32 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::NextContractId)
+            .unwrap_or(1)
     }
 
     /// Returns a structured summary of the contract and its milestones.
