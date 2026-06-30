@@ -12,7 +12,7 @@
 use soroban_sdk::{testutils::Address as _, vec, Address, Env, Vec};
 
 use crate::{
-    DepositMode, Escrow, EscrowClient, EscrowError, MAX_MILESTONES, MAX_TOTAL_ESCROW_STROOPS,
+    Escrow, EscrowClient, EscrowError, ReleaseAuthorization, MAX_MILESTONES, MAX_TOTAL_ESCROW_STROOPS,
 };
 
 // Returns (env, contract_address). Each test creates EscrowClient locally so
@@ -48,7 +48,7 @@ fn rejects_same_client_and_freelancer() {
     let client = EscrowClient::new(&env, &cid);
     let same = Address::generate(&env);
     assert_err(
-        client.try_create_contract(&same, &same, &vec![&env, 100_i128], &DepositMode::ExactTotal),
+        client.try_create_contract(&same, &same, &None, &vec![&env, 100_i128], &ReleaseAuthorization::ClientOnly),
         EscrowError::InvalidParticipant,
     );
 }
@@ -62,7 +62,7 @@ fn rejects_empty_milestones() {
     let c = Address::generate(&env);
     let f = Address::generate(&env);
     assert_err(
-        client.try_create_contract(&c, &f, &Vec::new(&env), &DepositMode::ExactTotal),
+        client.try_create_contract(&c, &f, &None, &Vec::new(&env), &ReleaseAuthorization::ClientOnly),
         EscrowError::EmptyMilestones,
     );
 }
@@ -81,7 +81,7 @@ fn rejects_one_over_max_milestones() {
     }
     assert_eq!(amounts.len(), MAX_MILESTONES + 1);
     assert_err(
-        client.try_create_contract(&c, &f, &amounts, &DepositMode::ExactTotal),
+        client.try_create_contract(&c, &f, &None, &amounts, &ReleaseAuthorization::ClientOnly),
         EscrowError::TooManyMilestones,
     );
 }
@@ -99,7 +99,7 @@ fn accepts_exactly_max_milestones() {
         amounts.push_back(1_i128);
     }
     assert_eq!(amounts.len(), MAX_MILESTONES);
-    client.create_contract(&c, &f, &amounts, &DepositMode::ExactTotal);
+    client.create_contract(&c, &f, &None, &amounts, &ReleaseAuthorization::ClientOnly);
 }
 
 // guard 5 ─────────────────────────────────────────────────────────────────────
@@ -111,7 +111,7 @@ fn rejects_zero_milestone_amount() {
     let c = Address::generate(&env);
     let f = Address::generate(&env);
     assert_err(
-        client.try_create_contract(&c, &f, &vec![&env, 0_i128], &DepositMode::ExactTotal),
+        client.try_create_contract(&c, &f, &None, &vec![&env, 0_i128], &ReleaseAuthorization::ClientOnly),
         EscrowError::InvalidMilestoneAmount,
     );
 }
@@ -123,7 +123,7 @@ fn rejects_negative_milestone_amount() {
     let c = Address::generate(&env);
     let f = Address::generate(&env);
     assert_err(
-        client.try_create_contract(&c, &f, &vec![&env, -1_i128], &DepositMode::ExactTotal),
+        client.try_create_contract(&c, &f, &None, &vec![&env, -1_i128], &ReleaseAuthorization::ClientOnly),
         EscrowError::InvalidMilestoneAmount,
     );
 }
@@ -139,7 +139,7 @@ fn rejects_amounts_that_would_overflow_i128() {
     // Both > i128::MAX / 2, so checked_add returns None on the second iteration.
     let large = i128::MAX / 2 + 2;
     assert_err(
-        client.try_create_contract(&c, &f, &vec![&env, large, large], &DepositMode::ExactTotal),
+        client.try_create_contract(&c, &f, &None, &vec![&env, large, large], &ReleaseAuthorization::ClientOnly),
         EscrowError::PotentialOverflow,
     );
 }
@@ -155,8 +155,9 @@ fn accepts_total_exactly_at_cap() {
     client.create_contract(
         &c,
         &f,
+        &None,
         &vec![&env, MAX_TOTAL_ESCROW_STROOPS],
-        &DepositMode::ExactTotal,
+        &ReleaseAuthorization::ClientOnly,
     );
 }
 
@@ -170,8 +171,9 @@ fn rejects_total_one_over_cap() {
         client.try_create_contract(
             &c,
             &f,
+            &None,
             &vec![&env, MAX_TOTAL_ESCROW_STROOPS + 1],
-            &DepositMode::ExactTotal,
+            &ReleaseAuthorization::ClientOnly,
         ),
         EscrowError::InvalidMilestoneAmount,
     );
@@ -185,7 +187,7 @@ fn rejects_multi_milestone_total_over_cap() {
     let f = Address::generate(&env);
     let half = MAX_TOTAL_ESCROW_STROOPS / 2 + 1;
     assert_err(
-        client.try_create_contract(&c, &f, &vec![&env, half, half], &DepositMode::ExactTotal),
+        client.try_create_contract(&c, &f, &None, &vec![&env, half, half], &ReleaseAuthorization::ClientOnly),
         EscrowError::InvalidMilestoneAmount,
     );
 }
@@ -205,7 +207,7 @@ fn count_guard_fires_before_amount_guard() {
         amounts.push_back(MAX_TOTAL_ESCROW_STROOPS);
     }
     assert_err(
-        client.try_create_contract(&c, &f, &amounts, &DepositMode::ExactTotal),
+        client.try_create_contract(&c, &f, &None, &amounts, &ReleaseAuthorization::ClientOnly),
         EscrowError::TooManyMilestones,
     );
 }

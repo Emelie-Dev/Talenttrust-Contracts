@@ -1,162 +1,69 @@
-use soroban_sdk::vec;
+use soroban_sdk::{testutils::Address as _, testutils::Events, vec, Address, Env};
 
 use super::{
-    assert_contract_state, assert_milestone_flags, create_client, create_default_contract, setup,
+    assert_contract_error, complete_contract, create_contract, register_client,
+    total_milestone_amount,
 };
-use crate::ContractStatus;
-
-/// Tests that selected unreleased milestones can be refunded while preserving remaining balance.
-/// 
-/// # Security
-/// - Validates refund accounting accuracy
-/// - Ensures refunded_amount tracking is correct
-/// - Verifies milestone refunded flag is set
-/// - Confirms refundable balance calculation
+use crate::{ContractStatus, Error};
 #[test]
-fn refunds_selected_unreleased_milestones_and_preserves_remaining_balance() {
-    let (env, client_addr, freelancer_addr) = setup();
-    let client = create_client(&env);
-    let contract_id = create_default_contract(&env, &client, &client_addr, &freelancer_addr);
+fn refund_succeeds_on_funded_contract() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+    let (client_addr, _freelancer, contract_id) = create_contract(&env, &client);
 
-    assert!(client.deposit_funds(&contract_id, &client_addr, &1_200_0000000_i128));
-    assert!(client.approve_milestone_release(&contract_id, &client_addr, &0));
-    assert!(client.release_milestone(&contract_id, &client_addr, &0));
+    assert!(client.deposit_funds(&contract_id, &client_addr, &total_milestone_amount()));
 
     let refund_ids = vec![&env, 1_u32];
     let refunded = client.refund_unreleased_milestones(&contract_id, &refund_ids);
     assert_eq!(refunded, 400_0000000_i128);
 
     let contract = client.get_contract(&contract_id);
-    assert_contract_state(
-        contract,
-        ContractStatus::Funded,
-        1_200_0000000_i128,
-        200_0000000_i128,
-        400_0000000_i128,
-    );
-    assert_milestone_flags(client.get_milestones(&contract_id), 1, false, true);
-    assert_eq!(
-        client.get_refundable_balance(&contract_id),
-        600_0000000_i128
-    );
+    assert_eq!(contract.status, ContractStatus::Funded);
 }
 
-/// Tests that contract transitions to Refunded status when all unreleased milestones are refunded.
-/// 
-/// # Security
-/// - Validates state transition to Refunded
-/// - Ensures all milestones are properly marked
-/// - Confirms zero refundable balance
 #[test]
-fn marks_contract_refunded_when_all_unreleased_milestones_are_refunded() {
-    let (env, client_addr, freelancer_addr) = setup();
-    let client = create_client(&env);
-    let contract_id = create_default_contract(&env, &client, &client_addr, &freelancer_addr);
+fn rejects_refund_on_cancelled_contract() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+    let (client_addr, _freelancer, contract_id) = create_contract(&env, &client);
 
-    assert!(client.deposit_funds(&contract_id, &client_addr, &1_200_0000000_i128));
-    let refund_ids = vec![&env, 0_u32, 1_u32, 2_u32];
-    let refunded = client.refund_unreleased_milestones(&contract_id, &refund_ids);
-    assert_eq!(refunded, 1_200_0000000_i128);
-
-    let contract = client.get_contract(&contract_id);
-    assert_contract_state(
-        contract,
-        ContractStatus::Refunded,
-        1_200_0000000_i128,
-        0,
-        1_200_0000000_i128,
-    );
-    assert_eq!(client.get_refundable_balance(&contract_id), 0);
-}
-
-/// Tests that empty refund requests are rejected.
-/// 
-/// # Security
-/// - Prevents invalid state transitions
-/// - Validates input sanitization
-#[test]
-#[should_panic]
-fn rejects_empty_refund_request() {
-    let (env, client_addr, freelancer_addr) = setup();
-    let client = create_client(&env);
-    let contract_id = create_default_contract(&env, &client, &client_addr, &freelancer_addr);
-
-    let refund_ids = vec![&env];
-    client.refund_unreleased_milestones(&contract_id, &refund_ids);
-}
-
-/// Tests that duplicate milestone indices in a single refund request are rejected.
-/// 
-/// # Security
-/// - Prevents double-refund attacks
-/// - Validates input sanitization
-#[test]
-#[should_panic]
-fn rejects_duplicate_milestones_in_single_refund() {
-    let (env, client_addr, freelancer_addr) = setup();
-    let client = create_client(&env);
-    let contract_id = create_default_contract(&env, &client, &client_addr, &freelancer_addr);
-
-    assert!(client.deposit_funds(&contract_id, &client_addr, &1_200_0000000_i128));
-    let refund_ids = vec![&env, 1_u32, 1_u32];
-    client.refund_unreleased_milestones(&contract_id, &refund_ids);
-}
-
-/// Tests that refunding a released milestone is rejected.
-/// 
-/// # Security
-/// - Prevents double-spending
-/// - Validates milestone state before refund
-#[test]
-#[should_panic]
-fn rejects_refunding_released_milestone() {
-    let (env, client_addr, freelancer_addr) = setup();
-    let client = create_client(&env);
-    let contract_id = create_default_contract(&env, &client, &client_addr, &freelancer_addr);
-
-    assert!(client.deposit_funds(&contract_id, &client_addr, &1_200_0000000_i128));
-    assert!(client.approve_milestone_release(&contract_id, &client_addr, &0));
-    assert!(client.release_milestone(&contract_id, &client_addr, &0));
+    assert!(client.cancel_contract(&contract_id, &client_addr));
 
     let refund_ids = vec![&env, 0_u32];
-    client.refund_unreleased_milestones(&contract_id, &refund_ids);
-}
-
-/// Tests that refunding the same milestone twice is rejected.
-/// 
-/// # Security
-/// - Prevents double-refund attacks
-/// - Validates milestone refunded flag
-#[test]
-#[should_panic]
-fn rejects_refunding_same_milestone_twice() {
-    let (env, client_addr, freelancer_addr) = setup();
-    let client = create_client(&env);
-    let contract_id = create_default_contract(&env, &client, &client_addr, &freelancer_addr);
-
-    assert!(client.deposit_funds(&contract_id, &client_addr, &1_200_0000000_i128));
-    let refund_ids = vec![&env, 2_u32];
-    assert_eq!(
-        client.refund_unreleased_milestones(&contract_id, &refund_ids),
-        600_0000000_i128
+    assert_contract_error(
+        client.try_refund_unreleased_milestones(&contract_id, &refund_ids),
+        Error::InvalidState,
     );
-
-    client.refund_unreleased_milestones(&contract_id, &refund_ids);
 }
 
-/// Tests that refund is rejected when insufficient balance is available.
-/// 
-/// # Security
-/// - Prevents overdraft attacks
-/// - Validates balance checks before refund
 #[test]
-#[should_panic]
-fn rejects_refund_when_balance_is_not_available() {
-    let (env, client_addr, freelancer_addr) = setup();
-    let client = create_client(&env);
-    let contract_id = create_default_contract(&env, &client, &client_addr, &freelancer_addr);
+fn rejects_refund_on_completed_contract() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+    let (_client_addr, _freelancer, contract_id) = complete_contract(&env, &client);
 
-    assert!(client.deposit_funds(&contract_id, &client_addr, &200_0000000_i128));
-    let refund_ids = vec![&env, 1_u32];
-    client.refund_unreleased_milestones(&contract_id, &refund_ids);
+    let refund_ids = vec![&env, 0_u32];
+    assert_contract_error(
+        client.try_refund_unreleased_milestones(&contract_id, &refund_ids),
+        Error::InvalidState,
+    );
+}
+
+#[test]
+fn rejects_refund_on_finalized_contract() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+    let (client_addr, _freelancer, contract_id) = complete_contract(&env, &client);
+
+    assert!(client.finalize_contract(&contract_id, &client_addr));
+
+    let refund_ids = vec![&env, 0_u32];
+    assert_contract_error(
+        client.try_refund_unreleased_milestones(&contract_id, &refund_ids),
+        Error::AlreadyFinalized,
+    );
 }

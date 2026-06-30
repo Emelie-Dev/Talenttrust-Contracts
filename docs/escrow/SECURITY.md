@@ -1,7 +1,6 @@
 # Escrow Security Notes
 
-This document reflects the escrow API currently implemented in
-`contracts/escrow/src/lib.rs`.
+This document reflects the escrow API currently implemented in `contracts/escrow/src/lib.rs`.
 
 ## Implemented Controls
 
@@ -9,10 +8,13 @@ This document reflects the escrow API currently implemented in
 - Pause and emergency controls require the stored admin's authorization.
 - Mutating lifecycle calls fail while paused or in emergency mode.
 - `create_contract` requires client authorization, rejects identical
-  client/freelancer addresses, rejects empty or non-positive milestones, caps
-  milestone count, and caps total escrow value.
-- `deposit_funds` rejects non-positive amounts, repeat exact-total deposits,
-  exact-total mismatches, and incremental overfunding.
+  client/freelancer addresses, rejects empty milestones, caps milestone count,
+  caps total escrow value, and validates each milestone amount using centralized
+  amount validation (enforcing positivity, minimum positive amount of 1 stroop,
+  and a maximum single amount of 1,000,000,000,0000000 stroops/1M tokens).
+- `deposit_funds` validates the deposit amount using centralized amount validation
+  (enforcing positivity and maximum single amount limits), rejects repeat
+  exact-total deposits, exact-total mismatches, and incremental overfunding.
 - `release_milestone` requires `caller.require_auth()`, enforces the contract's
   `ReleaseAuthorization` mode (ClientOnly, ArbiterOnly, ClientAndArbiter, or
   MultiSig), and checks valid non-expired approvals before releasing funds.
@@ -34,29 +36,17 @@ This document reflects the escrow API currently implemented in
 
 ## Known Live Gaps
 
-- The contract records escrow accounting only. Token custody, token transfers,
-  and atomic asset movement are outside `lib.rs` and must be handled by a
-  separate audited integration.
-- Admin transfer, protocol fees, refunds, approval expiry, and storage migration
-  are not implemented public entrypoints.
-- `ReadinessChecklist.governed_params_set` exists, but no live governance
-  parameter entrypoint sets it to `true`.
+- The contract records escrow accounting only. Token custody, token transfers, and atomic asset movement are managed outside `lib.rs` and must be handled by a separate audited integration contract or protocol suite.
+- Secure two-step admin state transfer and standalone public protocol fee extraction/withdrawal are not implemented as public entrypoints.
+- `ReadinessChecklist.governed_params_set` exists, but no live governance parameter setter entrypoint updates it to `true`.
 
 ## Planned Security Work
 
-- Two-step admin transfer:
-  [#318](https://github.com/Talenttrust/Talenttrust-Contracts/issues/318)
-- Protocol fee accounting and withdrawal:
-  [#313](https://github.com/Talenttrust/Talenttrust-Contracts/issues/313),
-  [#314](https://github.com/Talenttrust/Talenttrust-Contracts/issues/314)
-- Immutable finalization:
-  [#320](https://github.com/Talenttrust/Talenttrust-Contracts/issues/320)
-- Governed parameter setter/readiness wiring:
-  [#323](https://github.com/Talenttrust/Talenttrust-Contracts/issues/323)
-- Structured deposit and fee events:
-  [#336](https://github.com/Talenttrust/Talenttrust-Contracts/issues/336)
-- Canonical storage-key reference:
-  [#342](https://github.com/Talenttrust/Talenttrust-Contracts/issues/342)
+- Two-step admin transfer: [#318](https://github.com/Talenttrust/Talenttrust-Contracts/issues/318)
+- Protocol fee extraction/withdrawal interface: [#314](https://github.com/Talenttrust/Talenttrust-Contracts/issues/314)
+- Governed parameter setter/readiness wiring: [#323](https://github.com/Talenttrust/Talenttrust-Contracts/issues/323)
+- Structured deposit and fee events: [#336](https://github.com/Talenttrust/Talenttrust-Contracts/issues/336)
+- Canonical storage-key reference: [#342](https://github.com/Talenttrust/Talenttrust-Contracts/issues/342)
 
 ## Reviewer Checklist
 
@@ -66,3 +56,11 @@ This document reflects the escrow API currently implemented in
    invalid amount paths fail closed.
 4. Verify off-chain token transfer integrations are atomic or idempotent with
    respect to escrow state changes.
+## Refund Gating
+
+`refund_unreleased_milestones` rejects calls when:
+- A finalization record exists for the contract (`AlreadyFinalized`).
+- The contract status is not `Created`, `Funded`, or `Disputed` (`InvalidState`).
+
+This prevents a client from requesting refunds against a cancelled, completed,
+or already-finalized contract.

@@ -18,10 +18,12 @@
 
 #![cfg(test)]
 
-use soroban_sdk::{testutils::Address as _, vec, Address, Env};
+use soroban_sdk::{
+    testutils::Address as _, testutils::Events, vec, Address, Env, IntoVal, Symbol, TryFromVal,
+};
 
 use super::register_client;
-use crate::{ContractStatus, Error, Escrow, EscrowClient, ReleaseAuthorization};
+use crate::{ContractStatus, Escrow, EscrowClient, EscrowError, ReleaseAuthorization};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -34,15 +36,36 @@ fn setup(env: &Env) -> (Address, Address, Address) {
     (client_addr, freelancer_addr, arbiter_addr)
 }
 
-/// Register the escrow contract and return a client.
+/// Register and initialize the escrow contract and return a client.
 fn register(env: &Env) -> EscrowClient<'_> {
     let id = env.register(Escrow, ());
-    EscrowClient::new(env, &id)
+    let client = EscrowClient::new(env, &id);
+    let admin = soroban_sdk::Address::generate(env);
+    client.initialize(&admin);
+    client
+}
+fn assert_contract_error<T, E>(
+    result: Result<T, Result<soroban_sdk::Error, soroban_sdk::InvokeError>>,
+    expected: E,
+) where
+    E: Into<soroban_sdk::Error> + core::fmt::Debug,
+{
+    match result {
+        Err(Ok(e)) => {
+            let expected_err: soroban_sdk::Error = expected.into();
+            assert_eq!(e, expected_err, "contract error code mismatch");
+        }
+        _other => panic!(
+            "expected contract error {:?}, got unexpected result variant",
+            expected
+        ),
+    }
 }
 
-fn assert_contract_error<T, E>(
+// Helper that accepts i128-returning try_* calls (like refund_unreleased_milestones)
+fn assert_contract_error_i128<E>(
     result: Result<
-        Result<T, soroban_sdk::ConversionError>,
+        Result<i128, soroban_sdk::Error>,
         Result<soroban_sdk::Error, soroban_sdk::InvokeError>,
     >,
     expected: E,
@@ -69,7 +92,7 @@ fn create_contract_with_mode(
     arbiter: &Option<Address>,
     release_auth: &ReleaseAuthorization,
 ) -> u32 {
-    let milestones = vec![env, 500_i128, 300_i128];
+    let milestones = vec![env, 500_i128, 300_i128, 200_i128];
     client.create_contract(
         client_addr,
         freelancer_addr,
@@ -79,7 +102,7 @@ fn create_contract_with_mode(
     )
 }
 
-fn fund_contract(env: &Env, client: &EscrowClient<'_>, contract_id: &u32) {
+fn fund_contract(_env: &Env, client: &EscrowClient<'_>, contract_id: &u32) {
     let milestones = client.get_milestones(contract_id);
     let total: i128 = milestones.iter().map(|m| m.amount).sum();
     let contract = client.get_contract(contract_id);
@@ -138,7 +161,10 @@ fn total() -> i128 {
 
 fn new_client(env: &Env) -> EscrowClient<'_> {
     let contract_id = env.register(Escrow, ());
-    EscrowClient::new(env, &contract_id)
+    let client = EscrowClient::new(env, &contract_id);
+    let admin = soroban_sdk::Address::generate(env);
+    client.initialize(&admin);
+    client
 }
 
 /// Create a funded contract with the given authorization mode.
@@ -218,7 +244,7 @@ fn client_only_freelancer_rejected() {
         &ReleaseAuthorization::ClientOnly,
     );
     let result = client.try_release_milestone(&id, &freelancer_addr, &0);
-    assert_contract_error(result, Error::UnauthorizedRole);
+    assert_contract_error(result, EscrowError::UnauthorizedRole);
 }
 
 #[test]
@@ -236,7 +262,7 @@ fn client_only_arbiter_rejected() {
         &ReleaseAuthorization::ClientOnly,
     );
     let result = client.try_release_milestone(&id, &arbiter_addr, &0);
-    assert_contract_error(result, Error::UnauthorizedRole);
+    assert_contract_error(result, EscrowError::UnauthorizedRole);
 }
 
 #[test]
@@ -255,7 +281,7 @@ fn client_only_attacker_rejected() {
     );
     let attacker = Address::generate(&env);
     let result = client.try_release_milestone(&id, &attacker, &0);
-    assert_contract_error(result, Error::UnauthorizedRole);
+    assert_contract_error(result, EscrowError::UnauthorizedRole);
 }
 
 // ===========================================================================
@@ -294,7 +320,7 @@ fn arbiter_only_client_rejected() {
         &ReleaseAuthorization::ArbiterOnly,
     );
     let result = client.try_release_milestone(&id, &client_addr, &0);
-    assert_contract_error(result, Error::UnauthorizedRole);
+    assert_contract_error(result, EscrowError::UnauthorizedRole);
 }
 
 #[test]
@@ -312,7 +338,7 @@ fn arbiter_only_freelancer_rejected() {
         &ReleaseAuthorization::ArbiterOnly,
     );
     let result = client.try_release_milestone(&id, &freelancer_addr, &0);
-    assert_contract_error(result, Error::UnauthorizedRole);
+    assert_contract_error(result, EscrowError::UnauthorizedRole);
 }
 
 #[test]
@@ -331,7 +357,7 @@ fn arbiter_only_attacker_rejected() {
     );
     let attacker = Address::generate(&env);
     let result = client.try_release_milestone(&id, &attacker, &0);
-    assert_contract_error(result, Error::UnauthorizedRole);
+    assert_contract_error(result, EscrowError::UnauthorizedRole);
 }
 
 // ===========================================================================
@@ -388,7 +414,7 @@ fn client_and_arbiter_freelancer_rejected() {
         &ReleaseAuthorization::ClientAndArbiter,
     );
     let result = client.try_release_milestone(&id, &freelancer_addr, &0);
-    assert_contract_error(result, Error::UnauthorizedRole);
+    assert_contract_error(result, EscrowError::UnauthorizedRole);
 }
 
 #[test]
@@ -407,7 +433,7 @@ fn client_and_arbiter_attacker_rejected() {
     );
     let attacker = Address::generate(&env);
     let result = client.try_release_milestone(&id, &attacker, &0);
-    assert_contract_error(result, Error::UnauthorizedRole);
+    assert_contract_error(result, EscrowError::UnauthorizedRole);
 }
 
 // ===========================================================================
@@ -463,7 +489,7 @@ fn multisig_arbiter_rejected() {
         &ReleaseAuthorization::MultiSig,
     );
     let result = client.try_release_milestone(&id, &arbiter_addr, &0);
-    assert_contract_error(result, Error::UnauthorizedRole);
+    assert_contract_error(result, EscrowError::UnauthorizedRole);
 }
 
 #[test]
@@ -482,7 +508,7 @@ fn multisig_attacker_rejected() {
     );
     let attacker = Address::generate(&env);
     let result = client.try_release_milestone(&id, &attacker, &0);
-    assert_contract_error(result, Error::UnauthorizedRole);
+    assert_contract_error(result, EscrowError::UnauthorizedRole);
 }
 
 #[test]
@@ -503,7 +529,7 @@ fn multisig_only_one_approval_insufficient() {
 
     assert!(client.approve_milestone_release(&id, &client_addr, &0));
     let result = client.try_release_milestone(&id, &client_addr, &0);
-    assert_contract_error(result, Error::InsufficientApprovals);
+    assert_contract_error(result, EscrowError::InsufficientApprovals);
 }
 
 #[test]
@@ -524,7 +550,7 @@ fn multisig_only_freelancer_approval_insufficient() {
 
     assert!(client.approve_milestone_release(&id, &freelancer_addr, &0));
     let result = client.try_release_milestone(&id, &freelancer_addr, &0);
-    assert_contract_error(result, Error::InsufficientApprovals);
+    assert_contract_error(result, EscrowError::InsufficientApprovals);
 }
 
 #[test]
@@ -544,7 +570,7 @@ fn multisig_arbiter_cannot_record_approval() {
     assert!(client.deposit_funds(&id, &client_addr, &total()));
 
     let result = client.try_approve_milestone_release(&id, &arbiter_addr, &0);
-    assert_contract_error(result, Error::UnauthorizedRole);
+    assert_contract_error(result, EscrowError::UnauthorizedRole);
 }
 
 // ===========================================================================
@@ -569,7 +595,7 @@ fn release_without_approval_fails() {
 
     // No approval recorded yet
     let result = client.try_release_milestone(&id, &client_addr, &0);
-    assert_contract_error(result, Error::InsufficientApprovals);
+    assert_contract_error(result, EscrowError::InsufficientApprovals);
 }
 
 // ===========================================================================
@@ -592,7 +618,7 @@ fn unauthorized_caller_without_auth_is_rejected() {
     );
     let stranger = Address::generate(&env);
     let result = client.try_release_milestone(&id, &stranger, &0);
-    assert_contract_error(result, Error::UnauthorizedRole);
+    assert_contract_error(result, EscrowError::UnauthorizedRole);
 }
 
 // ===========================================================================
@@ -618,7 +644,7 @@ fn fail_closed_on_unauthorized_caller_no_state_change() {
 
     let attacker = Address::generate(&env);
     let result = client.try_release_milestone(&id, &attacker, &0);
-    assert_contract_error(result, Error::UnauthorizedRole);
+    assert_contract_error(result, EscrowError::UnauthorizedRole);
 
     let after = client.get_contract(&id);
     assert_eq!(before.released_amount, after.released_amount);
@@ -641,7 +667,7 @@ fn double_release_is_rejected_and_amount_not_duplicated() {
 
     // Second release on the same milestone must fail with AlreadyReleased.
     let result = client.try_release_milestone(&id, &client_addr, &0);
-    assert_contract_error(result, Error::MilestoneAlreadyReleased);
+    assert_contract_error(result, EscrowError::MilestoneAlreadyReleased);
 
     // released_amount must not be doubled.
     let contract = client.get_contract(&id);
@@ -660,7 +686,7 @@ fn freelancer_cannot_release_milestone() {
     let (_client_addr, freelancer_addr, id) = funded_contract(&env, &client);
 
     let result = client.try_release_milestone(&id, &freelancer_addr, &0);
-    assert_contract_error(result, Error::UnauthorizedRole);
+    assert_contract_error(result, EscrowError::UnauthorizedRole);
 }
 
 #[test]
@@ -690,10 +716,10 @@ fn release_emits_events() {
     let events = env.events().all();
     assert!(events.len() > 0);
 
-    // Find the release event
+    let topic_val = Symbol::new(&env, "milestone_released");
     let release_event = events
         .iter()
-        .find(|event| event.0 == soroban_sdk::symbol_short!("milestone_released"));
+        .find(|event| event.1.len() > 0 && Symbol::from_val(&env, &event.1.get(0).unwrap()) == topic_val);
     assert!(release_event.is_some());
 }
 
@@ -719,7 +745,7 @@ fn rejects_double_release_and_completes_contract() {
     assert!(client.release_milestone(&contract_id, &client_addr, &0));
 
     let result = client.try_release_milestone(&contract_id, &client_addr, &0);
-    assert_contract_error(result, Error::MilestoneAlreadyReleased);
+    assert_contract_error(result, EscrowError::MilestoneAlreadyReleased);
 
     assert!(client.release_milestone(&contract_id, &client_addr, &1));
     assert!(client.release_milestone(&contract_id, &client_addr, &2));
@@ -751,11 +777,16 @@ fn rejects_refund_after_release_and_release_after_refund() {
     assert!(client.release_milestone(&contract_id, &client_addr, &0));
     let refund_ids = vec![&env, 0_u32];
     let refund_result = client.try_refund_unreleased_milestones(&contract_id, &refund_ids);
-    assert_contract_error(refund_result, Error::AlreadyReleased);
+    match refund_result {
+        Err(Ok(e)) => {
+            assert_eq!(e, soroban_sdk::Error::from(Error::AlreadyReleased));
+        }
+        other => panic!("expected contract error AlreadyReleased, got {:?}", other),
+    }
 
     let refund_ids = vec![&env, 1_u32];
-    assert!(client.refund_unreleased_milestones(&contract_id, &refund_ids));
+    assert!(client.refund_unreleased_milestones(&contract_id, &refund_ids) > 0);
 
     let result = client.try_release_milestone(&contract_id, &client_addr, &1);
-    assert_contract_error(result, Error::AlreadyRefunded);
+    assert_contract_error(result, EscrowError::AlreadyRefunded);
 }

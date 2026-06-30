@@ -1,5 +1,5 @@
 use crate::{
-    ttl, Contract, ContractStatus, DataKey, Error, Escrow, EscrowArgs, EscrowClient, Milestone,
+    ttl, Contract, ContractStatus, DataKey, Error, Escrow, Milestone,
 };
 use soroban_sdk::{contractimpl, Env, Symbol, Vec};
 

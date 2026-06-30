@@ -36,6 +36,16 @@ Rust/Soroban escrow contract for TalentTrust freelancer milestones.
 - `get_reputation(freelancer) -> Option<ReputationRecord>`
 - `get_pending_reputation_credits(freelancer) -> u32`
 
+### Protocol Fee Read API
+
+- `get_protocol_fee_bps() -> u32` — Returns the current protocol fee rate in basis points (0–10 000).  
+  Written by `set_protocol_fee_bps`. No authentication required. Returns `0` when unset. Bumps persistent TTL on access.
+
+- `get_accumulated_protocol_fees() -> i128` — Returns total protocol fees accumulated across all released milestones, in stroops.  
+  No authentication required. Returns `0` when no fees have been accumulated. Bumps persistent TTL on access.
+
+These entrypoints let off-chain dashboards and indexers read the current fee configuration and accrued revenue without scraping raw ledger entries.
+
 ## Important Integration Notes
 
 - `release_milestone` currently validates milestone state and available balance,

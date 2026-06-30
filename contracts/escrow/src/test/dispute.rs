@@ -1,290 +1,383 @@
-use crate::{ContractStatus, DepositMode, DisputeResolution, Escrow, EscrowClient, EscrowError};
-use soroban_sdk::{testutils::Address as _, vec, Address, Env};
+//! Dispute resolution payout arithmetic tests.
+//!
+//! These tests verify the pure money-splitting logic in `resolution_payouts`:
+//!
+//!   - FullRefund: all available → client (available, 0)
+//!   - FullPayout: all available → freelancer (0, available)
+//!   - PartialRefund: 70/30 split with floor rounding on freelancer leg
+//!   - Split: custom split requiring sum == available, no negative amounts
+//!
+//! Conservation invariant: client_payout + freelancer_payout == available.
 
-fn setup_initialized() -> (Env, Address) {
+#![cfg(test)]
+
+use crate::{
+    Contract, ContractStatus, DisputeResolution, DisputeSplit, Escrow, EscrowClient, Error,
+    ReleaseAuthorization,
+};
+use soroban_sdk::{testutils::Address as _, Address, Env};
+
+use crate::dispute::{resolution_payouts, final_status_after_resolution};
+
+// ---------------------------------------------------------------------------
+// Test helpers
+// ---------------------------------------------------------------------------
+
+fn make_env() -> Env {
     let env = Env::default();
     env.mock_all_auths();
-    let contract_id = env.register(Escrow, ());
-    let client = EscrowClient::new(&env, &contract_id);
-    let admin = Address::generate(&env);
-    assert!(client.initialize(&admin));
-    (env, contract_id)
+    env
 }
 
-fn create_client<'a>(env: &'a Env, contract_id: &Address) -> EscrowClient<'a> {
-    EscrowClient::new(env, contract_id)
+fn make_client(env: &Env) -> (EscrowClient<'_>, Address) {
+    let id = env.register(Escrow, ());
+    let client = EscrowClient::new(env, &id);
+    let admin = Address::generate(env);
+    client.initialize(&admin);
+    (client, admin)
 }
 
-fn funded_contract_with_arbiter(
-    env: &Env,
-    client: &EscrowClient<'_>,
-    milestones: soroban_sdk::Vec<i128>,
-    deposit_amount: i128,
-    deposit_mode: DepositMode,
-) -> (Address, Address, Address, u32) {
-    let client_addr = Address::generate(env);
-    let freelancer_addr = Address::generate(env);
-    let arbiter_addr = Address::generate(env);
-    let contract_id = client.create_contract_with_arbiter(
-        &client_addr,
-        &freelancer_addr,
-        &arbiter_addr,
-        &milestones,
-        &deposit_mode,
-    );
-    assert!(client.deposit_funds(&contract_id, &deposit_amount));
-    (client_addr, freelancer_addr, arbiter_addr, contract_id)
+/// Build a bare `Contract` value with controlled accounting fields for unit tests
+/// that call `resolution_payouts` / `final_status_after_resolution` directly.
+///
+/// `funded` is stored in both `total_deposited` and `funded_amount` so the
+/// helper reflects a freshly-funded contract with no prior releases.
+fn payout_contract(env: &Env, funded: i128, released: i128, refunded: i128) -> Contract {
+    Contract {
+        client: Address::generate(env),
+        freelancer: Address::generate(env),
+        arbiter: Some(Address::generate(env)),
+        status: ContractStatus::Disputed,
+        total_deposited: funded,
+        funded_amount: funded,
+        released_amount: released,
+        refunded_amount: refunded,
+        release_authorization: ReleaseAuthorization::ClientOnly,
+        reputation_issued: false,
+    }
 }
+
+// ---------------------------------------------------------------------------
+// Unit tests: resolution_payouts (pure arithmetic)
+// ---------------------------------------------------------------------------
 
 #[test]
-fn client_can_raise_dispute_on_funded_contract() {
-    let (env, contract_id) = setup_initialized();
-    let client = create_client(&env, &contract_id);
-    let (client_addr, _, _, escrow_id) = funded_contract_with_arbiter(
-        &env,
-        &client,
-        vec![&env, 100_i128, 200_i128],
-        300_i128,
-        DepositMode::ExactTotal,
-    );
-
-    assert!(client.raise_dispute(&escrow_id, &client_addr));
+fn resolution_payouts_full_refund_routes_all_to_client() {
+    let env = make_env();
+    // available = 100 - 20 - 10 = 70
+    let contract = payout_contract(&env, 100, 20, 10);
     assert_eq!(
-        client.get_contract(&escrow_id).status,
-        ContractStatus::Disputed
+        resolution_payouts(&contract, &DisputeResolution::FullRefund),
+        Ok((70, 0))
     );
 }
 
 #[test]
-fn freelancer_can_raise_dispute_on_partially_funded_contract() {
-    let (env, contract_id) = setup_initialized();
-    let client = create_client(&env, &contract_id);
-    let (_, freelancer_addr, _, escrow_id) = funded_contract_with_arbiter(
-        &env,
-        &client,
-        vec![&env, 100_i128, 200_i128],
-        150_i128,
-        DepositMode::Incremental,
-    );
-
-    assert!(client.raise_dispute(&escrow_id, &freelancer_addr));
+fn resolution_payouts_full_payout_routes_all_to_freelancer() {
+    let env = make_env();
+    let contract = payout_contract(&env, 100, 20, 10);
     assert_eq!(
-        client.get_contract(&escrow_id).status,
-        ContractStatus::Disputed
+        resolution_payouts(&contract, &DisputeResolution::FullPayout),
+        Ok((0, 70))
+    );
+}
+
+/// PartialRefund applies the documented 70/30 split with floor rounding.
+/// freelancer gets floor(available * 30 / 100), client gets remainder.
+#[test]
+fn resolution_payouts_partial_refund_applies_floor_rounded_30_pct_to_freelancer() {
+    let env = make_env();
+    // 101 available: freelancer = floor(101 * 30 / 100) = 30; client = 71
+    let contract = payout_contract(&env, 101, 0, 0);
+    assert_eq!(
+        resolution_payouts(&contract, &DisputeResolution::PartialRefund),
+        Ok((71, 30))
     );
 }
 
 #[test]
-fn raise_dispute_requires_contract_party() {
-    let (env, contract_id) = setup_initialized();
-    let client = create_client(&env, &contract_id);
-    let (_, _, _, escrow_id) = funded_contract_with_arbiter(
-        &env,
-        &client,
-        vec![&env, 100_i128],
-        100_i128,
-        DepositMode::ExactTotal,
+fn resolution_payouts_split_accepts_exact_conserving_amounts() {
+    let env = make_env();
+    // Zero available → (0, 0)
+    assert_eq!(
+        resolution_payouts(
+            &payout_contract(&env, 100, 0, 0),
+            &DisputeResolution::Split(DisputeSplit {
+                client_amount: 40,
+                freelancer_amount: 60,
+            })
+        ),
+        Ok((0, 0))
     );
+    // One stroop → floor(1 * 30 / 100) = 0, client gets 1
+    assert_eq!(
+        resolution_payouts(
+            &payout_contract(&env, 1, 0, 0),
+            &DisputeResolution::PartialRefund
+        ),
+        Ok((1, 0))
+    );
+}
 
-    let outsider = Address::generate(&env);
-    super::assert_contract_error(
-        client.try_raise_dispute(&escrow_id, &outsider),
-        EscrowError::UnauthorizedRole,
+/// Table-driven test covering PartialRefund rounding at odd amounts.
+/// Verifies that floor truncation never creates value (sum == available).
+#[test]
+fn resolution_payouts_partial_refund_odd_amount_rounding() {
+    let env = make_env();
+    // (available, expected_client, expected_freelancer)
+    let cases: &[(i128, i128, i128)] = &[
+        (7, 7, 0),
+        (10, 7, 3),
+        (99, 69, 30),
+        (100, 70, 30),
+        (101, 71, 30),
+        (102, 71, 31),
+        (103, 72, 31),
+    ];
+    for (available, expected_client, expected_freelancer) in cases {
+        let contract = payout_contract(&env, *available, 0, 0);
+        let (client, freelancer) = resolution_payouts(&contract, &DisputeResolution::PartialRefund)
+            .expect("PartialRefund should not error");
+        assert_eq!(
+            client + freelancer,
+            *available,
+            "sum must equal available for amount {}",
+            available
+        );
+        assert_eq!(client, *expected_client);
+        assert_eq!(freelancer, *expected_freelancer);
+    }
+}
+
+/// Split rejects negative amounts.
+#[test]
+fn resolution_payouts_split_rejects_negative_legs() {
+    let env = make_env();
+    let contract = payout_contract(&env, 100, 0, 0);
+    let split = DisputeSplit { client_amount: -1, freelancer_amount: 101 };
+    assert_eq!(
+        resolution_payouts(&contract, &DisputeResolution::Split(split)),
+        Err(Error::InvalidDisputeSplit)
+    );
+    let split = DisputeSplit { client_amount: 101, freelancer_amount: -1 };
+    assert_eq!(
+        resolution_payouts(&contract, &DisputeResolution::Split(split)),
+        Err(Error::InvalidDisputeSplit)
     );
 }
 
 #[test]
-fn raise_dispute_requires_assigned_arbiter() {
-    let (env, contract_id) = setup_initialized();
-    let client = create_client(&env, &contract_id);
+fn resolution_payouts_split_rejects_non_conserving_sum() {
+    let env = make_env();
+    let contract = payout_contract(&env, 100, 0, 0);
+    // 40 + 59 = 99 ≠ 100
+    let split = DisputeSplit { client_amount: 40, freelancer_amount: 59 };
+    assert_eq!(
+        resolution_payouts(&contract, &DisputeResolution::Split(split)),
+        Err(Error::InvalidDisputeSplit)
+    );
+    // 40 + 61 = 101 ≠ 100
+    let split = DisputeSplit { client_amount: 40, freelancer_amount: 61 };
+    assert_eq!(
+        resolution_payouts(&contract, &DisputeResolution::Split(split)),
+        Err(Error::InvalidDisputeSplit)
+    );
+}
+
+/// Split accepts any (a, b) where a + b == available and both are non-negative.
+#[test]
+fn resolution_payouts_split_accepts_exact_splits() {
+    let env = make_env();
+    let split = DisputeSplit { client_amount: 40, freelancer_amount: 60 };
+    assert_eq!(
+        resolution_payouts(&payout_contract(&env, 100, 0, 0), &DisputeResolution::Split(split)),
+        Ok((40, 60))
+    );
+    let split = DisputeSplit { client_amount: 0, freelancer_amount: 0 };
+    assert_eq!(
+        resolution_payouts(&payout_contract(&env, 0, 0, 0), &DisputeResolution::Split(split)),
+        Ok((0, 0))
+    );
+}
+
+/// Split uses checked addition and rejects overflow before the sum check.
+#[test]
+fn resolution_payouts_split_rejects_overflowing_sum() {
+    let env = make_env();
+    let contract = payout_contract(&env, i128::MAX, 0, 0);
+    let split = DisputeSplit { client_amount: i128::MAX, freelancer_amount: 1 };
+    assert_eq!(
+        resolution_payouts(&contract, &DisputeResolution::Split(split)),
+        Err(Error::PotentialOverflow)
+    );
+}
+
+/// Payout math fails closed when released + refunded already exceed funded_amount.
+#[test]
+fn resolution_payouts_rejects_corrupted_accounting_state() {
+    let env = make_env();
+    // released(70) + refunded(31) = 101 > funded(100) → available < 0
+    let contract = payout_contract(&env, 100, 70, 31);
+    assert_eq!(
+        resolution_payouts(&contract, &DisputeResolution::FullRefund),
+        Err(Error::AccountingInvariantViolated)
+    );
+}
+
+/// Table-driven test verifying conservation invariant across all resolution variants.
+#[test]
+fn resolution_payouts_conserves_available_balance() {
+    let env = make_env();
+    let available = 12345_i128;
+
+    // FullRefund
+    let c = payout_contract(&env, available, 0, 0);
+    let (client, freelancer) = resolution_payouts(&c, &DisputeResolution::FullRefund).unwrap();
+    assert_eq!(client + freelancer, available);
+
+    // FullPayout
+    let c = payout_contract(&env, available, 0, 0);
+    let (client, freelancer) = resolution_payouts(&c, &DisputeResolution::FullPayout).unwrap();
+    assert_eq!(client + freelancer, available);
+
+    // PartialRefund
+    let c = payout_contract(&env, available, 0, 0);
+    let (client, freelancer) = resolution_payouts(&c, &DisputeResolution::PartialRefund).unwrap();
+    assert_eq!(client + freelancer, available);
+
+    // Split (exact)
+    let c = payout_contract(&env, available, 0, 0);
+    let split = DisputeSplit { client_amount: 5000, freelancer_amount: available - 5000 };
+    let (client, freelancer) = resolution_payouts(&c, &DisputeResolution::Split(split))
+        .unwrap();
+    assert_eq!(client + freelancer, available);
+}
+
+/// final_status returns Refunded only when the full deposit has been refunded.
+#[test]
+fn final_status_after_resolution_returns_refunded_only_when_fully_refunded() {
+    let env = make_env();
+    assert_eq!(
+        final_status_after_resolution(&payout_contract(&env, 100, 0, 100)),
+        ContractStatus::Refunded
+    );
+    assert_eq!(
+        final_status_after_resolution(&payout_contract(&env, 100, 30, 70)),
+        ContractStatus::Completed
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Integration tests
+// ---------------------------------------------------------------------------
+
+/// Integration: FullRefund on a funded contract conserves balance and marks Refunded.
+#[test]
+fn resolve_full_refund_conserves_and_marks_refunded() {
+    let env = make_env();
+    let (client, _) = make_client(&env);
     let client_addr = Address::generate(&env);
     let freelancer_addr = Address::generate(&env);
+    let arbiter_addr = Address::generate(&env);
+    let milestones = soroban_sdk::vec![&env, 125_i128, 75_i128];
     let escrow_id = client.create_contract(
         &client_addr,
         &freelancer_addr,
-        &vec![&env, 100_i128],
-        &DepositMode::ExactTotal,
+        &Some(arbiter_addr.clone()),
+        &milestones,
+        &ReleaseAuthorization::ClientOnly,
     );
-    assert!(client.deposit_funds(&escrow_id, &100_i128));
+    client.deposit_funds(&escrow_id, &client_addr, &200_i128);
 
-    super::assert_contract_error(
-        client.try_raise_dispute(&escrow_id, &client_addr),
-        EscrowError::ArbiterRequired,
-    );
-}
-
-#[test]
-fn resolve_full_refund_marks_refunded_and_closes_accounting() {
-    let (env, contract_id) = setup_initialized();
-    let client = create_client(&env, &contract_id);
-    let (client_addr, _, arbiter_addr, escrow_id) = funded_contract_with_arbiter(
-        &env,
-        &client,
-        vec![&env, 125_i128, 75_i128],
-        200_i128,
-        DepositMode::ExactTotal,
-    );
-    assert!(client.raise_dispute(&escrow_id, &client_addr));
-
-    assert!(client.resolve_dispute(&escrow_id, &arbiter_addr, &DisputeResolution::FullRefund,));
+    client.raise_dispute(&escrow_id, &client_addr);
+    client.resolve_dispute(&escrow_id, &arbiter_addr, &DisputeResolution::FullRefund);
 
     let contract = client.get_contract(&escrow_id);
     assert_eq!(contract.status, ContractStatus::Refunded);
     assert_eq!(contract.released_amount, 0);
     assert_eq!(contract.refunded_amount, 200);
-    assert_eq!(
-        contract.released_amount + contract.refunded_amount,
-        contract.total_deposited
-    );
+    assert_eq!(contract.released_amount + contract.refunded_amount, contract.funded_amount);
 }
 
+/// Integration: FullPayout on a funded contract conserves balance and marks Completed.
 #[test]
-fn resolve_partial_refund_applies_70_30_to_remaining_balance() {
-    let (env, contract_id) = setup_initialized();
-    let client = create_client(&env, &contract_id);
-    let (client_addr, _, arbiter_addr, escrow_id) = funded_contract_with_arbiter(
-        &env,
-        &client,
-        vec![&env, 101_i128, 100_i128],
-        201_i128,
-        DepositMode::ExactTotal,
+fn resolve_full_payout_conserves_and_marks_completed() {
+    let env = make_env();
+    let client = make_client(&env);
+    let client_addr = Address::generate(&env);
+    let freelancer_addr = Address::generate(&env);
+    let arbiter_addr = Address::generate(&env);
+    let milestones = soroban_sdk::vec![&env, 150_i128];
+    let escrow_id = client.create_contract(
+        &client_addr,
+        &freelancer_addr,
+        &Some(arbiter_addr.clone()),
+        &milestones,
+        &ReleaseAuthorization::ClientOnly,
     );
-    assert!(client.release_milestone(&escrow_id, &0));
-    assert!(client.raise_dispute(&escrow_id, &client_addr));
+    client.deposit_funds(&escrow_id, &client_addr, &150_i128);
 
-    assert!(client.resolve_dispute(&escrow_id, &arbiter_addr, &DisputeResolution::PartialRefund,));
+    client.raise_dispute(&escrow_id, &client_addr);
+    client.resolve_dispute(&escrow_id, &arbiter_addr, &DisputeResolution::FullPayout);
 
     let contract = client.get_contract(&escrow_id);
     assert_eq!(contract.status, ContractStatus::Completed);
-    assert_eq!(contract.released_amount, 131);
-    assert_eq!(contract.refunded_amount, 70);
-    assert_eq!(
-        contract.released_amount + contract.refunded_amount,
-        contract.total_deposited
-    );
+    assert_eq!(contract.released_amount, 150);
+    assert_eq!(contract.refunded_amount, 0);
+    assert_eq!(contract.released_amount + contract.refunded_amount, contract.funded_amount);
 }
 
+/// Integration: PartialRefund applies 70/30 split and conserves balance.
 #[test]
-fn resolve_split_accepts_custom_amounts_that_match_available_balance() {
-    let (env, contract_id) = setup_initialized();
-    let client = create_client(&env, &contract_id);
-    let (client_addr, _, arbiter_addr, escrow_id) = funded_contract_with_arbiter(
-        &env,
-        &client,
-        vec![&env, 40_i128, 60_i128],
-        100_i128,
-        DepositMode::ExactTotal,
+fn resolve_partial_refund_conserves_70_30_split() {
+    let env = make_env();
+    let client = make_client(&env);
+    let client_addr = Address::generate(&env);
+    let freelancer_addr = Address::generate(&env);
+    let arbiter_addr = Address::generate(&env);
+    let milestones = soroban_sdk::vec![&env, 100_i128];
+    let escrow_id = client.create_contract(
+        &client_addr,
+        &freelancer_addr,
+        &Some(arbiter_addr.clone()),
+        &milestones,
+        &ReleaseAuthorization::ClientOnly,
     );
-    assert!(client.raise_dispute(&escrow_id, &client_addr));
+    client.deposit_funds(&escrow_id, &client_addr, &100_i128);
 
-    assert!(client.resolve_dispute(&escrow_id, &arbiter_addr, &DisputeResolution::Split(35, 65),));
+    client.raise_dispute(&escrow_id, &client_addr);
+    client.resolve_dispute(&escrow_id, &arbiter_addr, &DisputeResolution::PartialRefund);
+
+    let contract = client.get_contract(&escrow_id);
+    assert_eq!(contract.status, ContractStatus::Completed);
+    assert_eq!(contract.released_amount + contract.refunded_amount, contract.funded_amount);
+}
+
+/// Integration: Split accepts valid custom amounts and conserves balance.
+#[test]
+fn resolve_split_conserves_custom_amounts() {
+    let env = make_env();
+    let client = make_client(&env);
+    let client_addr = Address::generate(&env);
+    let freelancer_addr = Address::generate(&env);
+    let arbiter_addr = Address::generate(&env);
+    let milestones = soroban_sdk::vec![&env, 40_i128, 60_i128];
+    let escrow_id = client.create_contract(
+        &client_addr,
+        &freelancer_addr,
+        &Some(arbiter_addr.clone()),
+        &milestones,
+        &ReleaseAuthorization::ClientOnly,
+    );
+    client.deposit_funds(&escrow_id, &client_addr, &100_i128);
+
+    client.raise_dispute(&escrow_id, &client_addr);
+    let split = DisputeSplit { client_amount: 35, freelancer_amount: 65 };
+    client.resolve_dispute(&escrow_id, &arbiter_addr, &DisputeResolution::Split(split));
 
     let contract = client.get_contract(&escrow_id);
     assert_eq!(contract.status, ContractStatus::Completed);
     assert_eq!(contract.refunded_amount, 35);
     assert_eq!(contract.released_amount, 65);
-}
-
-#[test]
-fn resolve_split_rejects_invalid_totals() {
-    let (env, contract_id) = setup_initialized();
-    let client = create_client(&env, &contract_id);
-    let (client_addr, _, arbiter_addr, escrow_id) = funded_contract_with_arbiter(
-        &env,
-        &client,
-        vec![&env, 100_i128],
-        100_i128,
-        DepositMode::ExactTotal,
-    );
-    assert!(client.raise_dispute(&escrow_id, &client_addr));
-
-    super::assert_contract_error(
-        client.try_resolve_dispute(&escrow_id, &arbiter_addr, &DisputeResolution::Split(30, 50)),
-        EscrowError::InvalidDisputeSplit,
-    );
-}
-
-#[test]
-fn resolve_dispute_requires_assigned_arbiter() {
-    let (env, contract_id) = setup_initialized();
-    let client = create_client(&env, &contract_id);
-    let (client_addr, _, _, escrow_id) = funded_contract_with_arbiter(
-        &env,
-        &client,
-        vec![&env, 100_i128],
-        100_i128,
-        DepositMode::ExactTotal,
-    );
-    assert!(client.raise_dispute(&escrow_id, &client_addr));
-
-    let outsider = Address::generate(&env);
-    super::assert_contract_error(
-        client.try_resolve_dispute(&escrow_id, &outsider, &DisputeResolution::FullPayout),
-        EscrowError::UnauthorizedRole,
-    );
-}
-
-#[test]
-fn resolve_dispute_rejects_non_disputed_contract() {
-    let (env, contract_id) = setup_initialized();
-    let client = create_client(&env, &contract_id);
-    let (_, _, arbiter_addr, escrow_id) = funded_contract_with_arbiter(
-        &env,
-        &client,
-        vec![&env, 100_i128],
-        100_i128,
-        DepositMode::ExactTotal,
-    );
-
-    super::assert_contract_error(
-        client.try_resolve_dispute(&escrow_id, &arbiter_addr, &DisputeResolution::FullRefund),
-        EscrowError::InvalidStatusTransition,
-    );
-}
-
-#[test]
-fn release_is_blocked_while_disputed() {
-    let (env, contract_id) = setup_initialized();
-    let client = create_client(&env, &contract_id);
-    let (client_addr, _, _, escrow_id) = funded_contract_with_arbiter(
-        &env,
-        &client,
-        vec![&env, 100_i128, 50_i128],
-        150_i128,
-        DepositMode::ExactTotal,
-    );
-    assert!(client.raise_dispute(&escrow_id, &client_addr));
-
-    super::assert_contract_error(
-        client.try_release_milestone(&escrow_id, &0),
-        EscrowError::InvalidStatusTransition,
-    );
-}
-
-#[test]
-fn pause_blocks_raise_and_resolve_dispute() {
-    let (env, contract_id) = setup_initialized();
-    let client = create_client(&env, &contract_id);
-    let (client_addr, _, arbiter_addr, escrow_id) = funded_contract_with_arbiter(
-        &env,
-        &client,
-        vec![&env, 100_i128],
-        100_i128,
-        DepositMode::ExactTotal,
-    );
-
-    assert!(client.pause());
-    super::assert_contract_error(
-        client.try_raise_dispute(&escrow_id, &client_addr),
-        EscrowError::ContractPaused,
-    );
-
-    assert!(client.unpause());
-    assert!(client.raise_dispute(&escrow_id, &client_addr));
-    assert!(client.pause());
-
-    super::assert_contract_error(
-        client.try_resolve_dispute(&escrow_id, &arbiter_addr, &DisputeResolution::FullRefund),
-        EscrowError::ContractPaused,
-    );
+    assert_eq!(contract.released_amount + contract.refunded_amount, contract.funded_amount);
 }

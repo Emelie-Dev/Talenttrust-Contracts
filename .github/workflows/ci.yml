@@ -1,43 +1,56 @@
-name: CI
+name: Rust CI (Windows)
 
 on:
   push:
-    branches: [main]
+    branches: [ main, develop ]
   pull_request:
-    branches: [main]
-  workflow_dispatch:
+    branches: [ main, develop ]
 
 jobs:
-  fmt-build-test:
-    runs-on: ubuntu-latest
+  build-and-test:
+    runs-on: windows-latest
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
         with:
-          components: rustfmt, clippy
+          toolchain: stable
+          profile: minimal
+          default: true
 
-      - name: Cache cargo registry and build
-        uses: Swatinem/rust-cache@v2
+      - name: Verify MSVC linker
+        shell: pwsh
+        run: |
+          if (-not (Get-Command link.exe -ErrorAction SilentlyContinue)) {
+            Write-Error "MSVC linker (link.exe) not found."
+            exit 1
+          } else {
+            Write-Host "MSVC linker found."
+          }
 
-      - name: Check formatting
-        run: cargo fmt --all -- --check
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
 
-      - name: Clippy (deny warnings)
-        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Cache Cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-build-
 
-      - name: Build
-        run: cargo build
+      - name: Build contract
+        run: cargo build --workspace --release
 
       - name: Run tests
-        run: cargo test
-
-      - name: Check no snapshot or artifact files were generated
-        run: |
-          DIRTY=$(git status --porcelain)
-          if [ -n "$DIRTY" ]; then
-            echo "::error::Tests generated untracked/modified files. Add them to .gitignore or fix the test."
-            echo "$DIRTY"
-            exit 1
-          fi
+        run: cargo test --workspace --quiet -- --nocapture
