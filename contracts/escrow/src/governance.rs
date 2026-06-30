@@ -9,6 +9,12 @@ impl Escrow {
     /// Admin-gated: the stored admin (under [`DataKey::Admin`]) must authorize
     /// the call and the contract must be initialized.
     ///
+    /// `new_bps` must be `≤ 10_000` (100%). The fee takes effect immediately for
+    /// the next `release_milestone` call.
+    ///
+    /// See [`docs/escrow/protocol-fees.md`](../../../docs/escrow/protocol-fees.md) for
+    /// the basis-point model, fee formula, accrual storage, and withdrawal flow.
+    ///
     /// # Events
     /// `(Symbol("protocol_fee_bps"),)` → `(old_bps, new_bps, admin, timestamp)`
     pub fn set_protocol_fee_bps(env: Env, new_bps: u32) -> bool {
@@ -173,6 +179,12 @@ impl Escrow {
     }
 
     /// Set both governance parameters at once and update the readiness checklist.
+    ///
+    /// Sets `protocol_fee_bps` (must be `≤ 10_000`) and `max_escrow_total_stroops`
+    /// atomically. Also flips `ReadinessChecklist::governed_params_set` to `true`.
+    ///
+    /// See [`docs/escrow/protocol-fees.md`](../../../docs/escrow/protocol-fees.md) for
+    /// the full basis-point model and fee lifecycle.
     pub fn set_governed_params(
         env: Env,
         admin: Address,
