@@ -168,6 +168,8 @@ pub enum Error {
     InvalidProtocolParameters = 49,
     /// The escrow cap would be exceeded by this operation.
     EscrowCapExceeded = 51,
+    /// No settlement token has been bound for custody transfers.
+    SettlementTokenNotConfigured = 52,
 }
 
 
@@ -329,4 +331,3 @@ impl DisputeResolution {
         }
     }
 }
-

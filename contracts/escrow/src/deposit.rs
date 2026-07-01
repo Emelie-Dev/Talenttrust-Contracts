@@ -1,6 +1,66 @@
 use crate::{ttl, Contract, ContractStatus, DataKey, Error, Milestone};
 use soroban_sdk::{Address, Env, Symbol, Vec};
 
+/// Validated deposit data that is safe to use before any token transfer.
+pub struct ValidatedDeposit {
+    pub contract: Contract,
+    pub total_amount: i128,
+}
+
+/// Validate a deposit without mutating state or moving tokens.
+///
+/// This preflight must run before the SAC transfer in `deposit_funds` so an
+/// invalid deposit cannot debit the client and then fail during escrow state
+/// validation.
+pub fn validate_deposit(
+    env: &Env,
+    contract_id: u32,
+    caller: &Address,
+    amount: i128,
+) -> ValidatedDeposit {
+    if amount <= 0 {
+        env.panic_with_error(Error::AmountMustBePositive);
+    }
+
+    let contract: Contract = env
+        .storage()
+        .persistent()
+        .get(&DataKey::Contract(contract_id))
+        .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
+
+    if caller != &contract.client {
+        env.panic_with_error(Error::UnauthorizedRole);
+    }
+
+    if contract.status != ContractStatus::Created
+        && contract.status != ContractStatus::PartiallyFunded
+    {
+        env.panic_with_error(Error::InvalidState);
+    }
+
+    let milestone_key = Symbol::new(env, "milestones");
+    let milestones: Vec<Milestone> = env
+        .storage()
+        .persistent()
+        .get(&(DataKey::Contract(contract_id), milestone_key))
+        .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
+
+    let total_amount: i128 = milestones.iter().map(|m| m.amount).sum();
+    let new_funded_amount = contract
+        .funded_amount
+        .checked_add(amount)
+        .unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
+
+    if new_funded_amount > total_amount {
+        env.panic_with_error(Error::InvalidDepositAmount);
+    }
+
+    ValidatedDeposit {
+        contract,
+        total_amount,
+    }
+}
+
 /// Deposits funds into the contract. Transitions to Funded status when fully funded.
 ///
 /// # Arguments
@@ -18,43 +78,36 @@ use soroban_sdk::{Address, Env, Symbol, Vec};
 /// * `InvalidState` - If contract is not in Created state
 /// * `UnauthorizedRole` - If caller is not the client
 pub fn deposit_funds_impl(env: &Env, contract_id: u32, caller: Address, amount: i128) -> bool {
-    if amount <= 0 {
-        env.panic_with_error(Error::AmountMustBePositive);
-    }
+    let validated = validate_deposit(env, contract_id, &caller, amount);
+    apply_validated_deposit(env, contract_id, caller, amount, validated)
+}
 
-    let mut contract: Contract = env
-        .storage()
-        .persistent()
-        .get(&DataKey::Contract(contract_id))
-        .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
+/// Apply a deposit after the caller has been validated and the token transfer succeeded.
+pub fn apply_validated_deposit(
+    env: &Env,
+    contract_id: u32,
+    caller: Address,
+    amount: i128,
+    validated: ValidatedDeposit,
+) -> bool {
+    let ValidatedDeposit {
+        mut contract,
+        total_amount,
+    } = validated;
 
     ttl::extend_contract_ttl(&env, contract_id);
 
-    if caller != contract.client {
-        env.panic_with_error(Error::UnauthorizedRole);
-    }
     caller.require_auth();
-
-    if contract.status != ContractStatus::Created {
-        env.panic_with_error(Error::InvalidState);
-    }
 
     contract.funded_amount += amount;
     contract.total_deposited += amount;
 
-    let milestone_key = Symbol::new(&env, "milestones");
-    let milestones: Vec<Milestone> = env
-        .storage()
-        .persistent()
-        .get(&(DataKey::Contract(contract_id), milestone_key))
-        .unwrap();
-
     ttl::extend_milestone_ttl(&env, contract_id);
 
-    let total_amount: i128 = milestones.iter().map(|m| m.amount).sum();
-
-    if contract.funded_amount >= total_amount && contract.status == ContractStatus::Created {
+    if contract.funded_amount == total_amount {
         contract.status = ContractStatus::Funded;
+    } else {
+        contract.status = ContractStatus::PartiallyFunded;
     }
 
     env.storage()
