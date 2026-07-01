@@ -401,7 +401,7 @@ impl Escrow {
         let token_client = token::Client::new(&env, &token);
         token_client.transfer(&caller, &env.current_contract_address(), &amount);
 
-        deposit::apply_validated_deposit(&env, contract_id, caller, amount, validated)
+        deposit::apply_validated_deposit(&env, contract_id, caller, validated)
     }
 
     /// Finalize an escrow contract by writing immutable close metadata.

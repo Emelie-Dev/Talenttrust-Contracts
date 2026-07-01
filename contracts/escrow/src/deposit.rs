@@ -4,6 +4,8 @@ use soroban_sdk::{Address, Env, Symbol, Vec};
 /// Validated deposit data that is safe to use before any token transfer.
 pub struct ValidatedDeposit {
     pub contract: Contract,
+    pub new_funded_amount: i128,
+    pub new_total_deposited: i128,
     pub total_amount: i128,
 }
 
@@ -50,6 +52,10 @@ pub fn validate_deposit(
         .funded_amount
         .checked_add(amount)
         .unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
+    let new_total_deposited = contract
+        .total_deposited
+        .checked_add(amount)
+        .unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
 
     if new_funded_amount > total_amount {
         env.panic_with_error(Error::InvalidDepositAmount);
@@ -57,6 +63,8 @@ pub fn validate_deposit(
 
     ValidatedDeposit {
         contract,
+        new_funded_amount,
+        new_total_deposited,
         total_amount,
     }
 }
@@ -79,7 +87,7 @@ pub fn validate_deposit(
 /// * `UnauthorizedRole` - If caller is not the client
 pub fn deposit_funds_impl(env: &Env, contract_id: u32, caller: Address, amount: i128) -> bool {
     let validated = validate_deposit(env, contract_id, &caller, amount);
-    apply_validated_deposit(env, contract_id, caller, amount, validated)
+    apply_validated_deposit(env, contract_id, caller, validated)
 }
 
 /// Apply a deposit after the caller has been validated and the token transfer succeeded.
@@ -87,11 +95,12 @@ pub fn apply_validated_deposit(
     env: &Env,
     contract_id: u32,
     caller: Address,
-    amount: i128,
     validated: ValidatedDeposit,
 ) -> bool {
     let ValidatedDeposit {
         mut contract,
+        new_funded_amount,
+        new_total_deposited,
         total_amount,
     } = validated;
 
@@ -99,8 +108,8 @@ pub fn apply_validated_deposit(
 
     caller.require_auth();
 
-    contract.funded_amount += amount;
-    contract.total_deposited += amount;
+    contract.funded_amount = new_funded_amount;
+    contract.total_deposited = new_total_deposited;
 
     ttl::extend_milestone_ttl(&env, contract_id);
 
