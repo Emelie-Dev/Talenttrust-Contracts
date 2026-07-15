@@ -1750,6 +1750,9 @@ impl Escrow {
     ///
     /// # Returns
     /// The fees currently available for protocol withdrawal.
+    ///
+    /// See [`docs/escrow/protocol-fees.md`](../../../docs/escrow/protocol-fees.md) for
+    /// storage details and the full withdrawal flow.
     pub fn get_accumulated_protocol_fees(env: Env) -> i128 {
         env.storage()
             .persistent()
@@ -1766,6 +1769,10 @@ impl Escrow {
     ///
     /// See [`docs/escrow/sac-custody.md`](../../../docs/escrow/sac-custody.md) for the
     /// full custody model, accounting invariant, and security notes on commingled fees.
+    ///
+    /// See [`docs/escrow/protocol-fees.md`](../../../docs/escrow/protocol-fees.md) for
+    /// the complete fee lifecycle — basis-point model, accrual, withdrawal authorization,
+    /// worked examples, and the release-to-withdrawal sequence diagram.
     ///
     /// Requires the stored admin's authorization. Only an amount up to the
     /// currently accumulated fees can be withdrawn.
@@ -1926,6 +1933,9 @@ impl Escrow {
     // ── Protocol fee helpers ─────────────────────────────────────────────────
 
     /// Reads the stored protocol fee in basis points (0 = no fee).
+    ///
+    /// See [`docs/escrow/protocol-fees.md`](../../../docs/escrow/protocol-fees.md) for
+    /// the full basis-point model, formula, and fee lifecycle.
     pub(crate) fn read_protocol_fee_bps(env: &Env) -> u32 {
         env.storage()
             .persistent()
@@ -1940,6 +1950,14 @@ impl Escrow {
     /// receives at least `amount - fee` stroops and the protocol receives at most
     /// the floored value.  Callers must ensure `fee <= amount` holds; this is
     /// guaranteed for any `fee_bps` in `[0, 10_000]` and a non-negative `amount`.
+    ///
+    /// # Basis-point unit
+    /// `10_000 bps = 100%`. The maximum configurable rate is `10_000`. A rate of
+    /// `0` is the default and disables fee collection entirely.
+    ///
+    /// See [`docs/escrow/protocol-fees.md`](../../../docs/escrow/protocol-fees.md) for
+    /// the full formula, rounding rules, worked numeric examples, and the sequence
+    /// diagram from release through treasury withdrawal.
     ///
     /// # Short-circuit
     /// Returns `0` immediately when `fee_bps == 0`, skipping the multiplication.
