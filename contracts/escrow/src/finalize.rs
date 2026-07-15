@@ -111,7 +111,7 @@ impl Escrow {
             freelancer: contract.freelancer.clone(),
             arbiter: contract.arbiter.clone(),
             status: contract.status,
-            reputation_issued: false,
+            reputation_issued: contract.reputation_issued,
             total_amount,
             funded_amount: contract.funded_amount,
             released_amount: contract.released_amount,
