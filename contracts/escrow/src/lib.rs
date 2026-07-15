@@ -106,6 +106,10 @@ pub enum EscrowError {
     PotentialOverflow = 28,
     AlreadyFinalized = 29,
     AmountMustBePositive = 30,
+    /// No settlement token has been bound for custody transfers.
+    SettlementTokenNotConfigured = 31,
+    /// A settlement token has already been bound.
+    SettlementTokenAlreadyBound = 32,
 }
 
 #[contractimpl]
@@ -384,13 +388,20 @@ impl Escrow {
     /// * `InvalidState` - If contract is not in Created state
     /// * `UnauthorizedRole` - If caller is not the client
     pub fn deposit_funds(env: Env, contract_id: u32, caller: Address, amount: i128) -> bool {
-        // Transfer tokens from caller to contract
-        let token = Self::read_settlement_token(&env).expect("Settlement token not set");
+        Self::require_initialized(&env);
+        Self::require_not_paused(&env);
+
+        // Validate all contract-local preconditions before any SAC transfer so
+        // rejected deposits cannot debit the client and then fail state checks.
+        let validated = deposit::validate_deposit(&env, contract_id, &caller, amount);
+
+        let token = Self::read_settlement_token(&env)
+            .unwrap_or_else(|| env.panic_with_error(Error::SettlementTokenNotConfigured));
 
         let token_client = token::Client::new(&env, &token);
         token_client.transfer(&caller, &env.current_contract_address(), &amount);
 
-        deposit::deposit_funds_impl(&env, contract_id, caller, amount)
+        deposit::apply_validated_deposit(&env, contract_id, caller, validated)
     }
 
     /// Finalize an escrow contract by writing immutable close metadata.
