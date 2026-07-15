@@ -148,6 +148,26 @@ The list intentionally omits planned or reserved entrypoints that are not implem
 - Events: None in the current implementation
 - Errors: `EmptyRefundRequest`, `DuplicateMilestoneInRefund`, `ContractNotFound`, `InvalidState`, `IndexOutOfBounds`, `AlreadyReleased`, `AlreadyRefunded`, `InsufficientFunds`, `AlreadyFinalized`
 
+### contract_exists
+
+- Signature: `contract_exists(env: Env, contract_id: u32) -> bool`
+- Kind: Read-only
+- Auth: None
+- Semantics: Checks whether a contract with the given ID exists in storage. Returns `true` if the contract record is present, `false` otherwise. This is a cheap, non-panicking existence probe suitable for indexers iterating over ID ranges. Unlike `get_contract`, this function does not panic with `ContractNotFound` for missing IDs.
+- Events: None
+- Errors: None
+- Security: This is a read-only operation that does **not** extend the contract's TTL. Probing for contract existence cannot be abused to keep entries alive.
+
+### get_next_contract_id
+
+- Signature: `get_next_contract_id(env: Env) -> u32`
+- Kind: Read-only
+- Auth: None
+- Semantics: Returns the next contract ID to be allocated (the allocation high-water mark). Indexers can use this to determine the allocated ID range `[1, get_next_contract_id() - 1]` and safely probe for existing contracts using `contract_exists`.
+- Events: None
+- Errors: None
+- Security: This is a read-only operation that does not mutate contract state or extend TTL.
+
 ### get_contract
 
 - Signature: `get_contract(env: Env, contract_id: u32) -> Contract`
