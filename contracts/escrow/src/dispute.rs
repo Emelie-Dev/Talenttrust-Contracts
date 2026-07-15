@@ -44,9 +44,13 @@ pub fn resolution_payouts(
             if split.client_amount < 0 || split.freelancer_amount < 0 {
                 return Err(Error::InvalidDisputeSplit);
             }
+            // Issue #572: Reject split resolution whose components are individually within but jointly exceed balance
+            if split.client_amount > available || split.freelancer_amount > available {
+                return Err(Error::InvalidDisputeSplit);
+            }
             let total = safe_add_amounts(split.client_amount, split.freelancer_amount)
                 .ok_or(Error::PotentialOverflow)?;
-            if total != available {
+            if total > available || total != available {
                 return Err(Error::InvalidDisputeSplit);
             }
             Ok((split.client_amount, split.freelancer_amount))
