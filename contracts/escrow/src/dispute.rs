@@ -1,6 +1,9 @@
 use soroban_sdk::{contractimpl, symbol_short, Address, Env};
 
-use crate::{safe_add_amounts, Contract, ContractStatus, DataKey, DisputeResolution, DisputeSplit, Escrow, Error};
+use crate::{
+    safe_add_amounts, Contract, ContractStatus, DataKey, DisputeResolution, DisputeSplit, Error,
+    Escrow,
+};
 
 // ---------------------------------------------------------------------------
 // resolution_payouts: pure arithmetic for dispute payout calculations

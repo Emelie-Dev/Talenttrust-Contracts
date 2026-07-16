@@ -40,12 +40,13 @@ mod ttl;
 mod types;
 mod utils;
 
-use soroban_sdk::{Symbol, Env, Address};
+use soroban_sdk::{Address, Env, Symbol};
 
+pub use amount_validation::accumulate_amounts;
 pub use amount_validation::safe_add_amounts;
 pub use amount_validation::safe_subtract_amounts;
-pub use dispute::resolution_payouts;
 pub use dispute::final_status_after_resolution;
+pub use dispute::resolution_payouts;
 pub use migration::PendingClientMigration;
 pub use ttl::{ADMIN_ROTATION_MIN_DELAY_LEDGERS, PENDING_MIGRATION_TTL_LEDGERS};
 // Keep shared storage keys and escrow domain types centralized in `types.rs`.
@@ -1481,7 +1482,8 @@ impl Escrow {
 
         client.require_auth();
 
-        let refund_amount = contract.funded_amount - contract.released_amount - contract.refunded_amount;
+        let refund_amount =
+            contract.funded_amount - contract.released_amount - contract.refunded_amount;
         if refund_amount > 0 {
             let token = Self::read_settlement_token(&env)
                 .unwrap_or_else(|| env.panic_with_error(EscrowError::NotInitialized));

@@ -1,4 +1,4 @@
-use crate::{ttl, Contract, ContractStatus, DataKey, Error, Milestone};
+use crate::{accumulate_amounts, ttl, Contract, ContractStatus, DataKey, Error, Milestone};
 use soroban_sdk::{Address, Env, Symbol, Vec};
 
 /// Validated deposit data that is safe to use before any token transfer.
@@ -47,7 +47,12 @@ pub fn validate_deposit(
         .get(&(DataKey::Contract(contract_id), milestone_key))
         .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
 
-    let total_amount: i128 = milestones.iter().map(|m| m.amount).sum();
+    /// Calculate the total amount from milestones with checked arithmetic.
+    /// This prevents overflow panics that would brick the contract if a malformed
+    /// contract with many large milestones were created (unlikely given the
+    /// validation in create_contract, but defense-in-depth).
+    let total_amount: i128 = accumulate_amounts(milestones.iter().map(|m| &m.amount))
+        .unwrap_or_else(|err| env.panic_with_error(err));
     let new_funded_amount = contract
         .funded_amount
         .checked_add(amount)

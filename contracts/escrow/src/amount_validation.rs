@@ -168,6 +168,41 @@ pub fn safe_subtract_amounts(a: i128, b: i128) -> Option<i128> {
     a.checked_sub(b)
 }
 
+/// Safely accumulates amounts into a total with overflow protection.
+///
+/// Iterates through amounts, validating each amount for positivity and bounds,
+/// and accumulating the total with checked arithmetic. Returns the total only if
+/// all amounts are valid and no overflow occurs.
+///
+/// This function is intended for use in contexts like `deposit_funds` where an
+/// unchecked `.sum()` could panic on overflow, creating a panicking code path
+/// reachable by user-supplied milestone data.
+///
+/// # Arguments
+/// * `amounts` - Iterator over amount references (typically milestone amounts)
+///
+/// # Returns
+/// `Ok(total)` if all amounts are valid and accumulation succeeds, `Err(EscrowError)` if any validation fails
+pub fn accumulate_amounts<'a, I: IntoIterator<Item = &'a i128>>(
+    amounts: I,
+) -> Result<i128, crate::EscrowError> {
+    let mut total: i128 = 0;
+
+    for &amount in amounts.into_iter() {
+        // Validate individual amount for positivity and bounds
+        validate_single_amount(amount)?;
+
+        // Check for potential overflow in accumulation
+        if let Some(new_total) = total.checked_add(amount) {
+            total = new_total;
+        } else {
+            return Err(crate::Error::PotentialOverflow);
+        }
+    }
+
+    Ok(total)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

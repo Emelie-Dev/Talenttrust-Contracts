@@ -1,4 +1,7 @@
-use super::{create_contract, default_milestones, generated_participants, register_client, total_milestone_amount};
+use super::{
+    create_contract, default_milestones, generated_participants, register_client,
+    total_milestone_amount,
+};
 use crate::{EscrowError, ReleaseAuthorization};
 use soroban_sdk::{testutils::Address as _, vec, Env, Vec};
 
@@ -9,8 +12,13 @@ fn create_rejects_same_participants() {
     let client = register_client(&env);
     let (addr, _) = generated_participants(&env);
 
-    let result =
-        client.try_create_contract(&addr, &addr, &None, &default_milestones(&env), &ReleaseAuthorization::ClientOnly);
+    let result = client.try_create_contract(
+        &addr,
+        &addr,
+        &None,
+        &default_milestones(&env),
+        &ReleaseAuthorization::ClientOnly,
+    );
     super::assert_contract_error(result, EscrowError::InvalidParticipant);
 }
 
@@ -22,8 +30,13 @@ fn create_rejects_empty_milestone_list() {
     let (client_addr, freelancer_addr) = generated_participants(&env);
     let empty = Vec::<i128>::new(&env);
 
-    let result =
-        client.try_create_contract(&client_addr, &freelancer_addr, &None, &empty, &ReleaseAuthorization::ClientOnly);
+    let result = client.try_create_contract(
+        &client_addr,
+        &freelancer_addr,
+        &None,
+        &empty,
+        &ReleaseAuthorization::ClientOnly,
+    );
     super::assert_contract_error(result, EscrowError::EmptyMilestones);
 }
 
@@ -167,7 +180,6 @@ fn issue_reputation_rejects_unauthorized_caller() {
     super::assert_contract_error(result, EscrowError::UnauthorizedRole);
 }
 
-
 /// Finalize a completed contract and return all identifiers.
 fn finalized_contract(
     env: &Env,
@@ -178,8 +190,7 @@ fn finalized_contract(
     u32,
 ) {
     let client = register_client(env);
-    let (client_addr, freelancer_addr, contract_id) =
-        super::complete_contract(env, &client);
+    let (client_addr, freelancer_addr, contract_id) = super::complete_contract(env, &client);
 
     assert!(client.finalize_contract(&contract_id, &client_addr));
 
@@ -200,7 +211,6 @@ fn finalized_contract_read_operations_still_work() {
     assert!(record.is_some());
 }
 
-
 #[test]
 fn finalize_cannot_be_called_twice() {
     let env = Env::default();
@@ -210,10 +220,7 @@ fn finalize_cannot_be_called_twice() {
 
     let result = client.try_finalize_contract(&contract_id, &client_addr);
 
-    super::assert_contract_error(
-        result,
-        EscrowError::AlreadyFinalized,
-    );
+    super::assert_contract_error(result, EscrowError::AlreadyFinalized);
 }
 
 #[test]
@@ -223,13 +230,9 @@ fn finalized_contract_rejects_cancel() {
 
     let (client, client_addr, _, contract_id) = finalized_contract(&env);
 
-    let result =
-        client.try_cancel_contract(&contract_id, &client_addr);
+    let result = client.try_cancel_contract(&contract_id, &client_addr);
 
-    super::assert_contract_error(
-        result,
-        EscrowError::AlreadyFinalized,
-    );
+    super::assert_contract_error(result, EscrowError::AlreadyFinalized);
 }
 
 #[test]
@@ -241,13 +244,9 @@ fn finalized_contract_rejects_refund() {
 
     let indices = vec![&env, 0u32];
 
-    let result =
-        client.try_refund_unreleased_milestones(&contract_id, &indices);
+    let result = client.try_refund_unreleased_milestones(&contract_id, &indices);
 
-    super::assert_contract_error(
-        result,
-        EscrowError::AlreadyFinalized,
-    );
+    super::assert_contract_error(result, EscrowError::AlreadyFinalized);
 }
 
 #[test]
@@ -257,15 +256,14 @@ fn finalized_contract_rejects_release() {
 
     let (client, client_addr, _, contract_id) = finalized_contract(&env);
 
-    let result =
-        client.try_release_milestone(&contract_id, &client_addr, &0);
+    let result = client.try_release_milestone(&contract_id, &client_addr, &0);
 
-    super::assert_contract_error(
-        result,
-        EscrowError::AlreadyFinalized,
-    );
+    super::assert_contract_error(result, EscrowError::AlreadyFinalized);
 }
-use super::{create_contract, default_milestones, generated_participants, register_client, total_milestone_amount};
+use super::{
+    create_contract, default_milestones, generated_participants, register_client,
+    total_milestone_amount,
+};
 use crate::{EscrowError, ReleaseAuthorization};
 use soroban_sdk::{testutils::Address as _, vec, Env, Vec};
 
@@ -276,8 +274,13 @@ fn create_rejects_same_participants() {
     let client = register_client(&env);
     let (addr, _) = generated_participants(&env);
 
-    let result =
-        client.try_create_contract(&addr, &addr, &None, &default_milestones(&env), &ReleaseAuthorization::ClientOnly);
+    let result = client.try_create_contract(
+        &addr,
+        &addr,
+        &None,
+        &default_milestones(&env),
+        &ReleaseAuthorization::ClientOnly,
+    );
     super::assert_contract_error(result, EscrowError::InvalidParticipant);
 }
 
@@ -289,8 +292,13 @@ fn create_rejects_empty_milestone_list() {
     let (client_addr, freelancer_addr) = generated_participants(&env);
     let empty = Vec::<i128>::new(&env);
 
-    let result =
-        client.try_create_contract(&client_addr, &freelancer_addr, &None, &empty, &ReleaseAuthorization::ClientOnly);
+    let result = client.try_create_contract(
+        &client_addr,
+        &freelancer_addr,
+        &None,
+        &empty,
+        &ReleaseAuthorization::ClientOnly,
+    );
     super::assert_contract_error(result, EscrowError::EmptyMilestones);
 }
 

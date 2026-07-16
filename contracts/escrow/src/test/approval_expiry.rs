@@ -30,7 +30,11 @@ fn new_client(env: &Env) -> EscrowClient<'_> {
 
 fn setup() -> (Address, Address, Address) {
     let env = Env::default();
-    (Address::generate(&env), Address::generate(&env), Address::generate(&env))
+    (
+        Address::generate(&env),
+        Address::generate(&env),
+        Address::generate(&env),
+    )
 }
 
 fn advance_ledger(env: &Env, _contract_id: &Address, by: u32) {

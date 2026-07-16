@@ -1142,12 +1142,15 @@ fn finalize_completed_contract_persists_immutable_close_record() {
     env.mock_all_auths();
     let client = register_client(&env);
     let (client_addr, freelancer_addr, contract_id) = super::complete_contract(&env, &client);
-    assert_eq!(client.get_contract(&contract_id).status, ContractStatus::Completed);
+    assert_eq!(
+        client.get_contract(&contract_id).status,
+        ContractStatus::Completed
+    );
     assert!(client.finalize_contract(&contract_id, &client_addr));
     let record = client
         .get_finalization_record(&contract_id)
         .expect("finalization record should exist");
-    
+
     assert_eq!(record.finalizer, client_addr);
     assert_eq!(record.summary.client, client_addr);
     assert_eq!(record.summary.freelancer, freelancer_addr);

@@ -8,13 +8,21 @@ This document reflects the escrow API currently implemented in `contracts/escrow
 - Pause and emergency controls require the stored admin's authorization.
 - Mutating lifecycle calls fail while paused or in emergency mode.
 - `create_contract` requires client authorization, rejects identical
-  client/freelancer addresses, rejects empty milestones, caps milestone count,
-  caps total escrow value, and validates each milestone amount using centralized
-  amount validation (enforcing positivity, minimum positive amount of 1 stroop,
-  and a maximum single amount of 1,000,000,000,0000000 stroops/1M tokens).
+  client/freelancer addresses, rejects empty milestones, caps milestone count
+  to `MAX_MILESTONES` (10), and validates milestone amounts using centralized
+  amount validation. Validation enforces: positivity, minimum positive amount of
+  1 stroop, maximum single amount of 1,000,000,000,0000000 stroops (1M tokens),
+  and safe accumulation of the total milestone amount with checked arithmetic to
+  prevent overflow. The total is validated against the governed `max_escrow_total_stroops`
+  or `i128::MAX` if unset.
 - `deposit_funds` validates the deposit amount using centralized amount validation
-  (enforcing positivity and maximum single amount limits), rejects repeat
-  exact-total deposits, exact-total mismatches, and incremental overfunding.
+  (enforcing positivity and maximum single amount limits). Crucially, it safely
+  accumulates the total of all milestones using checked arithmetic (`accumulate_amounts`)
+  to prevent panic on overflow—a defense-in-depth measure against the scenario where
+  a contract with many large milestones could brick if the total calculation panicked
+  during funding. The deposit is then validated to ensure it does not exceed the
+  accumulated total, and rejects repeat exact-total deposits, exact-total mismatches,
+  and incremental overfunding.
 - `release_milestone` requires `caller.require_auth()`, enforces the contract's
   `ReleaseAuthorization` mode (ClientOnly, ArbiterOnly, ClientAndArbiter, or
   MultiSig), and checks valid non-expired approvals before releasing funds.
@@ -33,6 +41,20 @@ This document reflects the escrow API currently implemented in `contracts/escrow
   `total_deposited == released_amount + refunded_amount + available_balance`.
 - Finalization summaries use checked arithmetic and persistent storage. They do
   not expire through TTL and do not create, deduct, or withdraw protocol fees.
+
+## Milestone Total Validation
+
+The contract enforces the following bounds on milestone amounts:
+
+- **Maximum milestone count:** 10 milestones per contract (`MAX_MILESTONES`).
+- **Individual milestone:** Each milestone amount must be in the range `[1, 1_000_000_0000000]` stroops.
+- **Total milestone sum:** The sum of all milestone amounts must not exceed `max_escrow_total_stroops` 
+  (typically 1,000,000,0000000 stroops, the same as `MAX_TOTAL_ESCROW_STROOPS`).
+- **Safe accumulation:** Both `create_contract` and `deposit_funds` use the `accumulate_amounts` 
+  helper with checked arithmetic to compute the total. This prevents overflow panics and ensures that
+  any contract created with valid milestones will not panic during funding operations. If a total
+  were somehow created that exceeds `i128::MAX`, the accumulation would fail with `PotentialOverflow`
+  instead of panicking.
 
 ## Known Live Gaps
 

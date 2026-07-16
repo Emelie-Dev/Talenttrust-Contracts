@@ -717,9 +717,9 @@ fn release_emits_events() {
     assert!(events.len() > 0);
 
     let topic_val = Symbol::new(&env, "milestone_released");
-    let release_event = events
-        .iter()
-        .find(|event| event.1.len() > 0 && Symbol::from_val(&env, &event.1.get(0).unwrap()) == topic_val);
+    let release_event = events.iter().find(|event| {
+        event.1.len() > 0 && Symbol::from_val(&env, &event.1.get(0).unwrap()) == topic_val
+    });
     assert!(release_event.is_some());
 }
 

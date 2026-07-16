@@ -12,12 +12,12 @@
 #![cfg(test)]
 
 use crate::{
-    Contract, ContractStatus, DisputeResolution, DisputeSplit, Escrow, EscrowClient, Error,
+    Contract, ContractStatus, DisputeResolution, DisputeSplit, Error, Escrow, EscrowClient,
     ReleaseAuthorization,
 };
 use soroban_sdk::{testutils::Address as _, Address, Env};
 
-use crate::dispute::{resolution_payouts, final_status_after_resolution};
+use crate::dispute::{final_status_after_resolution, resolution_payouts};
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -154,12 +154,18 @@ fn resolution_payouts_partial_refund_odd_amount_rounding() {
 fn resolution_payouts_split_rejects_negative_legs() {
     let env = make_env();
     let contract = payout_contract(&env, 100, 0, 0);
-    let split = DisputeSplit { client_amount: -1, freelancer_amount: 101 };
+    let split = DisputeSplit {
+        client_amount: -1,
+        freelancer_amount: 101,
+    };
     assert_eq!(
         resolution_payouts(&contract, &DisputeResolution::Split(split)),
         Err(Error::InvalidDisputeSplit)
     );
-    let split = DisputeSplit { client_amount: 101, freelancer_amount: -1 };
+    let split = DisputeSplit {
+        client_amount: 101,
+        freelancer_amount: -1,
+    };
     assert_eq!(
         resolution_payouts(&contract, &DisputeResolution::Split(split)),
         Err(Error::InvalidDisputeSplit)
@@ -171,13 +177,19 @@ fn resolution_payouts_split_rejects_non_conserving_sum() {
     let env = make_env();
     let contract = payout_contract(&env, 100, 0, 0);
     // 40 + 59 = 99 ≠ 100
-    let split = DisputeSplit { client_amount: 40, freelancer_amount: 59 };
+    let split = DisputeSplit {
+        client_amount: 40,
+        freelancer_amount: 59,
+    };
     assert_eq!(
         resolution_payouts(&contract, &DisputeResolution::Split(split)),
         Err(Error::InvalidDisputeSplit)
     );
     // 40 + 61 = 101 ≠ 100
-    let split = DisputeSplit { client_amount: 40, freelancer_amount: 61 };
+    let split = DisputeSplit {
+        client_amount: 40,
+        freelancer_amount: 61,
+    };
     assert_eq!(
         resolution_payouts(&contract, &DisputeResolution::Split(split)),
         Err(Error::InvalidDisputeSplit)
@@ -188,14 +200,26 @@ fn resolution_payouts_split_rejects_non_conserving_sum() {
 #[test]
 fn resolution_payouts_split_accepts_exact_splits() {
     let env = make_env();
-    let split = DisputeSplit { client_amount: 40, freelancer_amount: 60 };
+    let split = DisputeSplit {
+        client_amount: 40,
+        freelancer_amount: 60,
+    };
     assert_eq!(
-        resolution_payouts(&payout_contract(&env, 100, 0, 0), &DisputeResolution::Split(split)),
+        resolution_payouts(
+            &payout_contract(&env, 100, 0, 0),
+            &DisputeResolution::Split(split)
+        ),
         Ok((40, 60))
     );
-    let split = DisputeSplit { client_amount: 0, freelancer_amount: 0 };
+    let split = DisputeSplit {
+        client_amount: 0,
+        freelancer_amount: 0,
+    };
     assert_eq!(
-        resolution_payouts(&payout_contract(&env, 0, 0, 0), &DisputeResolution::Split(split)),
+        resolution_payouts(
+            &payout_contract(&env, 0, 0, 0),
+            &DisputeResolution::Split(split)
+        ),
         Ok((0, 0))
     );
 }
@@ -205,7 +229,10 @@ fn resolution_payouts_split_accepts_exact_splits() {
 fn resolution_payouts_split_rejects_overflowing_sum() {
     let env = make_env();
     let contract = payout_contract(&env, i128::MAX, 0, 0);
-    let split = DisputeSplit { client_amount: i128::MAX, freelancer_amount: 1 };
+    let split = DisputeSplit {
+        client_amount: i128::MAX,
+        freelancer_amount: 1,
+    };
     assert_eq!(
         resolution_payouts(&contract, &DisputeResolution::Split(split)),
         Err(Error::PotentialOverflow)
@@ -247,9 +274,11 @@ fn resolution_payouts_conserves_available_balance() {
 
     // Split (exact)
     let c = payout_contract(&env, available, 0, 0);
-    let split = DisputeSplit { client_amount: 5000, freelancer_amount: available - 5000 };
-    let (client, freelancer) = resolution_payouts(&c, &DisputeResolution::Split(split))
-        .unwrap();
+    let split = DisputeSplit {
+        client_amount: 5000,
+        freelancer_amount: available - 5000,
+    };
+    let (client, freelancer) = resolution_payouts(&c, &DisputeResolution::Split(split)).unwrap();
     assert_eq!(client + freelancer, available);
 }
 
@@ -296,7 +325,10 @@ fn resolve_full_refund_conserves_and_marks_refunded() {
     assert_eq!(contract.status, ContractStatus::Refunded);
     assert_eq!(contract.released_amount, 0);
     assert_eq!(contract.refunded_amount, 200);
-    assert_eq!(contract.released_amount + contract.refunded_amount, contract.funded_amount);
+    assert_eq!(
+        contract.released_amount + contract.refunded_amount,
+        contract.funded_amount
+    );
 }
 
 /// Integration: FullPayout on a funded contract conserves balance and marks Completed.
@@ -324,7 +356,10 @@ fn resolve_full_payout_conserves_and_marks_completed() {
     assert_eq!(contract.status, ContractStatus::Completed);
     assert_eq!(contract.released_amount, 150);
     assert_eq!(contract.refunded_amount, 0);
-    assert_eq!(contract.released_amount + contract.refunded_amount, contract.funded_amount);
+    assert_eq!(
+        contract.released_amount + contract.refunded_amount,
+        contract.funded_amount
+    );
 }
 
 /// Integration: PartialRefund applies 70/30 split and conserves balance.
@@ -350,7 +385,10 @@ fn resolve_partial_refund_conserves_70_30_split() {
 
     let contract = client.get_contract(&escrow_id);
     assert_eq!(contract.status, ContractStatus::Completed);
-    assert_eq!(contract.released_amount + contract.refunded_amount, contract.funded_amount);
+    assert_eq!(
+        contract.released_amount + contract.refunded_amount,
+        contract.funded_amount
+    );
 }
 
 /// Integration: Split accepts valid custom amounts and conserves balance.
@@ -372,12 +410,18 @@ fn resolve_split_conserves_custom_amounts() {
     client.deposit_funds(&escrow_id, &client_addr, &100_i128);
 
     client.raise_dispute(&escrow_id, &client_addr);
-    let split = DisputeSplit { client_amount: 35, freelancer_amount: 65 };
+    let split = DisputeSplit {
+        client_amount: 35,
+        freelancer_amount: 65,
+    };
     client.resolve_dispute(&escrow_id, &arbiter_addr, &DisputeResolution::Split(split));
 
     let contract = client.get_contract(&escrow_id);
     assert_eq!(contract.status, ContractStatus::Completed);
     assert_eq!(contract.refunded_amount, 35);
     assert_eq!(contract.released_amount, 65);
-    assert_eq!(contract.released_amount + contract.refunded_amount, contract.funded_amount);
+    assert_eq!(
+        contract.released_amount + contract.refunded_amount,
+        contract.funded_amount
+    );
 }

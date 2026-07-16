@@ -97,7 +97,9 @@ impl Escrow {
         match amount_validation::validate_milestone_amounts(&native_milestones[..len], max_total) {
             Ok(_) => (),
             Err(err) => match err {
-                Error::InvalidMilestoneAmount => env.panic_with_error(Error::InvalidMilestoneAmount),
+                Error::InvalidMilestoneAmount => {
+                    env.panic_with_error(Error::InvalidMilestoneAmount)
+                }
                 Error::TotalCapExceeded => env.panic_with_error(Error::TotalCapExceeded),
                 _ => env.panic_with_error(Error::InvalidMilestoneAmount),
             },
