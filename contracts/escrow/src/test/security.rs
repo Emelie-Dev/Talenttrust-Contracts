@@ -260,3 +260,49 @@ fn finalized_contract_rejects_release() {
 
     super::assert_contract_error(result, EscrowError::AlreadyFinalized);
 }
+
+#[test]
+fn deposit_rejected_after_cancel() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+    let (client_addr, freelancer_addr, contract_id) = create_contract(&env, &client);
+
+    // Cancel immediately in Created state
+    assert!(client.cancel_contract(&contract_id, &client_addr));
+
+    let result = client.try_deposit_funds(&contract_id, &client_addr, &100_i128);
+    super::assert_contract_error(result, EscrowError::ContractCancelled);
+}
+
+#[test]
+fn release_rejected_after_cancel() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+    let (client_addr, freelancer_addr, contract_id) = create_contract(&env, &client);
+
+    // Fully fund and then cancel
+    assert!(client.deposit_funds(&contract_id, &client_addr, &total_milestone_amount()));
+    assert!(client.cancel_contract(&contract_id, &client_addr));
+
+    let result = client.try_release_milestone(&contract_id, &client_addr, &0);
+    super::assert_contract_error(result, EscrowError::ContractCancelled);
+}
+
+#[test]
+fn refund_rejected_after_refund() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+    let (client_addr, _freelancer_addr, contract_id) = create_contract(&env, &client);
+
+    // Fund and refund all milestones
+    assert!(client.deposit_funds(&contract_id, &client_addr, &total_milestone_amount()));
+    let all_indices = vec![&env, 0_u32, 1_u32, 2_u32];
+    assert!(client.refund_unreleased_milestones(&contract_id, &all_indices) > 0);
+
+    // Second refund attempt should be rejected as contract is terminally refunded
+    let res = client.try_refund_unreleased_milestones(&contract_id, &all_indices);
+    super::assert_contract_error(res, EscrowError::ContractRefunded);
+}

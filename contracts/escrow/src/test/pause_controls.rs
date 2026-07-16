@@ -162,12 +162,14 @@ fn emergency_blocks_create_contract() {
     let a = Address::generate(&env);
     let b = Address::generate(&env);
     super::assert_contract_error(
-        client.try_deposit_funds(&id, &caller, &50_i128),
-        EscrowError::ContractPaused,
-    );
-    super::assert_contract_error(
-        client.try_deposit_funds(&id, &client_addr, &50_i128),
-        EscrowError::ContractPaused,
+        client.try_create_contract(
+            &a,
+            &b,
+            &None,
+            &vec![&env, 50_i128],
+            &ReleaseAuthorization::ClientOnly,
+        ),
+        Error::EmergencyActive,
     );
 }
 

@@ -159,7 +159,7 @@ fn test_duplicate_approval_rejected() {
     assert!(client.approve_milestone_release(&id, &client_addr, &0));
 
     let result = client.try_approve_milestone_release(&id, &client_addr, &0);
-    assert_eq!(result, Err(Ok(Error::AlreadyApproved)));
+    super::assert_contract_error(result, Error::AlreadyApproved);
 }
 
 #[test]
@@ -179,7 +179,7 @@ fn test_unauthorized_approval_rejected() {
     assert!(client.deposit_funds(&id, &client_addr, &total()));
 
     let result = client.try_approve_milestone_release(&id, &freelancer_addr, &0);
-    assert_eq!(result, Err(Ok(Error::UnauthorizedRole)));
+    super::assert_contract_error(result, Error::UnauthorizedRole);
 }
 
 #[test]
@@ -199,7 +199,7 @@ fn test_release_requires_approval() {
     assert!(client.deposit_funds(&id, &client_addr, &total()));
 
     let result = client.try_release_milestone(&id, &client_addr, &0);
-    assert_eq!(result, Err(Ok(Error::InsufficientApprovals)));
+    super::assert_contract_error(result, Error::InsufficientApprovals);
 }
 
 #[test]
@@ -246,7 +246,7 @@ fn test_multisig_requires_both_approvals() {
     assert!(client.approve_milestone_release(&id, &client_addr, &0));
 
     let result = client.try_release_milestone(&id, &client_addr, &0);
-    assert_eq!(result, Err(Ok(Error::InsufficientApprovals)));
+    super::assert_contract_error(result, Error::InsufficientApprovals);
 
     assert!(client.approve_milestone_release(&id, &freelancer_addr, &0));
     assert!(client.release_milestone(&id, &client_addr, &0));

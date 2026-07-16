@@ -217,7 +217,7 @@ pub fn clear_approvals(env: &Env, contract_id: u32, milestone_index: u32) {
 mod tests {
     use super::*;
     use crate::Escrow;
-    use soroban_sdk::{testutils::Address as _, Env};
+    use soroban_sdk::{testutils::Address as _, Env, Symbol, Vec};
 
     fn setup_contract_in_storage(
         env: &Env,
@@ -237,10 +237,11 @@ mod tests {
                     funded_amount: 0,
                     released: false,
                     refunded: false,
-                    refunded_amount: 0,
-                    work_evidence: None,
-                }],
-            );
+                                work_evidence: None,
+                                refunded_amount: 0,
+                                deadline: None,
+                            }],
+                        );
             let _ = release_auth;
             let milestone_key = Symbol::new(env, "milestones");
             env.storage().persistent().set(

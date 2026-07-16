@@ -87,6 +87,15 @@ pub fn refund_unreleased_milestones(
     // Authorization: Only client can refund
     contract.client.require_auth();
 
+    // Terminal-state guards: once a contract is Cancelled or Refunded, no further
+    // refund or value-moving operations are permitted.
+    if contract.status == ContractStatus::Cancelled {
+        env.panic_with_error(EscrowError::ContractCancelled);
+    }
+    if contract.status == ContractStatus::Refunded {
+        env.panic_with_error(EscrowError::ContractRefunded);
+    }
+
     // Load milestones
     let milestone_key = Symbol::new(env, "milestones");
     let mut milestones: Vec<Milestone> = env

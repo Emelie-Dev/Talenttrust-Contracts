@@ -118,6 +118,10 @@ pub enum EscrowError {
     MissingArbiter = 35,
     /// The provided arbiter is invalid (same as client or freelancer).
     InvalidArbiter = 36,
+    /// Contract is cancelled and must not accept further value-moving operations.
+    ContractCancelled = 37,
+    /// Contract has been refunded and is terminal for value-moving operations.
+    ContractRefunded = 38,
 }
 
 #[contractimpl]
@@ -1131,7 +1135,9 @@ impl Escrow {
         ttl::extend_contract_and_milestones_ttl(&env, contract_id);
 
         let milestones = ttl::load_milestones(&env, contract_id);
-        let total_amount: i128 = milestones.iter().map(|m| m.amount).sum();
+        let total_amount: i128 =
+            crate::amount_validation::accumulate_amounts(milestones.iter().map(|m| m.amount))
+                .unwrap_or_else(|_| env.panic_with_error(EscrowError::PotentialOverflow));
         let released_milestone_count = milestones.iter().filter(|m| m.released).count() as u32;
 
         let mut milestone_summaries = Vec::new(&env);

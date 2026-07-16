@@ -1,4 +1,6 @@
-use crate::{accumulate_amounts, ttl, Contract, ContractStatus, DataKey, Error, Milestone};
+use crate::{
+    accumulate_amounts, ttl, Contract, ContractStatus, DataKey, Error, EscrowError, Milestone,
+};
 use soroban_sdk::{Address, Env, Symbol, Vec};
 
 /// Validated deposit data that is safe to use before any token transfer.
@@ -32,6 +34,15 @@ pub fn validate_deposit(
 
     if caller != &contract.client {
         env.panic_with_error(Error::UnauthorizedRole);
+    }
+
+    // Terminal-state guards: cancelled/refunded contracts must reject any
+    // further value-moving operations such as deposits.
+    if contract.status == ContractStatus::Cancelled {
+        env.panic_with_error(EscrowError::ContractCancelled);
+    }
+    if contract.status == ContractStatus::Refunded {
+        env.panic_with_error(EscrowError::ContractRefunded);
     }
 
     if contract.status != ContractStatus::Created

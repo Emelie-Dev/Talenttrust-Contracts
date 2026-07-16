@@ -3,42 +3,12 @@ use super::{
     generated_participants, register_client, total_milestone_amount, MILESTONE_ONE,
     MILESTONE_THREE, MILESTONE_TWO,
 };
-use crate::{ttl, ContractStatus, EscrowError, ReleaseAuthorization};
+use crate::{ttl, ContractStatus, EscrowError, ReleaseAuthorization, Error};
 use soroban_sdk::{
     testutils::{storage::Persistent, Address as _, Ledger},
     vec, Address, Env, Symbol,
 };
 
-/// Finalization succeeds from Completed status; record snapshot matches contract state.
-#[test]
-fn finalize_completed_contract_persists_immutable_close_record() {
-    let env = Env::default();
-
-    env.mock_all_auths();
-    let client = register_client(&env);
-    let (client_addr, freelancer_addr, contract_id) = super::complete_contract(&env, &client);
-
-    assert!(client.finalize_contract(&contract_id, &client_addr));
-
-    let record = client
-        .get_finalization_record(&contract_id)
-        .expect("finalization record should exist");
-    assert_eq!(record.finalizer, client_addr);
-    assert_eq!(record.summary.client, client_addr);
-    assert_eq!(record.summary.freelancer, freelancer_addr);
-    assert_eq!(record.summary.status, ContractStatus::Completed);
-    assert_eq!(record.summary.total_amount, super::total_milestone_amount());
-    assert_eq!(
-        record.summary.funded_amount,
-        super::total_milestone_amount()
-    );
-    assert_eq!(
-        record.summary.released_amount,
-        super::total_milestone_amount()
-    );
-    assert_eq!(record.summary.refundable_balance, 0);
-    assert_eq!(record.summary.released_milestone_count, 3);
-}
 
 /// Finalization by arbiter works on a completed contract.
 #[test]
@@ -1135,27 +1105,6 @@ fn read_getters_unchanged_after_pause() {
     };
 }
 
-/// Finalization succeeds from Completed status; record snapshot matches contract state.
-#[test]
-fn finalize_completed_contract_persists_immutable_close_record() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let client = register_client(&env);
-    let (client_addr, freelancer_addr, contract_id) = super::complete_contract(&env, &client);
-    assert_eq!(
-        client.get_contract(&contract_id).status,
-        ContractStatus::Completed
-    );
-    assert!(client.finalize_contract(&contract_id, &client_addr));
-    let record = client
-        .get_finalization_record(&contract_id)
-        .expect("finalization record should exist");
-
-    assert_eq!(record.finalizer, client_addr);
-    assert_eq!(record.summary.client, client_addr);
-    assert_eq!(record.summary.freelancer, freelancer_addr);
-    assert_eq!(record.summary.status, ContractStatus::Completed);
-}
 
 /// Finalization writes a round-tripped snapshot of milestone summaries and derived totals.
 #[test]
@@ -1181,17 +1130,15 @@ fn double_finalize_rejected() {
     let client = register_client(&env);
     let (client_addr, _, contract_id) = super::complete_contract(&env, &client);
     assert!(client.finalize_contract(&contract_id, &client_addr));
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        client.finalize_contract(&contract_id, &client_addr)
-    }));
-    assert!(result.is_err());
+    let result = client.try_finalize_contract(&contract_id, &client_addr);
+    super::assert_contract_error(result, EscrowError::AlreadyFinalized);
 }
 
 /// Asserts that `milestone_symbol` resolves to the correct short symbol `symbol_short!("milestone")`.
 #[test]
-fn finalize_completed_contract_persists_immutable_close_record() {
+fn milestone_symbol_helper_matches_expected() {
     let env = Env::default();
     let helper_symbol = crate::milestone_symbol(&env);
-    let expected_symbol = symbol_short!("milestone");
+    let expected_symbol = soroban_sdk::symbol_short!("milestone");
     assert_eq!(helper_symbol, expected_symbol);
 }

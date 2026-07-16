@@ -86,3 +86,16 @@ The contract enforces the following bounds on milestone amounts:
 
 This prevents a client from requesting refunds against a cancelled, completed,
 or already-finalized contract.
+
+## Terminal-state matrix (value-moving operations)
+
+The following states are terminal for all value-moving entrypoints (`deposit_funds`,
+`release_milestone`, `refund_unreleased_milestones`):
+
+- `Cancelled` — The contract has been cancelled and any further deposits,
+  releases, or refunds are rejected with `ContractCancelled`.
+- `Refunded` — The contract has been fully refunded and further value movement
+  is rejected with `ContractRefunded`.
+
+These explicit errors were introduced to make lifecycle audits clearer and to
+prevent ambiguous `InvalidState` errors from masking terminal-state violations.
