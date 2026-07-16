@@ -1,8 +1,8 @@
 use crate::{
-    amount_validation, ttl, Contract, ContractStatus, DataKey, Error, GovernedParameters,
-    Milestone, ReleaseAuthorization, MAX_MILESTONES,
+    amount_validation, ttl, Contract, ContractStatus, DataKey, Error, Escrow, EscrowArgs,
+    EscrowClient, EscrowError, GovernedParameters, Milestone, ReleaseAuthorization, MAX_MILESTONES,
 };
-use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
+use soroban_sdk::{contractimpl, symbol_short, Address, Env, Symbol, Vec};
 
 #[contractimpl]
 impl Escrow {
@@ -50,7 +50,7 @@ impl Escrow {
 
         // Validate that client and freelancer are distinct participants.
         if client == freelancer {
-            env.panic_with_error(Error::InvalidParticipant);
+            env.panic_with_error(EscrowError::InvalidParticipant);
         }
 
         // Validate arbiter requirement based on release authorization mode.
@@ -58,7 +58,7 @@ impl Escrow {
             ReleaseAuthorization::ArbiterOnly | ReleaseAuthorization::ClientAndArbiter
                 if arbiter.is_none() =>
             {
-                env.panic_with_error(Error::MissingArbiter);
+                env.panic_with_error(EscrowError::MissingArbiter);
             }
             _ => {}
         }
@@ -66,18 +66,18 @@ impl Escrow {
         // Validate arbiter is distinct from both client and freelancer.
         if let Some(ref arb) = arbiter {
             if arb == &client || arb == &freelancer {
-                env.panic_with_error(Error::InvalidArbiter);
+                env.panic_with_error(EscrowError::InvalidArbiter);
             }
         }
 
         // Validate at least one milestone is specified.
         if milestones.is_empty() {
-            env.panic_with_error(Error::EmptyMilestones);
+            env.panic_with_error(EscrowError::EmptyMilestones);
         }
 
         // Enforce maximum number of milestones.
         if milestones.len() > MAX_MILESTONES {
-            env.panic_with_error(Error::TooManyMilestones);
+            env.panic_with_error(EscrowError::TooManyMilestones);
         }
 
         // Retrieve governed parameters for total escrow cap; allow any total if unset.
@@ -97,11 +97,13 @@ impl Escrow {
         match amount_validation::validate_milestone_amounts(&native_milestones[..len], max_total) {
             Ok(_) => (),
             Err(err) => match err {
-                Error::InvalidMilestoneAmount => {
-                    env.panic_with_error(Error::InvalidMilestoneAmount)
+                EscrowError::InvalidMilestoneAmount => {
+                    env.panic_with_error(EscrowError::InvalidMilestoneAmount)
                 }
-                Error::TotalCapExceeded => env.panic_with_error(Error::TotalCapExceeded),
-                _ => env.panic_with_error(Error::InvalidMilestoneAmount),
+                EscrowError::TotalCapExceeded => {
+                    env.panic_with_error(EscrowError::TotalCapExceeded)
+                }
+                _ => env.panic_with_error(EscrowError::InvalidMilestoneAmount),
             },
         }
 

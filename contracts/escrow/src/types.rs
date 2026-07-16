@@ -170,6 +170,8 @@ pub enum Error {
     EscrowCapExceeded = 51,
     /// No settlement token has been bound for custody transfers.
     SettlementTokenNotConfigured = 52,
+    /// The milestone deadline has not yet passed.
+    MilestoneNotOverdue = 53,
 }
 
 /// Contract lifecycle states

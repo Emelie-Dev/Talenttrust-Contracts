@@ -2,7 +2,7 @@ use soroban_sdk::{contracttype, symbol_short, Address, Env, Symbol, Vec};
 
 use crate::{
     safe_subtract_amounts, Contract, ContractStatus, ContractSummary, DataKey, Error, Escrow,
-    Milestone, MilestoneSummary, CONTRACT_SUMMARY_SCHEMA_VERSION,
+    EscrowError, Milestone, MilestoneSummary, CONTRACT_SUMMARY_SCHEMA_VERSION,
 };
 
 /// Immutable metadata written when an escrow contract is closed.

@@ -25,22 +25,17 @@
 
 mod amount_validation;
 mod approvals;
-mod create_contract;
 mod deposit;
-/// Dispute helpers: `resolution_payouts` and `final_status_after_resolution`.
-///
-/// The canonical `raise_dispute` / `resolve_dispute` entrypoints live in the
-/// single `#[contractimpl] impl Escrow` block below (in `lib.rs`). No other
-/// module may define additional `#[contractimpl]` blocks for these entrypoints.
-mod dispute;
 mod finalize;
-mod governance;
 mod migration;
 mod ttl;
 mod types;
 mod utils;
 
-use soroban_sdk::{Address, Env, Symbol};
+use crate::utils::now_seconds;
+use soroban_sdk::{
+    contract, contracterror, contractimpl, symbol_short, token, Address, Env, String, Symbol, Vec,
+};
 
 pub use amount_validation::accumulate_amounts;
 pub use amount_validation::safe_add_amounts;
@@ -66,6 +61,10 @@ pub const MAX_TOTAL_ESCROW_STROOPS: i128 = MAX_SINGLE_AMOUNT_STROOPS;
 
 #[contract]
 pub struct Escrow;
+
+mod create_contract;
+mod dispute;
+mod governance;
 
 /// Governance-level errors for admin-gated operations.
 #[contracterror]
@@ -111,6 +110,14 @@ pub enum EscrowError {
     SettlementTokenNotConfigured = 31,
     /// A settlement token has already been bound.
     SettlementTokenAlreadyBound = 32,
+    /// The sum of milestone amounts exceeded the configured maximum or overflowed.
+    TotalCapExceeded = 33,
+    /// Too many milestones were provided.
+    TooManyMilestones = 34,
+    /// An arbiter was required by the release authorization mode but not provided.
+    MissingArbiter = 35,
+    /// The provided arbiter is invalid (same as client or freelancer).
+    InvalidArbiter = 36,
 }
 
 #[contractimpl]
@@ -228,11 +235,6 @@ impl Escrow {
         Self::read_settlement_token(&env).is_some()
     }
 
-    /// Returns the stored governance admin address, or `None` if not set.
-    pub fn get_governance_admin(env: Env) -> Option<Address> {
-        env.storage().persistent().get(&DataKey::Admin)
-    }
-
     // ── Initialization ───────────────────────────────────────────────────────
 
     /// Initializes the escrow contract with the operational admin.
@@ -341,28 +343,6 @@ impl Escrow {
     /// * `InvalidParticipants` - If client and freelancer are the same address
     /// * `EmptyMilestones` - If no milestones are provided
     /// * `InvalidMilestoneAmount` - If any milestone amount is <= 0
-    /// * `MissingArbiter` - If arbiter is required but not provided
-    /// * `InvalidArbiter` - If arbiter is same as client or freelancer
-    /// * `ContractIdOverflow` - If the next id would exceed `u32::MAX`
-    /// * `ContractIdCollision` - If the allocated id slot is already occupied
-    pub fn create_contract(
-        env: Env,
-        client: Address,
-        freelancer: Address,
-        arbiter: Option<Address>,
-        milestones: Vec<i128>,
-        release_authorization: ReleaseAuthorization,
-    ) -> u32 {
-        create_contract::create_contract_impl(
-            &env,
-            client,
-            freelancer,
-            arbiter,
-            milestones,
-            release_authorization,
-        )
-    }
-
     /// Pull the settlement-token deposit from the client into the escrow contract address.
     ///
     /// Executes `SAC::transfer(from: client, to: escrow_address, amount)` and advances
@@ -443,7 +423,7 @@ impl Escrow {
         new_client: Address,
     ) -> bool {
         Self::require_not_paused(&env);
-        migration::propose_client_migration_impl(&env, contract_id, current_client, new_client)
+        Self::propose_client_migration_impl(&env, contract_id, current_client, new_client)
     }
 
     /// Accept a live pending client migration and update the contract.
@@ -452,14 +432,14 @@ impl Escrow {
     /// Only the proposed client address may authorize acceptance.
     pub fn accept_client_migration(env: Env, contract_id: u32, new_client: Address) -> bool {
         Self::require_not_paused(&env);
-        migration::accept_client_migration_impl(&env, contract_id, new_client)
+        Self::accept_client_migration_impl(&env, contract_id, new_client)
     }
 
     /// Return true if a live pending client migration exists.
     ///
     /// Canonical public entrypoint; delegates to [`migration::has_pending_client_migration_impl`].
     pub fn has_pending_client_migration(env: Env, contract_id: u32) -> bool {
-        migration::has_pending_client_migration_impl(&env, contract_id)
+        Self::has_pending_client_migration_impl(&env, contract_id)
     }
 
     /// Return the live pending client migration record.
@@ -467,7 +447,7 @@ impl Escrow {
     /// Canonical public entrypoint; delegates to [`migration::get_pending_client_migration_impl`].
     /// Panics with `InvalidState` when no live pending migration exists.
     pub fn get_pending_client_migration(env: Env, contract_id: u32) -> PendingClientMigration {
-        migration::get_pending_client_migration_impl(&env, contract_id)
+        Self::get_pending_client_migration_impl(&env, contract_id)
     }
 
     /// Approves a milestone for release.
@@ -632,13 +612,13 @@ impl Escrow {
         let mut milestones: Vec<Milestone> = ttl::load_milestones(&env, contract_id);
 
         if milestone_index >= milestones.len() {
-            env.panic_with_error(EscrowError::IndexOutOfBounds);
+            env.panic_with_error(Error::IndexOutOfBounds);
         }
 
         let mut milestone = milestones.get(milestone_index).unwrap().clone();
 
         if milestone.released {
-            env.panic_with_error(EscrowError::MilestoneAlreadyReleased);
+            env.panic_with_error(Error::MilestoneAlreadyReleased);
         }
 
         if milestone.refunded {
@@ -947,14 +927,14 @@ impl Escrow {
         // Validate all milestones first
         for idx in milestone_indices.iter() {
             if idx >= milestones.len() {
-                env.panic_with_error(EscrowError::IndexOutOfBounds);
+                env.panic_with_error(Error::IndexOutOfBounds);
             }
 
             let milestone = milestones.get(idx).unwrap();
 
             // SECURITY: Check if milestone is already released
             if milestone.released {
-                env.panic_with_error(EscrowError::AlreadyReleased);
+                env.panic_with_error(Error::AlreadyReleased);
             }
 
             // SECURITY: Check if milestone is already refunded
@@ -1469,7 +1449,7 @@ impl Escrow {
         }
 
         if contract.status == ContractStatus::Cancelled {
-            env.panic_with_error(EscrowError::AlreadyCancelled);
+            env.panic_with_error(Error::AlreadyCancelled);
         }
 
         if contract.status != ContractStatus::Created && contract.status != ContractStatus::Funded {
@@ -1753,13 +1733,13 @@ impl Escrow {
         ttl::extend_milestone_ttl(&env, contract_id);
 
         if milestone_index >= milestones.len() {
-            env.panic_with_error(EscrowError::IndexOutOfBounds);
+            env.panic_with_error(Error::IndexOutOfBounds);
         }
 
         let mut milestone = milestones.get(milestone_index).unwrap();
 
         if milestone.released {
-            env.panic_with_error(EscrowError::MilestoneAlreadyReleased);
+            env.panic_with_error(Error::MilestoneAlreadyReleased);
         }
         if milestone.refunded {
             env.panic_with_error(EscrowError::AlreadyRefunded);
@@ -1928,81 +1908,6 @@ impl Escrow {
         true
     }
 
-    /// Proposes a new governance admin (two-step transfer with timelock).
-    pub fn propose_governance_admin(env: Env, proposed: Address) -> bool {
-        Self::propose_governance_admin_impl(&env, proposed)
-    }
-
-    /// Accepts a pending governance admin proposal (enforces timelock).
-    pub fn accept_governance_admin(env: Env) -> bool {
-        Self::accept_governance_admin_impl(&env)
-    }
-
-    /// Cancels a pending governance admin proposal, aborting a two-step transfer.
-    ///
-    /// Admin-gated: the current admin must authorize the call. Clears the pending
-    /// proposal so the previously proposed address can no longer accept it. Panics
-    /// with `InvalidState` when there is no pending proposal to cancel, and with
-    /// `NotInitialized` before `initialize`.
-    pub fn cancel_governance_admin_proposal(env: Env) -> bool {
-        Self::cancel_governance_admin_proposal_impl(&env)
-    }
-
-    /// Returns the pending governance admin address, if any.
-    pub fn get_pending_governance_admin(env: Env) -> Option<Address> {
-        Self::get_pending_governance_admin_impl(&env)
-    }
-
-    /// Returns the current governance admin address.
-    pub fn get_governance_admin(env: Env) -> Option<Address> {
-        Self::get_governance_admin_impl(&env)
-    }
-
-    /// Returns the current protocol fee in basis points.
-    pub fn get_protocol_fee_bps(env: Env) -> u32 {
-        Self::read_protocol_fee_bps(&env)
-    }
-
-    /// Sets the current protocol fee in basis points.
-    ///
-    /// `new_bps` must be less than or equal to `10_000`, which represents 100%.
-    pub fn set_protocol_fee_bps(env: Env, new_bps: u32) -> bool {
-        Self::require_initialized(&env);
-
-        let admin: Address = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Admin)
-            .unwrap_or_else(|| env.panic_with_error(Error::NotInitialized));
-        admin.require_auth();
-        Self::require_valid_protocol_fee_bps(&env, new_bps);
-
-        let old_bps = Self::read_protocol_fee_bps(&env);
-        env.storage()
-            .persistent()
-            .set(&DataKey::ProtocolFeeBps, &new_bps);
-        env.events().publish(
-            (Symbol::new(&env, "protocol_fee_bps"),),
-            (old_bps, new_bps, admin.clone(), env.ledger().timestamp()),
-        );
-        true
-    }
-
-    /// Sets governed parameters and marks readiness metadata.
-    pub fn set_governed_params(
-        env: Env,
-        admin: Address,
-        protocol_fee_bps: u32,
-        max_escrow_total_stroops: i128,
-    ) -> bool {
-        Self::set_governed_params_impl(&env, admin, protocol_fee_bps, max_escrow_total_stroops)
-    }
-
-    /// Returns the current governed parameters.
-    pub fn get_governed_parameters(env: Env) -> Option<GovernedParameters> {
-        Self::get_governed_parameters_impl(&env)
-    }
-
     /// Returns the ledger sequence at which the pending admin proposal was made.
     ///
     /// Returns `None` if there is no pending proposal. This allows off-chain
@@ -2056,7 +1961,7 @@ impl Escrow {
         }
         let product = amount
             .checked_mul(fee_bps as i128)
-            .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
+            .unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
         product / 10_000
     }
 

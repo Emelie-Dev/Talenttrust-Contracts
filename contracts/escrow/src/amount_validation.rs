@@ -30,13 +30,13 @@ pub enum AmountValidationError {
 pub fn validate_single_amount(amount: i128) -> Result<(), crate::EscrowError> {
     // Check positivity
     if amount <= MIN_POSITIVE_AMOUNT - 1 {
-        return Err(crate::Error::AmountMustBePositive);
+        return Err(crate::EscrowError::AmountMustBePositive);
     }
 
     // Check maximum bounds
     if amount > MAX_SINGLE_AMOUNT_STROOPS {
-        // No direct canonical error; map to InvalidMilestoneAmount for generic excess amount
-        return Err(crate::Error::InvalidMilestoneAmount);
+        // Map large amounts to generic invalid milestone amount
+        return Err(crate::EscrowError::InvalidMilestoneAmount);
     }
 
     // Check stroop precision (must be integer, which i128 already guarantees)
@@ -65,7 +65,7 @@ pub fn validate_amount_array(amounts: &[i128]) -> Result<i128, crate::EscrowErro
         if let Some(new_total) = total.checked_add(amount) {
             total = new_total;
         } else {
-            return Err(crate::Error::PotentialOverflow);
+            return Err(crate::EscrowError::PotentialOverflow);
         }
     }
 
@@ -183,12 +183,12 @@ pub fn safe_subtract_amounts(a: i128, b: i128) -> Option<i128> {
 ///
 /// # Returns
 /// `Ok(total)` if all amounts are valid and accumulation succeeds, `Err(EscrowError)` if any validation fails
-pub fn accumulate_amounts<'a, I: IntoIterator<Item = &'a i128>>(
+pub fn accumulate_amounts<I: IntoIterator<Item = i128>>(
     amounts: I,
 ) -> Result<i128, crate::EscrowError> {
     let mut total: i128 = 0;
 
-    for &amount in amounts.into_iter() {
+    for amount in amounts.into_iter() {
         // Validate individual amount for positivity and bounds
         validate_single_amount(amount)?;
 
@@ -196,7 +196,7 @@ pub fn accumulate_amounts<'a, I: IntoIterator<Item = &'a i128>>(
         if let Some(new_total) = total.checked_add(amount) {
             total = new_total;
         } else {
-            return Err(crate::Error::PotentialOverflow);
+            return Err(crate::EscrowError::PotentialOverflow);
         }
     }
 

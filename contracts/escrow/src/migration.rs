@@ -1,5 +1,5 @@
 use crate::ttl::{read_if_live, remove_transient, store_with_ttl, PENDING_MIGRATION_TTL_LEDGERS};
-use crate::{Contract, ContractStatus, DataKey, Error, Escrow};
+use crate::{Contract, ContractStatus, DataKey, Error, Escrow, EscrowError};
 use soroban_sdk::{contracttype, Address, Env, Symbol};
 
 #[contracttype]
@@ -45,8 +45,8 @@ impl Escrow {
     /// The current client must authorize the call. The proposed client address
     /// must not be the freelancer or the current client. The pending migration
     /// is stored in temporary storage with TTL.
-    pub fn propose_client_migration(
-        env: Env,
+    pub(crate) fn propose_client_migration_impl(
+        env: &Env,
         contract_id: u32,
         current_client: Address,
         new_client: Address,
@@ -90,7 +90,11 @@ impl Escrow {
     }
 
     /// Accept a live pending client migration and update the contract.
-    pub fn accept_client_migration(env: Env, contract_id: u32, new_client: Address) -> bool {
+    pub(crate) fn accept_client_migration_impl(
+        env: &Env,
+        contract_id: u32,
+        new_client: Address,
+    ) -> bool {
         Self::require_not_paused(&env);
         new_client.require_auth();
 
@@ -150,12 +154,15 @@ impl Escrow {
         true
     }
     /// Return true if a live pending client migration exists.
-    pub fn has_pending_client_migration(env: Env, contract_id: u32) -> bool {
-        Self::pending_migration_exists(&env, contract_id)
+    pub(crate) fn has_pending_client_migration_impl(env: &Env, contract_id: u32) -> bool {
+        Self::pending_migration_exists(env, contract_id)
     }
 
     /// Return the live pending client migration record.
-    pub fn get_pending_client_migration(env: Env, contract_id: u32) -> PendingClientMigration {
+    pub(crate) fn get_pending_client_migration_impl(
+        env: &Env,
+        contract_id: u32,
+    ) -> PendingClientMigration {
         read_if_live(&env, &Self::pending_migration_key(contract_id))
             .unwrap_or_else(|| env.panic_with_error(EscrowError::InvalidState))
     }

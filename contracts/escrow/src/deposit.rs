@@ -51,7 +51,7 @@ pub fn validate_deposit(
     /// This prevents overflow panics that would brick the contract if a malformed
     /// contract with many large milestones were created (unlikely given the
     /// validation in create_contract, but defense-in-depth).
-    let total_amount: i128 = accumulate_amounts(milestones.iter().map(|m| &m.amount))
+    let total_amount: i128 = accumulate_amounts(milestones.iter().map(|m| m.amount))
         .unwrap_or_else(|err| env.panic_with_error(err));
     let new_funded_amount = contract
         .funded_amount
