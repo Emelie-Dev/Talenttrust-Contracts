@@ -518,34 +518,6 @@ treated as roadmap text, not live integration guidance.
 
 Participants can approve milestone items prior to fund distribution payouts. If an authorization mistake is discovered prior to complete disbursement release configurations, the approving party can rescind authority.
 
-### Approval TTL and Auto-Expiry
-
-Milestone approvals are stored in **temporary storage** with a fixed TTL of `PENDING_APPROVAL_TTL_LEDGERS` (7 days ≈ 120,960 ledgers). This design enforces a safety boundary:
-
-| Property | Behavior |
-|---|---|
-| **TTL Duration** | 7 days (120,960 ledgers) from approval time |
-| **Auto-Expiry** | Expired entries are auto-evicted by Soroban; `get_milestone_approvals` returns `None` |
-| **Fail-Closed** | Missing/expired approvals cause `release_milestone` to fail with `InsufficientApprovals` |
-| **Bump-on-Read** | A read within `PENDING_APPROVAL_BUMP_THRESHOLD` (1 day) of expiry renews the TTL; re-approving a live record returns `AlreadyApproved` |
-| **Per-Milestone** | Each milestone's approval record has independent TTL |
-
-**Security Implications:**
-- Approvals cannot be used indefinitely; they expire after 7 days
-- For MultiSig contracts, if one party's approval expires before the second arrives, both must re-approve
-- Expired approvals do not block future approvals; call `approve_milestone_release` again to set a fresh TTL
-
-### TTL Refresh (Bump-on-Read)
-
-Calling `approve_milestone_release` on a milestone the same caller has already
-approved returns `AlreadyApproved`; a second approval does **not** refresh a live
-record. Instead, the TTL is renewed automatically on a successful read: when
-`get_milestone_approvals` or `check_approvals` (invoked during a release attempt)
-reads a live record within `PENDING_APPROVAL_BUMP_THRESHOLD` (1 day) of expiry,
-it extends the entry back to the full `PENDING_APPROVAL_TTL_LEDGERS` window. A
-read outside the bump threshold is a no-op for the TTL. Once a record has fully
-expired and been evicted, the caller may approve again to create a fresh record.
-
 #### `revoke_approval(contract_id: Address, caller: Address, milestone_index: u32)`
 - **Authorization Required:** `caller.require_auth()`
 - **Behavior:** Explicitly removes individual state flags (`client_approved` | `freelancer_approved` | `arbiter_approved`). When all structural components drop to `false`, temporary records are scrubbed entirely to maximize gas savings.
