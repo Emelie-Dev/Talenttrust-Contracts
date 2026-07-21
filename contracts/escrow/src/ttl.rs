@@ -33,6 +33,12 @@
 //! This "fail‑closed" behaviour is important for approvals and migrations: a missing entry is
 //! interpreted as not approved/not migrated, preventing any stale permission from being honored.
 //!
+//! Storage ownership: this module owns TTL policy and helper access patterns,
+//! not business records. It extends caller-provided keys, with first-class
+//! helpers for `DataKey::Contract(contract_id)`, the paired milestone vector
+//! key `(DataKey::Contract(contract_id), "milestones")`, `NextContractId`,
+//! participant index keys, pending approvals, and pending migrations.
+//!
 use crate::{DataKey, Error, Milestone};
 use soroban_sdk::{Env, IntoVal, Symbol, TryFromVal, Val, Vec};
 
@@ -79,6 +85,15 @@ where
     env.storage().temporary().get(key)
 }
 
+/// Extends a live transient entry only when its remaining TTL is below `threshold`.
+///
+/// Returns `false` when `key` is absent or has already been evicted. Returns
+/// `true` when the key is live; in that case Soroban performs the extension only
+/// when the remaining TTL is below `threshold` and otherwise leaves the TTL
+/// unchanged.
+///
+/// The boolean reports liveness, not whether Soroban changed the TTL. The host
+/// intentionally does not expose a production API for observing an entry's TTL.
 #[allow(dead_code)]
 pub fn extend_if_below_threshold<K>(env: &Env, key: &K, threshold: u32, extend_to: u32) -> bool
 where
@@ -92,6 +107,9 @@ where
     true
 }
 
+/// Removes a transient entry if it exists.
+///
+/// This operation is idempotent: removing an absent or evicted key is a no-op.
 #[allow(dead_code)]
 pub fn remove_transient<K>(env: &Env, key: &K)
 where
@@ -100,6 +118,10 @@ where
     env.storage().temporary().remove(key);
 }
 
+/// Returns whether a transient key is currently live in contract storage.
+///
+/// Expired temporary entries are auto-evicted by Soroban and therefore return
+/// `false`, just like keys that were never stored.
 #[allow(dead_code)]
 pub fn has_transient<K>(env: &Env, key: &K) -> bool
 where

@@ -111,7 +111,13 @@ fn approval_evicted_after_expiry() {
         store_with_ttl(&env, &approval_key(), &99u32, PENDING_APPROVAL_TTL_LEDGERS);
     });
 
-    advance(&env, &id, PENDING_APPROVAL_TTL_LEDGERS + 1);
+    let expiry = env.as_contract(&id, || compute_expiry(&env, PENDING_APPROVAL_TTL_LEDGERS));
+    env.ledger().set_sequence_number(expiry.saturating_add(1));
+    env.as_contract(&id, || {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL, INSTANCE_TTL);
+    });
 
     env.as_contract(&id, || {
         let val: Option<u32> = read_if_live(&env, &approval_key());

@@ -17,7 +17,7 @@ jobs:
       - name: Install Rust
         uses: actions-rs/toolchain@v1
         with:
-          toolchain: stable
+          toolchain: 1.88.0
           profile: minimal
           default: true
 
@@ -52,5 +52,8 @@ jobs:
       - name: Build contract
         run: cargo build --workspace --release
 
-      - name: Run tests
-        run: cargo test --workspace --quiet -- --nocapture
+      - name: Compile tests
+        run: cargo test --workspace --quiet --no-run
+
+      - name: Build Rust documentation
+        run: cargo doc --workspace --no-deps

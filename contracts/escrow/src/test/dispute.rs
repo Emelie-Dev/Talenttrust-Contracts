@@ -29,12 +29,12 @@ fn make_env() -> Env {
     env
 }
 
-fn make_client(env: &Env) -> (EscrowClient<'_>, Address) {
+fn make_client(env: &Env) -> EscrowClient<'_> {
     let id = env.register(Escrow, ());
     let client = EscrowClient::new(env, &id);
     let admin = Address::generate(env);
     client.initialize(&admin);
-    (client, admin)
+    client
 }
 
 /// Build a bare `Contract` value with controlled accounting fields for unit tests
@@ -255,31 +255,42 @@ fn resolution_payouts_rejects_corrupted_accounting_state() {
 #[test]
 fn resolution_payouts_conserves_available_balance() {
     let env = make_env();
-    let available = 12345_i128;
+    let balances = &[0, 1, 2, 5, 10, 33, 99, 100, 101, 1000, 12345, 1000000];
 
-    // FullRefund
-    let c = payout_contract(&env, available, 0, 0);
-    let (client, freelancer) = resolution_payouts(&c, &DisputeResolution::FullRefund).unwrap();
-    assert_eq!(client + freelancer, available);
+    for &available in balances {
+        let c = payout_contract(&env, available, 0, 0);
 
-    // FullPayout
-    let c = payout_contract(&env, available, 0, 0);
-    let (client, freelancer) = resolution_payouts(&c, &DisputeResolution::FullPayout).unwrap();
-    assert_eq!(client + freelancer, available);
+        // FullRefund
+        let (client, freelancer) = resolution_payouts(&c, &DisputeResolution::FullRefund).unwrap();
+        assert_eq!(client + freelancer, available);
+        assert_eq!(client, available);
+        assert_eq!(freelancer, 0);
 
-    // PartialRefund
-    let c = payout_contract(&env, available, 0, 0);
-    let (client, freelancer) = resolution_payouts(&c, &DisputeResolution::PartialRefund).unwrap();
-    assert_eq!(client + freelancer, available);
+        // FullPayout
+        let (client, freelancer) = resolution_payouts(&c, &DisputeResolution::FullPayout).unwrap();
+        assert_eq!(client + freelancer, available);
+        assert_eq!(client, 0);
+        assert_eq!(freelancer, available);
 
-    // Split (exact)
-    let c = payout_contract(&env, available, 0, 0);
-    let split = DisputeSplit {
-        client_amount: 5000,
-        freelancer_amount: available - 5000,
-    };
-    let (client, freelancer) = resolution_payouts(&c, &DisputeResolution::Split(split)).unwrap();
-    assert_eq!(client + freelancer, available);
+        // PartialRefund
+        let (client, freelancer) = resolution_payouts(&c, &DisputeResolution::PartialRefund).unwrap();
+        assert_eq!(client + freelancer, available);
+        let expected_freelancer = (available * 30) / 100;
+        assert_eq!(freelancer, expected_freelancer);
+        assert_eq!(client, available - expected_freelancer);
+
+        // Split (exact)
+        let split_client = available / 2;
+        let split_freelancer = available - split_client;
+        let split = DisputeSplit {
+            client_amount: split_client,
+            freelancer_amount: split_freelancer,
+        };
+        let (client, freelancer) = resolution_payouts(&c, &DisputeResolution::Split(split)).unwrap();
+        assert_eq!(client + freelancer, available);
+        assert_eq!(client, split_client);
+        assert_eq!(freelancer, split_freelancer);
+    }
 }
 
 /// final_status returns Refunded only when the full deposit has been refunded.
@@ -304,7 +315,7 @@ fn final_status_after_resolution_returns_refunded_only_when_fully_refunded() {
 #[test]
 fn resolve_full_refund_conserves_and_marks_refunded() {
     let env = make_env();
-    let (client, _) = make_client(&env);
+    let client = make_client(&env);
     let client_addr = Address::generate(&env);
     let freelancer_addr = Address::generate(&env);
     let arbiter_addr = Address::generate(&env);

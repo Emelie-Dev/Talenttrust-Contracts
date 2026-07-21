@@ -39,8 +39,30 @@ records the SAC address under `DataKey::SettlementToken`.
 - Requires `initialize` to have been called (`NotInitialized` error otherwise).
 - Requires the caller to be the stored admin (`UnauthorizedRole` otherwise).
 - Rejects a second call when a token is already bound (`SettlementTokenAlreadyBound`).
+- **Pre-bind probe (issue #723):** Before persisting the token address, the
+  entrypoint performs a read-only probe to verify the supplied address is a live
+  SAC token contract:
+  1. Calls `token::Client::balance(env.current_contract_address())` against the
+     candidate address. If the address does not implement the SAC token
+     interface, the call panics and the bind is rejected.
+  2. Rejects `env.current_contract_address()` (the escrow contract itself) with
+     `SettlementTokenIsSelf` — binding self creates a circular custody reference.
+  3. Rejects the stored admin address with `SettlementTokenIsAdmin` — conflating
+     governance authority with the settlement token role is a privilege-separation
+     violation.
 - `set_settlement_token` is a deprecated alias retained for backward compatibility;
   new code must call `bind_settlement_token`.
+
+### Reentrancy Mitigation
+
+All downstream money-flow entrypoints (`deposit_funds`, `release_milestone`,
+`cancel_contract`, `refund_unreleased_milestones`) follow strict
+**state-before-transfer** (Checks-Effects-Interactions) ordering: contract state
+is finalized *before* any `token::Client::transfer` call. A malicious token
+contract that re-enters the escrow during a transfer will observe the
+already-mutated state and cannot double-spend or front-run the operation. The
+probe itself performs no state mutation — it only reads the token balance — so
+it cannot be used as a reentrancy vector.
 
 After binding, every fund-moving entrypoint reads this key via
 `Escrow::read_settlement_token`.  If the key is absent at call time the contract panics

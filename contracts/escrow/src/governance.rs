@@ -1,3 +1,12 @@
+//! Governance and protocol-configuration entrypoints.
+//!
+//! This module owns admin-controlled persistent configuration:
+//! `DataKey::Admin` for authorization, `ProtocolFeeBps` for release fees,
+//! `GovernedParameters` for escrow caps, `ReadinessChecklist` for deployment
+//! readiness state, and `PendingAdmin` for two-step admin rotation proposals.
+//! Money movement for protocol-fee withdrawal remains in the crate root because
+//! it performs settlement-token transfers.
+
 use crate::ttl::ADMIN_ROTATION_MIN_DELAY_LEDGERS;
 use crate::{
     DataKey, Error, Escrow, EscrowArgs, EscrowClient, GovernedParameters, PendingAdminProposal,
