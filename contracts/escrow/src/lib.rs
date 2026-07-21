@@ -739,7 +739,8 @@ impl Escrow {
 
         // Check contract-level funding (per-milestone funded_amount is set after
         // release, so we check the aggregate contract balance here).
-        let available = contract.funded_amount - contract.released_amount - contract.refunded_amount;
+        let available =
+            contract.funded_amount - contract.released_amount - contract.refunded_amount;
         if available < milestone.amount {
             env.panic_with_error(Error::InsufficientFunds);
         }
