@@ -22,7 +22,7 @@ Lifecycle and reputation:
 - `deposit_funds(contract_id, amount) -> bool`
 - `submit_work_evidence(contract_id, caller, milestone_index, evidence) -> bool`
 - `release_milestone(contract_id, milestone_index) -> bool`
-- `issue_reputation(contract_id, caller, freelancer, rating) -> bool`
+- `issue_reputation(contract_id, caller, rating, comment) -> bool`
 - `cancel_contract(contract_id, caller) -> bool`
 - `finalize_contract(contract_id, finalizer) -> bool`
 
@@ -40,7 +40,7 @@ Read-only queries:
 - `get_finalization_record(contract_id) -> Option<FinalizationRecord>`
 - `get_reputation(freelancer) -> Option<ReputationRecord>`
 - `get_average_rating(freelancer) -> Option<i128>` — scaled average (see [Average Rating](#average-rating))
-- `get_pending_reputation_credits(freelancer) -> u32`
+- `get_pending_reputation_credits(freelancer) -> i128`
 - `get_admin() -> Option<Address>`
 - `get_settlement_token() -> Option<Address>`
 - `is_paused() -> bool`

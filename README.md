@@ -39,7 +39,7 @@ The escrow implementation follows a fail-closed state machine:
 - cancellation returns the full refundable SAC balance to the client while preserving funds held for other active contracts
 - releases pay the freelancer (less protocol fee) via SAC transfer BEFORE milestone state is updated, so a failed payout leaves state untouched
 - releases require a valid unreleased milestone, caller authorization via `caller.require_auth()`, and valid non-expired approvals matching the contract's `ReleaseAuthorization` mode
-- reputation is gated behind contract completion and is issued once per contract
+- reputation is gated behind contract completion and is issued once per contract; each completed escrow accrues one pending credit for its freelancer, while fully refunded escrows accrue none. Issuing reputation consumes one credit and updates the freelancer's completed-contract count
 - finalization records immutable close metadata for completed or disputed contracts and blocks later contract-specific mutations
 - one-time admin initialization protects pause and emergency controls; two-step admin transfer is planned in [#318](https://github.com/Talenttrust/Talenttrust-Contracts/issues/318)
 - pause and emergency controls block all state-changing escrow operations while active

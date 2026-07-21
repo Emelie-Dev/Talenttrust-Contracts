@@ -493,7 +493,9 @@ impl Escrow {
     ///
     /// This is called exactly once when a contract successfully transitions to
     /// the `Completed` state, either through the final milestone release
-    /// or via dispute resolution. It enables the client to later issue reputation.
+    /// or via dispute resolution. Credits accumulate independently for each
+    /// completed contract and are consumed one at a time by `issue_reputation`.
+    /// A `Refunded` contract never calls this helper and therefore earns no credit.
     fn grant_pending_reputation_credit(env: &Env, freelancer: &Address) {
         let pending_key = DataKey::PendingReputationCredits(freelancer.clone());
         let pending: i128 = env.storage().persistent().get(&pending_key).unwrap_or(0);
@@ -1661,6 +1663,11 @@ impl Escrow {
             .and_then(|scaled| scaled.checked_div(rep.completed_contracts))
     }
 
+    /// Returns the number of completed contracts awaiting a reputation rating.
+    ///
+    /// This value increments once per completed contract and decrements once
+    /// per successful `issue_reputation` call. Refunded contracts do not accrue
+    /// pending reputation credits.
     pub fn get_pending_reputation_credits(env: Env, address: Address) -> i128 {
         env.storage()
             .persistent()
