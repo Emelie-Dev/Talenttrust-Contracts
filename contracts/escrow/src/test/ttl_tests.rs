@@ -6,7 +6,11 @@
 
 #![cfg(test)]
 
-use soroban_sdk::{symbol_short, testutils::Ledger as _, Env, Symbol};
+use soroban_sdk::{
+    symbol_short,
+    testutils::{storage::Temporary as _, Ledger as _},
+    Env, Symbol,
+};
 
 use crate::{
     approvals,
@@ -34,7 +38,7 @@ fn setup() -> (Env, soroban_sdk::Address) {
 
 fn advance(env: &Env, contract_id: &soroban_sdk::Address, by: u32) {
     env.ledger()
-        .with_mut(|li| li.sequence_number = li.sequence_number.saturating_add(by));
+        .set_sequence_number(env.ledger().sequence().saturating_add(by));
     env.as_contract(contract_id, || {
         env.storage()
             .instance()
@@ -112,6 +116,10 @@ fn approval_evicted_after_expiry() {
     env.as_contract(&id, || {
         let val: Option<u32> = read_if_live(&env, &approval_key());
         assert!(val.is_none(), "entry must be evicted after TTL elapses");
+        assert!(
+            !has_transient(&env, &approval_key()),
+            "evicted entries must not be reported as transient"
+        );
     });
 }
 
@@ -186,7 +194,7 @@ fn extend_returns_true_and_entry_survives_past_original_expiry() {
             PENDING_APPROVAL_BUMP_THRESHOLD,
             PENDING_APPROVAL_TTL_LEDGERS,
         );
-        assert!(bumped, "must return true for a live entry");
+        assert!(bumped, "must return true for a live entry that is bumped");
     });
 
     advance(&env, &id, PENDING_APPROVAL_BUMP_THRESHOLD + 1);
@@ -196,6 +204,39 @@ fn extend_returns_true_and_entry_survives_past_original_expiry() {
         assert!(
             val.is_some(),
             "entry must survive past original expiry after bump"
+        );
+    });
+}
+
+#[test]
+fn extend_is_a_no_op_when_remaining_ttl_is_at_threshold() {
+    let (env, id) = setup();
+    env.as_contract(&id, || {
+        store_with_ttl(&env, &approval_key(), &1u32, PENDING_APPROVAL_TTL_LEDGERS);
+    });
+
+    advance(
+        &env,
+        &id,
+        PENDING_APPROVAL_TTL_LEDGERS - PENDING_APPROVAL_BUMP_THRESHOLD,
+    );
+
+    env.as_contract(&id, || {
+        let ttl_before = env.storage().temporary().get_ttl(&approval_key());
+        assert_eq!(ttl_before, PENDING_APPROVAL_BUMP_THRESHOLD);
+        assert!(
+            extend_if_below_threshold(
+                &env,
+                &approval_key(),
+                PENDING_APPROVAL_BUMP_THRESHOLD,
+                PENDING_APPROVAL_TTL_LEDGERS,
+            ),
+            "the key remains live even though its TTL should not be bumped"
+        );
+        assert_eq!(
+            env.storage().temporary().get_ttl(&approval_key()),
+            ttl_before,
+            "a TTL at the threshold must not be extended"
         );
     });
 }
@@ -237,8 +278,7 @@ fn remove_transient_clears_entry_immediately() {
 fn remove_transient_is_idempotent() {
     let (env, id) = setup();
     env.as_contract(&id, || {
-        store_with_ttl(&env, &approval_key(), &5u32, PENDING_APPROVAL_TTL_LEDGERS);
-        remove_transient(&env, &approval_key());
+        assert!(!has_transient(&env, &approval_key()));
         remove_transient(&env, &approval_key());
         assert!(!has_transient(&env, &approval_key()));
     });
