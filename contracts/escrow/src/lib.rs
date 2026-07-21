@@ -1,3 +1,31 @@
+//! TalentTrust escrow contract for milestone-based freelancer payments.
+//!
+//! The crate root exposes the Soroban contract and still owns several public
+//! entrypoints directly: initialization, settlement-token binding, deposits,
+//! milestone release/refund/cancel flows, reputation, work evidence, protocol
+//! fee withdrawal, and dispute entrypoints. Supporting modules keep reusable
+//! validation, storage, governance, and lifecycle helpers close to the paths
+//! that use them.
+//!
+//! ## Escrow source tree map
+//!
+//! | Source | Responsibility | Storage keys owned or touched |
+//! | --- | --- | --- |
+//! | `lib.rs` | Contract wrapper plus root entrypoints for setup, custody, money movement, reads, reputation, work evidence, pause/emergency, fee withdrawal, and dispute orchestration. | `DataKey::Initialized`, `Admin`, `SettlementToken`, `Paused`, `Emergency`, `ReadinessChecklist`, `Contract(id)`, `(Contract(id), "milestones")`, `MilestoneApprovals`, `AccumulatedProtocolFees`, `ReputationIssued`, `PendingReputationCredits`, `Reputation`, `ReputationComment` |
+//! | `amount_validation` | Stateless validation and checked arithmetic for stroop amounts and milestone totals. | None directly; callers write validated amounts to `Contract(id)` and milestone vectors. |
+//! | `approvals` | Temporary milestone release approvals and release-authorization checks. | Temporary `DataKey::MilestoneApprovals(contract_id, milestone_index)`; reads `Contract(id)` and `(Contract(id), "milestones")`. |
+//! | `deposit` | Deposit preflight and post-transfer accounting used by `deposit_funds`. | `DataKey::Contract(contract_id)` and `(DataKey::Contract(contract_id), "milestones")`. |
+//! | `finalize` | Immutable finalization records, finalization guards, and final contract summaries. | `DataKey::Finalization(contract_id)`; reads `Contract(id)`, `(Contract(id), "milestones")`, `Paused`, and `Emergency`. |
+//! | `migration` | Client migration proposals, acceptance checks, cancellation, and pending-migration reads. | Temporary `DataKey::PendingClientMigration(contract_id)`; reads and updates `DataKey::Contract(contract_id)`. |
+//! | `ttl` | TTL constants plus helpers for temporary and persistent storage renewal. | Extends caller-provided keys, especially `Contract(id)`, `(Contract(id), "milestones")`, `NextContractId`, participant indexes, approvals, and migrations. |
+//! | `types` | Shared Soroban types, error enums, summaries, governance records, dispute records, and the canonical `DataKey` enum. | Declares storage key schema only; does not access storage itself. |
+//! | `utils` | Small deterministic helpers shared by entrypoints, currently ledger timestamp access. | None. |
+//! | `create_contract` | Contract creation, participant/milestone validation, ID allocation, and creation events. | `DataKey::Contract(id)`, `(DataKey::Contract(id), "milestones")`, `NextContractId`, and `GovernedParameters`. |
+//! | `dispute` | Pure dispute payout arithmetic and final-status selection for dispute resolution. | None directly; root dispute entrypoints update `DataKey::Contract(contract_id)`. |
+//! | `governance` | Admin-controlled protocol fee, governed parameter, readiness, and admin-rotation entrypoints. | `DataKey::Admin`, `ProtocolFeeBps`, `PendingAdmin`, `GovernedParameters`, and `ReadinessChecklist`. |
+//!
+//! Generate this map with `cargo doc -p escrow --no-deps` and open
+//! `target/doc/escrow/index.html`.
 #![no_std]
 #![allow(clippy::derivable_impls)]
 #![allow(clippy::manual_range_contains)]
@@ -209,7 +237,7 @@ impl Escrow {
 
     /// Alias retained for callers that used the historical API name.
     ///
-    /// Behaves identically to [`bind_settlement_token`]. New code should prefer
+    /// Behaves identically to `bind_settlement_token`. New code should prefer
     /// `bind_settlement_token`.
     pub fn set_settlement_token(env: Env, admin: Address, token: Address) -> bool {
         Self::bind_settlement_token(env, admin, token)
@@ -223,11 +251,11 @@ impl Escrow {
     /// Returns `true` exactly when a settlement token is bound.
     ///
     /// This is the recommended cheap pre-flight readiness check before calling
-    /// [`deposit_funds`], which panics when no settlement token has been bound.
+    /// `deposit_funds`, which panics when no settlement token has been bound.
     /// Integrators that only need to know *whether* the escrow can accept
     /// deposits — without caring about the specific token address — should use
     /// this instead of fetching and discarding the `Address` from
-    /// [`get_settlement_token`].
+    /// `get_settlement_token`.
     ///
     /// Read-only and auth-free: it performs no state mutation (no TTL write is
     /// needed for the simple binding key).
@@ -416,7 +444,7 @@ impl Escrow {
 
     /// Propose a client migration for an existing contract.
     ///
-    /// Canonical public entrypoint; delegates to [`migration::propose_client_migration_impl`].
+    /// Canonical public entrypoint; delegates to `propose_client_migration_impl`.
     /// The current client must authorize the call. The proposed client address
     /// must not be the freelancer or the current client. The pending migration
     /// is stored in temporary storage with TTL.
@@ -432,7 +460,7 @@ impl Escrow {
 
     /// Accept a live pending client migration and update the contract.
     ///
-    /// Canonical public entrypoint; delegates to [`migration::accept_client_migration_impl`].
+    /// Canonical public entrypoint; delegates to `accept_client_migration_impl`.
     /// Only the proposed client address may authorize acceptance.
     pub fn accept_client_migration(env: Env, contract_id: u32, new_client: Address) -> bool {
         Self::require_not_paused(&env);
@@ -441,14 +469,14 @@ impl Escrow {
 
     /// Return true if a live pending client migration exists.
     ///
-    /// Canonical public entrypoint; delegates to [`migration::has_pending_client_migration_impl`].
+    /// Canonical public entrypoint; delegates to `has_pending_client_migration_impl`.
     pub fn has_pending_client_migration(env: Env, contract_id: u32) -> bool {
         Self::has_pending_client_migration_impl(&env, contract_id)
     }
 
     /// Return the live pending client migration record.
     ///
-    /// Canonical public entrypoint; delegates to [`migration::get_pending_client_migration_impl`].
+    /// Canonical public entrypoint; delegates to `get_pending_client_migration_impl`.
     /// Panics with `InvalidState` when no live pending migration exists.
     pub fn get_pending_client_migration(env: Env, contract_id: u32) -> PendingClientMigration {
         Self::get_pending_client_migration_impl(&env, contract_id)
@@ -1030,7 +1058,7 @@ impl Escrow {
     /// Checks whether a contract with the given ID exists in storage.
     ///
     /// This is a cheap, non-panicking existence probe that returns `true` if
-    /// the contract record is present and `false` otherwise. Unlike [`get_contract`],
+    /// the contract record is present and `false` otherwise. Unlike `get_contract`,
     /// this function does **not** panic with `ContractNotFound` for missing IDs,
     /// making it safe for indexers and clients iterating over ID ranges.
     ///
@@ -1079,7 +1107,7 @@ impl Escrow {
     /// Returns the next contract ID to be allocated (the high-water mark).
     ///
     /// This reader returns the current value of `NextContractId`, which represents
-    /// the next ID that will be assigned when [`create_contract`] is called.
+    /// the next ID that will be assigned when `create_contract` is called.
     /// Indexers can use this to determine the allocation high-water mark and
     /// safely iterate over the allocated ID range `[1, get_next_contract_id() - 1]`.
     ///
@@ -1190,7 +1218,7 @@ impl Escrow {
     /// Retrieves a single milestone by index for a contract.
     ///
     /// This is the bounds-checked single-item counterpart to
-    /// [`get_milestones`]. Off-chain callers that only need one milestone's
+    /// `get_milestones`. Off-chain callers that only need one milestone's
     /// state (amount, funded/released/refunded flags, deadline, work evidence)
     /// can avoid fetching and decoding the full `Vec<Milestone>`.
     ///
@@ -1206,11 +1234,11 @@ impl Escrow {
     /// # Panics
     /// Panics with `ContractNotFound` if the contract's milestones were never
     /// allocated (i.e. the contract id is unknown), matching
-    /// [`get_milestones`].
+    /// `get_milestones`.
     ///
     /// # Side effects
     /// Extends the milestones vector TTL on a successful read, consistent with
-    /// [`get_milestones`]. Auth-free and otherwise non-mutating.
+    /// `get_milestones`. Auth-free and otherwise non-mutating.
     pub fn get_milestone(env: Env, contract_id: u32, milestone_index: u32) -> Option<Milestone> {
         let milestone_key = Symbol::new(&env, "milestones");
         let milestones: Vec<Milestone> = env

@@ -1,3 +1,14 @@
+//! Temporary milestone approval storage and release authorization checks.
+//!
+//! This module owns the temporary
+//! `DataKey::MilestoneApprovals(contract_id, milestone_index)` records used by
+//! `approve_milestone_release` and `release_milestone`. It reads the escrow
+//! contract and milestone vector to validate state and role authorization, but
+//! it does not move funds or mutate milestone accounting.
+//!
+//! Approval records live in Soroban temporary storage and expire according to
+//! `PENDING_APPROVAL_TTL_LEDGERS`. Missing or expired approvals fail closed.
+
 use crate::ttl::{PENDING_APPROVAL_BUMP_THRESHOLD, PENDING_APPROVAL_TTL_LEDGERS};
 use crate::types::{
     Contract, ContractStatus, DataKey, Error, Milestone, MilestoneApprovals, ReleaseAuthorization,
@@ -237,11 +248,11 @@ mod tests {
                     funded_amount: 0,
                     released: false,
                     refunded: false,
-                                work_evidence: None,
-                                refunded_amount: 0,
-                                deadline: None,
-                            }],
-                        );
+                    work_evidence: None,
+                    refunded_amount: 0,
+                    deadline: None,
+                }],
+            );
             let _ = release_auth;
             let milestone_key = Symbol::new(env, "milestones");
             env.storage().persistent().set(

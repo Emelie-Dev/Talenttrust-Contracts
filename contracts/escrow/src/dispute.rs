@@ -1,3 +1,11 @@
+//! Dispute payout arithmetic and final-status helpers.
+//!
+//! This module is intentionally storage-free. It computes how the currently
+//! available escrow balance should be split for a `DisputeResolution` and tells
+//! the root dispute entrypoint whether the contract should end as `Completed`
+//! or `Refunded`. The root entrypoints own authentication, token transfer, event
+//! publication, and writes to `DataKey::Contract(contract_id)`.
+
 use soroban_sdk::{contractimpl, symbol_short, Address, Env};
 
 use crate::{

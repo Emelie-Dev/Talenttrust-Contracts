@@ -3,12 +3,11 @@ use super::{
     generated_participants, register_client, total_milestone_amount, MILESTONE_ONE,
     MILESTONE_THREE, MILESTONE_TWO,
 };
-use crate::{ttl, ContractStatus, EscrowError, ReleaseAuthorization, Error};
+use crate::{ttl, ContractStatus, Error, EscrowError, ReleaseAuthorization};
 use soroban_sdk::{
     testutils::{storage::Persistent, Address as _, Ledger},
     vec, Address, Env, Symbol,
 };
-
 
 /// Finalization by arbiter works on a completed contract.
 #[test]
@@ -1104,7 +1103,6 @@ fn read_getters_unchanged_after_pause() {
         other => panic!("expected ContractNotFound, got {:?}", other),
     };
 }
-
 
 /// Finalization writes a round-tripped snapshot of milestone summaries and derived totals.
 #[test]

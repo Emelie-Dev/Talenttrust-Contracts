@@ -1,7 +1,7 @@
 use soroban_sdk::{testutils::Address as _, testutils::Events, Address, Env};
 
-use crate::{Escrow, EscrowClient, EscrowError, Error};
-use super::{assert_contract_error, register_client, generated_participants, default_milestones};
+use super::{assert_contract_error, default_milestones, generated_participants, register_client};
+use crate::{Error, Escrow, EscrowClient, EscrowError};
 
 /// Returns a fresh (Env, contract Address) pair with all auths mocked.
 fn setup() -> (Env, Address) {
