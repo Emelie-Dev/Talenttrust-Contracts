@@ -659,8 +659,9 @@ impl Escrow {
 
         Self::require_not_finalized(&env, contract_id);
 
-        // Verify contract is in Accepted state before release
-        if contract.status != ContractStatus::Accepted {
+        // Verify contract is in Funded state before release (deposit transitions
+        // Created → Funded when fully funded, so release must accept Funded).
+        if contract.status != ContractStatus::Funded {
             env.panic_with_error(Error::InvalidState);
         }
 
@@ -736,7 +737,10 @@ impl Escrow {
             env.panic_with_error(Error::AlreadyRefunded);
         }
 
-        if milestone.funded_amount < milestone.amount {
+        // Check contract-level funding (per-milestone funded_amount is set after
+        // release, so we check the aggregate contract balance here).
+        let available = contract.funded_amount - contract.released_amount - contract.refunded_amount;
+        if available < milestone.amount {
             env.panic_with_error(Error::InsufficientFunds);
         }
 

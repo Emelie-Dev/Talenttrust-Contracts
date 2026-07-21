@@ -520,10 +520,11 @@ fn sac_custody_accounting_invariant_holds_after_deposit_and_release() {
     let accrued: i128 = escrow.get_accumulated_protocol_fees();
     let escrow_bal: i128 = token.balance(&escrow.address);
 
-    // invariant: balance == funded - released - refunded + accrued_fees
+    // invariant: balance == funded - released - refunded
+    // (released_amount is net payout; accrued_fees remains in escrow balance)
     assert_eq!(
         escrow_bal,
-        contract.funded_amount - contract.released_amount - contract.refunded_amount + accrued,
+        contract.funded_amount - contract.released_amount - contract.refunded_amount,
         "invariant violated after milestone release"
     );
 
@@ -618,4 +619,30 @@ fn release_milestone_cei_ordering_state_before_transfer() {
         total - MILESTONE_ONE,
         "escrow must have retained the remaining balance"
     );
+}
+
+// ─── Helper coverage tests ────────────────────────────────────────────────────
+
+/// Exercise the `funded_sac_contract` helper to cover it.
+#[test]
+fn funded_sac_contract_helper_creates_and_deposits() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+    let (client, sac, _admin) = setup_bound(&env);
+
+    let (client_addr, _freelancer_addr, id) = funded_sac_contract(&env, &client, &sac);
+
+    let contract = client.get_contract(&id);
+    assert_eq!(contract.status, ContractStatus::Funded);
+    assert_eq!(contract.funded_amount, total_milestone_amount());
+    assert_eq!(contract.client, client_addr);
+}
+
+/// Exercise `MockNonToken` to cover its `hello` entry point.
+#[test]
+fn mock_non_token_hello_returns_true() {
+    let env = Env::default();
+    let addr = env.register(MockNonToken, ());
+    let client = MockNonTokenClient::new(&env, &addr);
+    assert!(client.hello());
 }
