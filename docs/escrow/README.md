@@ -217,6 +217,69 @@ pending reputation credit is added for the freelancer.
 contracts awaiting client-issued reputation for a freelancer. `issue_reputation`
 consumes one pending credit and records the rating.
 
+### Release Authorization Mode / Caller Matrix
+
+The `ReleaseAuthorization` field set at contract creation controls which
+parties may approve a milestone and which may trigger the on-chain release.
+The table below is the definitive cross-reference for all four modes.
+
+| Mode | Allowed Approvers | Approval Logic | Allowed Release Callers | Required Contract-Creation Arg |
+|---|---|---|---|---|
+| `ClientOnly` (0) | Client | `client_approved == true` | Client | Arbiter optional |
+| `ClientAndArbiter` (1) | Client **or** Arbiter | `client_approved \|\| arbiter_approved` | Client **or** Arbiter | Arbiter **required** |
+| `ArbiterOnly` (2) | Arbiter | `arbiter_approved == true` | Arbiter | Arbiter **required** |
+| `MultiSig` (3) | Client **and** Freelancer | `client_approved && freelancer_approved` | Client **or** Freelancer | Arbiter optional |
+
+**Key behavioral rules enforced by `release_milestone` and `approve_milestone_release`:**
+
+1. **Caller role check** — `release_milestone` first authenticates the caller
+   via `caller.require_auth()`, then checks the caller's role against the
+   mode. Callers whose role is not listed in "Allowed Release Callers" receive
+   `UnauthorizedRole` before any approval logic runs.
+
+2. **Approval presence** — after the role check passes, `check_approvals`
+   verifies that the required approvals are present in temporary storage. If
+   the approval record is absent or has expired, the call fails with
+   `InsufficientApprovals`. No partial state change occurs.
+
+3. **Approval scope** — `approve_milestone_release` enforces the same
+   role rules: a party whose role is not listed in "Allowed Approvers" is
+   rejected with `UnauthorizedRole` and no approval is recorded.
+
+4. **MultiSig AND vs OR** — `MultiSig` is the only mode with AND semantics:
+   *both* client and freelancer must have approved before *either* can
+   trigger the release. Attempting a release after only one of the two
+   approves yields `InsufficientApprovals`.
+
+5. **Approval expiry** — approvals are stored in Soroban temporary storage
+   with a TTL of `PENDING_APPROVAL_TTL_LEDGERS` (~7 days). Expired approvals
+   are treated as absent; `check_approvals` cannot distinguish expired from
+   never-recorded and returns `InsufficientApprovals` in both cases.
+
+6. **Approval clearing** — approvals are removed from temporary storage
+   immediately after a successful release. They cannot be reused for a
+   different milestone or a second attempt on the same milestone.
+
+7. **InvalidState guard** — `release_milestone` requires the contract to be
+   in the active funded state. Contracts in `Created`, `Completed`,
+   `Cancelled`, or `Refunded` status are rejected with `InvalidState` before
+   any role or approval logic runs.
+
+**Error code quick-reference:**
+
+| Condition | Error |
+|---|---|
+| Caller's role is not in "Allowed Release Callers" | `UnauthorizedRole` |
+| Required approvals missing or expired | `InsufficientApprovals` |
+| Contract not in active funded state | `InvalidState` |
+| Approval attempted by unauthorized party | `UnauthorizedRole` |
+| Same party approves twice | `AlreadyApproved` |
+| Milestone already released | `MilestoneAlreadyReleased` |
+| Milestone already refunded | `AlreadyRefunded` |
+
+Test coverage for every cell in the matrix above lives in
+`contracts/escrow/src/test/release_authorization.rs` (issue #710).
+
 ### 5. Issue Reputation
 
 ```rust
