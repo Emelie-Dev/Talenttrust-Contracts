@@ -29,12 +29,12 @@ fn make_env() -> Env {
     env
 }
 
-fn make_client(env: &Env) -> (EscrowClient<'_>, Address) {
+fn make_client(env: &Env) -> EscrowClient<'_> {
     let id = env.register(Escrow, ());
     let client = EscrowClient::new(env, &id);
     let admin = Address::generate(env);
     client.initialize(&admin);
-    (client, admin)
+    client
 }
 
 /// Build a bare `Contract` value with controlled accounting fields for unit tests
@@ -304,7 +304,7 @@ fn final_status_after_resolution_returns_refunded_only_when_fully_refunded() {
 #[test]
 fn resolve_full_refund_conserves_and_marks_refunded() {
     let env = make_env();
-    let (client, _) = make_client(&env);
+    let client = make_client(&env);
     let client_addr = Address::generate(&env);
     let freelancer_addr = Address::generate(&env);
     let arbiter_addr = Address::generate(&env);

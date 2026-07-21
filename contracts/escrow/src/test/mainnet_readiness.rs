@@ -1,7 +1,10 @@
 use soroban_sdk::{testutils::Address as _, testutils::Events, Address, Env};
 
-use super::{assert_contract_error, default_milestones, generated_participants, register_client};
-use crate::{Error, Escrow, EscrowClient, EscrowError};
+use super::{
+    assert_contract_error, complete_contract, default_milestones, generated_participants,
+    register_client,
+};
+use crate::{types::CONTRACT_SUMMARY_SCHEMA_VERSION, Error, Escrow, EscrowClient, EscrowError};
 
 /// Returns a fresh (Env, contract Address) pair with all auths mocked.
 fn setup() -> (Env, Address) {
@@ -249,8 +252,7 @@ fn finalized_record_carries_current_schema_version() {
 
     let record = client.get_finalization_record(&contract_id).unwrap();
     assert_eq!(
-        record.summary.schema_version,
-        client.get_summary_schema_version(),
+        record.summary.schema_version, CONTRACT_SUMMARY_SCHEMA_VERSION,
         "finalized record must carry the current schema version"
     );
 }
