@@ -1,7 +1,11 @@
 #![cfg(test)]
 #![allow(dead_code)]
 
-use soroban_sdk::{testutils::Address as _, vec, Address, Env, Vec};
+use soroban_sdk::{
+    testutils::Address as _,
+    token::StellarAssetClient,
+    vec, Address, Env, Vec,
+};
 
 use crate::{
     Contract, ContractStatus, Escrow, EscrowClient, EscrowError, Milestone, ReleaseAuthorization,
@@ -11,6 +15,7 @@ use crate::{
 mod approval_expiry;
 mod cancel_contract;
 mod client_migration;
+mod deposit;
 mod dispute;
 mod emergency_controls;
 mod mainnet_readiness;
@@ -18,6 +23,8 @@ mod pause_controls;
 mod persistence;
 mod release_authorization;
 mod reputation;
+mod refund;
+mod release;
 mod security;
 mod ttl_tests;
 
@@ -27,7 +34,174 @@ pub const MILESTONE_ONE: i128 = 200_0000000;
 pub const MILESTONE_TWO: i128 = 400_0000000;
 pub const MILESTONE_THREE: i128 = 600_0000000;
 
-// --- Shared helpers ---
+/// A complete, test-only escrow fixture.
+///
+/// The fixture owns its Soroban [`Env`] and records the generated addresses and
+/// contract ID. Call [`EscrowFixtureBuilder::funded`] when a suite needs a
+/// ready-to-use escrow with a bound SAC and a fully funded contract.
+pub struct EscrowFixture {
+    pub env: Env,
+    pub admin: Address,
+    pub client: Address,
+    pub freelancer: Address,
+    pub arbiter: Option<Address>,
+    pub escrow_address: Address,
+    pub escrow_id: u32,
+    pub settlement_token: Option<Address>,
+}
+
+impl EscrowFixture {
+    /// Start a fixture with generated participants and default milestones.
+    pub fn builder() -> EscrowFixtureBuilder {
+        EscrowFixtureBuilder::new()
+    }
+
+    /// Return a client for invoking the escrow contract in this fixture.
+    pub fn escrow(&self) -> EscrowClient<'_> {
+        EscrowClient::new(&self.env, &self.escrow_address)
+    }
+
+    /// Return the total configured milestone value.
+    pub fn total_amount(&self) -> i128 {
+        self.escrow()
+            .get_milestones(&self.escrow_id)
+            .iter()
+            .fold(0_i128, |total, milestone| total + milestone.amount)
+    }
+}
+
+/// Builder for a reusable escrow test fixture.
+///
+/// Every generated fixture initializes the escrow and mocks authorization. The
+/// optional settlement-token setup is intentionally explicit for tests that
+/// exercise the unbound-token failure path; [`Self::funded`] enables it because
+/// deposits require custody to be configured.
+pub struct EscrowFixtureBuilder {
+    env: Env,
+    admin: Option<Address>,
+    participants: Option<(Address, Address, Option<Address>)>,
+    milestones: Option<Vec<i128>>,
+    settlement_token: bool,
+    fund: bool,
+}
+
+impl EscrowFixtureBuilder {
+    /// Create a builder backed by a fresh mocked Soroban environment.
+    pub fn new() -> Self {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+        Self {
+            env,
+            admin: None,
+            participants: None,
+            milestones: None,
+            settlement_token: false,
+            fund: false,
+        }
+    }
+
+    /// Expose the builder environment for generating compatible test values.
+    pub fn env(&self) -> &Env {
+        &self.env
+    }
+
+    /// Use `admin` instead of a generated administrator.
+    pub fn with_admin(mut self, admin: Address) -> Self {
+        self.admin = Some(admin);
+        self
+    }
+
+    /// Use explicit client, freelancer, and optional arbiter addresses.
+    pub fn with_participants(
+        mut self,
+        client: Address,
+        freelancer: Address,
+        arbiter: Option<Address>,
+    ) -> Self {
+        self.participants = Some((client, freelancer, arbiter));
+        self
+    }
+
+    /// Use the supplied milestone amounts instead of the default 3-step plan.
+    pub fn with_milestones(mut self, milestones: Vec<i128>) -> Self {
+        self.milestones = Some(milestones);
+        self
+    }
+
+    /// Register and bind a Stellar Asset Contract for custody transfers.
+    pub fn with_settlement_token(mut self) -> Self {
+        self.settlement_token = true;
+        self
+    }
+
+    /// Create and fully fund the escrow contract during [`Self::build`].
+    pub fn funded(mut self) -> Self {
+        self.fund = true;
+        self.settlement_token = true;
+        self
+    }
+
+    /// Build the configured fixture and return its ready escrow ID in
+    /// [`EscrowFixture::escrow_id`].
+    pub fn build(self) -> EscrowFixture {
+        let admin = self.admin.unwrap_or_else(|| Address::generate(&self.env));
+        let (client, freelancer, arbiter) = self.participants.unwrap_or_else(|| {
+            (
+                Address::generate(&self.env),
+                Address::generate(&self.env),
+                None,
+            )
+        });
+        let milestones = self
+            .milestones
+            .unwrap_or_else(|| default_milestones(&self.env));
+        let escrow_address = self.env.register(Escrow, ());
+        let escrow = EscrowClient::new(&self.env, &escrow_address);
+        escrow.initialize(&admin);
+
+        let settlement_token = self.settlement_token.then(|| {
+            let token = self.env.register_stellar_asset_contract(admin.clone());
+            escrow.bind_settlement_token(&admin, &token);
+            token
+        });
+
+        let escrow_id = escrow.create_contract(
+            &client,
+            &freelancer,
+            &arbiter,
+            &milestones,
+            &ReleaseAuthorization::ClientOnly,
+        );
+
+        if self.fund {
+            let total = milestones.iter().fold(0_i128, |sum, amount| sum + amount);
+            let token = settlement_token
+                .as_ref()
+                .expect("funded fixtures always configure a settlement token");
+            StellarAssetClient::new(&self.env, token).mint(&client, &total);
+            escrow.deposit_funds(&escrow_id, &client, &total);
+        }
+
+        EscrowFixture {
+            env: self.env,
+            admin,
+            client,
+            freelancer,
+            arbiter,
+            escrow_address,
+            escrow_id,
+            settlement_token,
+        }
+    }
+}
+
+impl Default for EscrowFixtureBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// --- Compatibility helpers for suites not migrated to EscrowFixtureBuilder ---
 
 pub fn setup() -> (Env, Address, Address) {
     let env = Env::default();

@@ -2277,5 +2277,6 @@ impl Escrow {
     }
 }
 
+/// Test fixtures and suites are compiled only for native test builds, never wasm.
 #[cfg(test)]
 mod test;

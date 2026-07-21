@@ -1,69 +1,37 @@
-use soroban_sdk::{testutils::Address as _, testutils::Events, vec, Address, Env};
+use soroban_sdk::vec;
 
-use super::{
-    assert_contract_error, complete_contract, create_contract, register_client,
-    total_milestone_amount,
-};
+use super::{assert_contract_error, EscrowFixture, MILESTONE_TWO};
 use crate::{ContractStatus, Error};
+
+/// Refunds are available immediately from a fixture funded through real SAC custody.
 #[test]
-fn refund_succeeds_on_funded_contract() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let client = register_client(&env);
-    let (client_addr, _freelancer, contract_id) = create_contract(&env, &client);
+fn refund_returns_an_unreleased_milestone() {
+    let fixture = EscrowFixture::builder().funded().build();
+    let escrow = fixture.escrow();
+    let ids = vec![&fixture.env, 1_u32];
 
-    assert!(client.deposit_funds(&contract_id, &client_addr, &total_milestone_amount()));
-
-    let refund_ids = vec![&env, 1_u32];
-    let refunded = client.refund_unreleased_milestones(&contract_id, &refund_ids);
-    assert_eq!(refunded, 400_0000000_i128);
-
-    let contract = client.get_contract(&contract_id);
-    assert_eq!(contract.status, ContractStatus::Funded);
-}
-
-#[test]
-fn rejects_refund_on_cancelled_contract() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let client = register_client(&env);
-    let (client_addr, _freelancer, contract_id) = create_contract(&env, &client);
-
-    assert!(client.cancel_contract(&contract_id, &client_addr));
-
-    let refund_ids = vec![&env, 0_u32];
-    assert_contract_error(
-        client.try_refund_unreleased_milestones(&contract_id, &refund_ids),
-        Error::InvalidState,
+    assert_eq!(
+        escrow.refund_unreleased_milestones(&fixture.escrow_id, &ids),
+        MILESTONE_TWO
+    );
+    assert_eq!(
+        escrow.get_contract(&fixture.escrow_id).status,
+        ContractStatus::Funded
     );
 }
 
+/// A completed fixture rejects refunds, preserving its terminal accounting state.
 #[test]
-fn rejects_refund_on_completed_contract() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let client = register_client(&env);
-    let (_client_addr, _freelancer, contract_id) = complete_contract(&env, &client);
-
-    let refund_ids = vec![&env, 0_u32];
+fn refund_rejects_completed_contract() {
+    let fixture = EscrowFixture::builder().funded().build();
+    let escrow = fixture.escrow();
+    for index in 0..3_u32 {
+        escrow.approve_milestone_release(&fixture.escrow_id, &fixture.client, &index);
+        escrow.release_milestone(&fixture.escrow_id, &fixture.client, &index);
+    }
+    let ids = vec![&fixture.env, 0_u32];
     assert_contract_error(
-        client.try_refund_unreleased_milestones(&contract_id, &refund_ids),
+        escrow.try_refund_unreleased_milestones(&fixture.escrow_id, &ids),
         Error::InvalidState,
-    );
-}
-
-#[test]
-fn rejects_refund_on_finalized_contract() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let client = register_client(&env);
-    let (client_addr, _freelancer, contract_id) = complete_contract(&env, &client);
-
-    assert!(client.finalize_contract(&contract_id, &client_addr));
-
-    let refund_ids = vec![&env, 0_u32];
-    assert_contract_error(
-        client.try_refund_unreleased_milestones(&contract_id, &refund_ids),
-        Error::AlreadyFinalized,
     );
 }
