@@ -131,3 +131,4 @@ pub fn assert_contract_error<
         ),
     }
 }
+

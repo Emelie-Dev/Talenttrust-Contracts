@@ -46,6 +46,11 @@ impl Escrow {
         milestones: Vec<i128>,
         release_authorization: ReleaseAuthorization,
     ) -> u32 {
+        // Reject state-changing calls while paused or in emergency mode so every
+        // mutating entrypoint halts uniformly. Runs before auth. See
+        // finalize.rs::require_not_paused.
+        Self::require_not_paused(&env);
+
         client.require_auth();
 
         // Validate that client and freelancer are distinct participants.
