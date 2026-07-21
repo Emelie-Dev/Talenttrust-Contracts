@@ -1430,7 +1430,9 @@ impl Escrow {
     /// The caller must be the stored client and must authorize the call. The
     /// contract must be in `Created` or `Funded` state, with no released
     /// balance, and the full remaining refundable balance is sent back to the
-    /// client before the contract is marked `Cancelled`.
+    /// client via the configured Stellar Asset Contract before the contract is
+    /// marked `Cancelled`. A zero-funded cancellation does not invoke a token
+    /// transfer and leaves unrelated contracts' escrowed token balances intact.
     ///
     /// # Errors
     /// * `ContractPaused` - If the contract is paused while not in emergency mode.

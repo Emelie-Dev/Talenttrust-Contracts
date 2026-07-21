@@ -111,6 +111,11 @@ Escrow contract address ──[SAC transfer, all unreleased]──► Client wal
 
 Transitions status to `Cancelled`.
 
+Cancellation tests assert the actual SAC balances before and after the transfer:
+the client receives the full refundable amount, and the shared escrow address
+retains exactly the funds that remain escrowed for other active contracts. A
+zero-funded cancellation performs no token transfer.
+
 ---
 
 ## Protocol-Fee Withdrawal (`withdraw_protocol_fees`)

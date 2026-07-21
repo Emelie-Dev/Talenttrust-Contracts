@@ -7,6 +7,7 @@ use crate::{Contract, ContractStatus, Escrow, EscrowClient, EscrowError, Release
 
 // --- Submodules ---
 mod approval_expiry;
+mod cancel_contract;
 mod client_migration;
 mod dispute;
 mod emergency_controls;
