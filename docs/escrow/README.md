@@ -12,6 +12,7 @@ issues so integrators can distinguish live API from roadmap.
 - `contracts/escrow/src/release_milestone.rs`: inlined in `lib.rs`; transfers tokens from escrow to freelancer net of protocol fee.
 - `contracts/escrow/src/refund.rs`: `refund_unreleased_milestones` lifecycle entrypoint.
 - `contracts/escrow/src/test/sac_custody.rs`: SAC custody tests for `bind_settlement_token`, `deposit_funds` (SAC path), and `release_milestone` (SAC path).
+- `contracts/escrow/src/test/cancel_contract.rs`: cancellation tests, including SAC client-refund and shared-escrow balance assertions.
 
 ## Implemented API Surface
 

@@ -1,6 +1,10 @@
 #![cfg(test)]
 
-use soroban_sdk::{testutils::Address as _, vec, Address, Env};
+use soroban_sdk::{
+    testutils::Address as _,
+    token::{Client as TokenClient, StellarAssetClient},
+    vec, Address, Env,
+};
 
 use crate::{
     ContractStatus, Error, Escrow, EscrowClient, ReleaseAuthorization,
@@ -26,7 +30,7 @@ fn setup_cancel_context(env: &Env) -> (EscrowClient<'_>, Address, Address, u32) 
     let token_address = env.register_stellar_asset_contract(token_admin);
     client.set_settlement_token(&token_address);
 
-    let token_client = soroban_sdk::token::StellarAssetClient::new(env, &token_address);
+    let token_client = StellarAssetClient::new(env, &token_address);
     token_client.mint(&client_addr, &10_000_0000000_i128);
 
     let milestones = vec![env, 100_i128, 200_i128, 300_i128];
@@ -41,18 +45,32 @@ fn setup_cancel_context(env: &Env) -> (EscrowClient<'_>, Address, Address, u32) 
     (client, client_addr, freelancer_addr, contract_id)
 }
 
+/// Returns the address that owns settlement-token custody for this escrow.
+fn escrow_address(env: &Env, client: &EscrowClient<'_>) -> Address {
+    env.as_contract(&client.address, || env.current_contract_address())
+}
+
 #[test]
 fn cancel_created_contract_marks_it_cancelled_without_refund() {
     let env = Env::default();
     let (client, client_addr, _, contract_id) = setup_cancel_context(&env);
+    let token_address = client.get_settlement_token();
+    let token_client = TokenClient::new(&env, &token_address);
+    let escrow_addr = escrow_address(&env, &client);
+    let client_balance_before = token_client.balance(&client_addr);
+    let escrow_balance_before = token_client.balance(&escrow_addr);
 
     assert!(client.cancel_contract(&contract_id, &client_addr));
 
     let contract = client.get_contract(&contract_id);
     assert_eq!(contract.status, ContractStatus::Cancelled);
     assert_eq!(contract.refunded_amount, 0);
+    assert_eq!(token_client.balance(&client_addr), client_balance_before);
+    assert_eq!(token_client.balance(&escrow_addr), escrow_balance_before);
 }
 
+/// Cancelling a funded contract transfers its full remaining SAC balance to the
+/// client and removes only that contract's funds from escrow custody.
 #[test]
 fn cancel_funded_contract_refunds_the_remaining_balance_to_the_client() {
     let env = Env::default();
@@ -63,15 +81,52 @@ fn cancel_funded_contract_refunds_the_remaining_balance_to_the_client() {
     assert_eq!(contract.status, ContractStatus::Funded);
 
     let token_address = client.get_settlement_token();
-    let token_client = soroban_sdk::token::StellarAssetClient::new(&env, &token_address);
-    let balance_before = token_client.balance(&client_addr);
+    let token_client = TokenClient::new(&env, &token_address);
+    let escrow_addr = escrow_address(&env, &client);
+    let client_balance_before = token_client.balance(&client_addr);
+    let escrow_balance_before = token_client.balance(&escrow_addr);
+    assert_eq!(escrow_balance_before, 600_i128);
 
     assert!(client.cancel_contract(&contract_id, &client_addr));
 
     let contract = client.get_contract(&contract_id);
     assert_eq!(contract.status, ContractStatus::Cancelled);
     assert_eq!(contract.refunded_amount, 600_i128);
-    assert_eq!(token_client.balance(&client_addr), balance_before + 600_i128);
+    assert_eq!(token_client.balance(&client_addr), client_balance_before + 600_i128);
+    assert_eq!(token_client.balance(&escrow_addr), escrow_balance_before - 600_i128);
+}
+
+/// Cancelling one funded contract preserves SAC custody for other active
+/// contracts sharing the same escrow contract address.
+#[test]
+fn cancel_refund_leaves_other_contract_funds_in_escrow() {
+    let env = Env::default();
+    let (client, client_addr, freelancer_addr, first_contract_id) = setup_cancel_context(&env);
+    let second_contract_id = client.create_contract(
+        &client_addr,
+        &freelancer_addr,
+        &None,
+        &vec![&env, 400_i128],
+        &ReleaseAuthorization::ClientOnly,
+    );
+    let token_address = client.get_settlement_token();
+    let token_client = TokenClient::new(&env, &token_address);
+    let escrow_addr = escrow_address(&env, &client);
+
+    assert!(client.deposit_funds(&first_contract_id, &client_addr, &600_i128));
+    assert!(client.deposit_funds(&second_contract_id, &client_addr, &400_i128));
+    let client_balance_before = token_client.balance(&client_addr);
+    assert_eq!(token_client.balance(&escrow_addr), 1_000_i128);
+
+    assert!(client.cancel_contract(&first_contract_id, &client_addr));
+
+    assert_eq!(token_client.balance(&client_addr), client_balance_before + 600_i128);
+    assert_eq!(
+        token_client.balance(&escrow_addr),
+        client.get_refundable_balance(&second_contract_id),
+        "escrow balance must contain only the remaining active contract funds"
+    );
+    assert_eq!(client.get_refundable_balance(&first_contract_id), 0);
 }
 
 #[test]

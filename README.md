@@ -36,6 +36,7 @@ The escrow implementation follows a fail-closed state machine:
 - a Stellar Asset Contract (SAC) settlement token is admin-bound exactly once via `bind_settlement_token`; each subsequent `deposit_funds` and `release_milestone` calls `token::Client::transfer` and updates accounting atomically
 - deposits pull SAC tokens from the client BEFORE `funded_amount` is updated, so a failed transfer leaves accounting untouched
 - deposits cannot exceed the required escrow total
+- cancellation returns the full refundable SAC balance to the client while preserving funds held for other active contracts
 - releases pay the freelancer (less protocol fee) via SAC transfer BEFORE milestone state is updated, so a failed payout leaves state untouched
 - releases require a valid unreleased milestone, caller authorization via `caller.require_auth()`, and valid non-expired approvals matching the contract's `ReleaseAuthorization` mode
 - reputation is gated behind contract completion and is issued once per contract
