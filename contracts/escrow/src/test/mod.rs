@@ -15,6 +15,7 @@ mod pause_controls;
 mod persistence;
 mod release_authorization;
 mod security;
+mod ttl_tests;
 
 // --- Shared constants ---
 
