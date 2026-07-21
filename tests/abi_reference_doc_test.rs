@@ -11,7 +11,6 @@ fn abi_reference_document_lists_current_public_entrypoints() {
         .unwrap_or_else(|_| panic!("expected ABI reference at {:?}", doc_path));
 
     let expected_entrypoints = [
-        "hello",
         "initialize",
         "get_admin",
         "get_mainnet_readiness_info",
@@ -65,6 +64,7 @@ fn abi_reference_document_lists_current_public_entrypoints() {
     }
 
     let forbidden_entrypoints = [
+        "hello",
         "withdraw_protocol_fees",
         "migrate_state",
         "get_state",

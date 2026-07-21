@@ -9,6 +9,8 @@ Soroban smart contracts for the TalentTrust freelancer escrow protocol on Stella
 
 Reviewer-oriented notes live in [docs/escrow/README.md](docs/escrow/README.md), with storage-key details in [docs/escrow/state-persistence.md](docs/escrow/state-persistence.md), threat analysis in [docs/escrow/SECURITY.md](docs/escrow/SECURITY.md), and release authorization modes in [docs/escrow/authorization.md](docs/escrow/authorization.md).
 
+The supported deployed interface is documented in the [Escrow ABI reference](docs/escrow/abi-reference.md). It intentionally excludes template scaffolding endpoints; consumers should integrate only with the listed contract methods.
+
 ---
 
 ## Feature Status Matrix
