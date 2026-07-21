@@ -19,7 +19,8 @@
 #![cfg(test)]
 
 use soroban_sdk::{
-    testutils::Address as _, testutils::Events, vec, Address, Env, IntoVal, Symbol, TryFromVal,
+    testutils::Address as _, testutils::Events, vec, Address, Env, FromVal, IntoVal, Symbol,
+    TryFromVal,
 };
 
 use super::register_client;
@@ -529,7 +530,7 @@ fn multisig_only_one_approval_insufficient() {
 
     assert!(client.approve_milestone_release(&id, &client_addr, &0));
     let result = client.try_release_milestone(&id, &client_addr, &0);
-    assert_contract_error(result, EscrowError::InsufficientApprovals);
+    assert_contract_error(result, Error::InsufficientApprovals);
 }
 
 #[test]
@@ -550,7 +551,7 @@ fn multisig_only_freelancer_approval_insufficient() {
 
     assert!(client.approve_milestone_release(&id, &freelancer_addr, &0));
     let result = client.try_release_milestone(&id, &freelancer_addr, &0);
-    assert_contract_error(result, EscrowError::InsufficientApprovals);
+    assert_contract_error(result, Error::InsufficientApprovals);
 }
 
 #[test]
@@ -595,7 +596,7 @@ fn release_without_approval_fails() {
 
     // No approval recorded yet
     let result = client.try_release_milestone(&id, &client_addr, &0);
-    assert_contract_error(result, EscrowError::InsufficientApprovals);
+    assert_contract_error(result, Error::InsufficientApprovals);
 }
 
 // ===========================================================================
@@ -667,7 +668,7 @@ fn double_release_is_rejected_and_amount_not_duplicated() {
 
     // Second release on the same milestone must fail with AlreadyReleased.
     let result = client.try_release_milestone(&id, &client_addr, &0);
-    assert_contract_error(result, EscrowError::MilestoneAlreadyReleased);
+    assert_contract_error(result, Error::MilestoneAlreadyReleased);
 
     // released_amount must not be doubled.
     let contract = client.get_contract(&id);
@@ -745,7 +746,7 @@ fn rejects_double_release_and_completes_contract() {
     assert!(client.release_milestone(&contract_id, &client_addr, &0));
 
     let result = client.try_release_milestone(&contract_id, &client_addr, &0);
-    assert_contract_error(result, EscrowError::MilestoneAlreadyReleased);
+    assert_contract_error(result, Error::MilestoneAlreadyReleased);
 
     assert!(client.release_milestone(&contract_id, &client_addr, &1));
     assert!(client.release_milestone(&contract_id, &client_addr, &2));

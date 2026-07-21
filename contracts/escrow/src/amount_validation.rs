@@ -2,6 +2,10 @@
 //!
 //! Provides centralized validation for all money-like values in the escrow contract.
 //! Ensures positivity, max bounds, and proper stroop precision handling.
+//!
+//! Storage ownership: none. This module is deliberately stateless; callers use
+//! these helpers before writing validated values to contract and milestone
+//! storage.
 
 /// Maximum number of decimal places for stroop precision (7 decimal places for Stellar)
 #[allow(dead_code)] // available for callers; not used internally

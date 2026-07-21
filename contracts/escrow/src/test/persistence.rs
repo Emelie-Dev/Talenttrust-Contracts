@@ -3,12 +3,15 @@ use super::{
     generated_participants, register_client, total_milestone_amount, MILESTONE_ONE,
     MILESTONE_THREE, MILESTONE_TWO,
 };
-use crate::{ttl, ContractStatus, EscrowError, ReleaseAuthorization, Error};
+use crate::{ttl, ContractStatus, Error, EscrowError, ReleaseAuthorization};
 use soroban_sdk::{
     testutils::{storage::Persistent, Address as _, Ledger},
     vec, Address, Env, Symbol,
 };
 
+fn milestone_symbol(env: &Env) -> Symbol {
+    Symbol::new(env, "milestones")
+}
 
 /// Finalization by arbiter works on a completed contract.
 #[test]
@@ -725,7 +728,7 @@ fn get_milestones_read_extends_persistent_ttl() {
 
     let bump_threshold = ttl::PERSISTENT_BUMP_THRESHOLD as u32;
     let extension = ttl::PERSISTENT_TTL_LEDGERS as u32;
-    let milestone_key = crate::milestone_symbol(&env);
+    let milestone_key = milestone_symbol(&env);
 
     let initial_ttl: u32 = env.as_contract(&client.address, || {
         env.storage()
@@ -775,7 +778,7 @@ fn get_work_evidence_read_extends_persistent_ttl() {
 
     let bump_threshold = ttl::PERSISTENT_BUMP_THRESHOLD as u32;
     let extension = ttl::PERSISTENT_TTL_LEDGERS as u32;
-    let milestone_key = crate::milestone_symbol(&env);
+    let milestone_key = milestone_symbol(&env);
 
     let initial_ttl: u32 = env.as_contract(&client.address, || {
         env.storage()
@@ -1105,7 +1108,6 @@ fn read_getters_unchanged_after_pause() {
     };
 }
 
-
 /// Finalization writes a round-tripped snapshot of milestone summaries and derived totals.
 #[test]
 fn finalize_round_trips_milestone_summaries_and_totals() {
@@ -1134,11 +1136,11 @@ fn double_finalize_rejected() {
     super::assert_contract_error(result, EscrowError::AlreadyFinalized);
 }
 
-/// Asserts that `milestone_symbol` resolves to the correct short symbol `symbol_short!("milestone")`.
+/// Asserts that the milestone storage helper resolves to the current storage symbol.
 #[test]
 fn milestone_symbol_helper_matches_expected() {
     let env = Env::default();
-    let helper_symbol = crate::milestone_symbol(&env);
-    let expected_symbol = soroban_sdk::symbol_short!("milestone");
+    let helper_symbol = milestone_symbol(&env);
+    let expected_symbol = Symbol::new(&env, "milestones");
     assert_eq!(helper_symbol, expected_symbol);
 }

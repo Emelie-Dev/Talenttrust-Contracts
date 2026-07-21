@@ -28,12 +28,11 @@ fn new_client(env: &Env) -> EscrowClient<'_> {
     client
 }
 
-fn setup() -> (Address, Address, Address) {
-    let env = Env::default();
+fn setup(env: &Env) -> (Address, Address, Address) {
     (
-        Address::generate(&env),
-        Address::generate(&env),
-        Address::generate(&env),
+        Address::generate(env),
+        Address::generate(env),
+        Address::generate(env),
     )
 }
 
@@ -48,7 +47,7 @@ fn test_approve_milestone_client_only() {
     let env = Env::default();
     env.mock_all_auths();
     let client = new_client(&env);
-    let (client_addr, freelancer_addr, _arbiter_addr) = setup();
+    let (client_addr, freelancer_addr, _arbiter_addr) = setup(&env);
 
     let id = client.create_contract(
         &client_addr,
@@ -72,7 +71,7 @@ fn test_approve_milestone_multisig() {
     let env = Env::default();
     env.mock_all_auths();
     let client = new_client(&env);
-    let (client_addr, freelancer_addr, _arbiter_addr) = setup();
+    let (client_addr, freelancer_addr, _arbiter_addr) = setup(&env);
 
     let id = client.create_contract(
         &client_addr,
@@ -98,7 +97,7 @@ fn test_approve_milestone_arbiter_only() {
     let env = Env::default();
     env.mock_all_auths();
     let client = new_client(&env);
-    let (client_addr, freelancer_addr, arbiter_addr) = setup();
+    let (client_addr, freelancer_addr, arbiter_addr) = setup(&env);
 
     let id = client.create_contract(
         &client_addr,
@@ -122,7 +121,7 @@ fn test_approve_milestone_client_and_arbiter() {
     let env = Env::default();
     env.mock_all_auths();
     let client = new_client(&env);
-    let (client_addr, freelancer_addr, arbiter_addr) = setup();
+    let (client_addr, freelancer_addr, arbiter_addr) = setup(&env);
 
     let id = client.create_contract(
         &client_addr,
@@ -146,7 +145,7 @@ fn test_duplicate_approval_rejected() {
     let env = Env::default();
     env.mock_all_auths();
     let client = new_client(&env);
-    let (client_addr, freelancer_addr, _arbiter_addr) = setup();
+    let (client_addr, freelancer_addr, _arbiter_addr) = setup(&env);
 
     let id = client.create_contract(
         &client_addr,
@@ -167,7 +166,7 @@ fn test_unauthorized_approval_rejected() {
     let env = Env::default();
     env.mock_all_auths();
     let client = new_client(&env);
-    let (client_addr, freelancer_addr, _arbiter_addr) = setup();
+    let (client_addr, freelancer_addr, _arbiter_addr) = setup(&env);
 
     let id = client.create_contract(
         &client_addr,
@@ -187,7 +186,7 @@ fn test_release_requires_approval() {
     let env = Env::default();
     env.mock_all_auths();
     let client = new_client(&env);
-    let (client_addr, freelancer_addr, _arbiter_addr) = setup();
+    let (client_addr, freelancer_addr, _arbiter_addr) = setup(&env);
 
     let id = client.create_contract(
         &client_addr,
@@ -207,7 +206,7 @@ fn test_release_with_approval_succeeds() {
     let env = Env::default();
     env.mock_all_auths();
     let client = new_client(&env);
-    let (client_addr, freelancer_addr, _arbiter_addr) = setup();
+    let (client_addr, freelancer_addr, _arbiter_addr) = setup(&env);
 
     let id = client.create_contract(
         &client_addr,
@@ -232,7 +231,7 @@ fn test_multisig_requires_both_approvals() {
     let env = Env::default();
     env.mock_all_auths();
     let client = new_client(&env);
-    let (client_addr, freelancer_addr, _arbiter_addr) = setup();
+    let (client_addr, freelancer_addr, _arbiter_addr) = setup(&env);
 
     let id = client.create_contract(
         &client_addr,
@@ -257,7 +256,7 @@ fn test_approve_already_released_milestone_fails() {
     let env = Env::default();
     env.mock_all_auths();
     let client = new_client(&env);
-    let (client_addr, freelancer_addr, _arbiter_addr) = setup();
+    let (client_addr, freelancer_addr, _arbiter_addr) = setup(&env);
 
     let id = client.create_contract(
         &client_addr,
@@ -271,7 +270,7 @@ fn test_approve_already_released_milestone_fails() {
     assert!(client.release_milestone(&id, &client_addr, &0));
 
     let result = client.try_approve_milestone_release(&id, &client_addr, &0);
-    assert_eq!(result, Err(Ok(Error::MilestoneAlreadyReleased)));
+    super::assert_contract_error(result, Error::MilestoneAlreadyReleased);
 }
 
 #[test]
@@ -279,7 +278,7 @@ fn test_approve_invalid_milestone_index() {
     let env = Env::default();
     env.mock_all_auths();
     let client = new_client(&env);
-    let (client_addr, freelancer_addr, _arbiter_addr) = setup();
+    let (client_addr, freelancer_addr, _arbiter_addr) = setup(&env);
 
     let id = client.create_contract(
         &client_addr,
@@ -291,7 +290,7 @@ fn test_approve_invalid_milestone_index() {
     assert!(client.deposit_funds(&id, &client_addr, &total()));
 
     let result = client.try_approve_milestone_release(&id, &client_addr, &99);
-    assert_eq!(result, Err(Ok(Error::IndexOutOfBounds)));
+    super::assert_contract_error(result, Error::IndexOutOfBounds);
 }
 
 #[test]
@@ -299,7 +298,7 @@ fn test_approve_requires_funded_state() {
     let env = Env::default();
     env.mock_all_auths();
     let client = new_client(&env);
-    let (client_addr, freelancer_addr, _arbiter_addr) = setup();
+    let (client_addr, freelancer_addr, _arbiter_addr) = setup(&env);
 
     let id = client.create_contract(
         &client_addr,
@@ -310,7 +309,7 @@ fn test_approve_requires_funded_state() {
     );
 
     let result = client.try_approve_milestone_release(&id, &client_addr, &0);
-    assert_eq!(result, Err(Ok(Error::InvalidState)));
+    super::assert_contract_error(result, Error::InvalidState);
 }
 
 #[test]
@@ -318,7 +317,7 @@ fn test_multiple_milestones_independent_approvals() {
     let env = Env::default();
     env.mock_all_auths();
     let client = new_client(&env);
-    let (client_addr, freelancer_addr, _arbiter_addr) = setup();
+    let (client_addr, freelancer_addr, _arbiter_addr) = setup(&env);
 
     let id = client.create_contract(
         &client_addr,
@@ -376,11 +375,7 @@ fn test_client_only_approval_expires_after_ttl() {
     );
 
     let result = client.try_release_milestone(&contract_id, &client_addr, &0);
-    assert_eq!(
-        result,
-        Err(Ok(Error::InsufficientApprovals)),
-        "release must fail when approval expired"
-    );
+    super::assert_contract_error(result, Error::InsufficientApprovals);
 }
 
 #[test]
@@ -448,7 +443,7 @@ fn test_arbiter_only_approval_expires_after_ttl() {
     advance_ledger(&env, &escrow_id, PENDING_APPROVAL_TTL_LEDGERS + 1);
 
     let result = client.try_release_milestone(&contract_id, &arbiter_addr, &0);
-    assert_eq!(result, Err(Ok(Error::InsufficientApprovals)));
+    super::assert_contract_error(result, Error::InsufficientApprovals);
 }
 
 #[test]
@@ -477,7 +472,7 @@ fn test_client_and_arbiter_approval_expires_after_ttl() {
     advance_ledger(&env, &escrow_id, PENDING_APPROVAL_TTL_LEDGERS + 1);
 
     let result = client.try_release_milestone(&contract_id, &client_addr, &0);
-    assert_eq!(result, Err(Ok(Error::InsufficientApprovals)));
+    super::assert_contract_error(result, Error::InsufficientApprovals);
 }
 
 #[test]
@@ -512,11 +507,7 @@ fn test_multisig_one_approval_expires_before_second_arrives() {
     assert!(client.approve_milestone_release(&contract_id, &freelancer_addr, &0));
 
     let result = client.try_release_milestone(&contract_id, &client_addr, &0);
-    assert_eq!(
-        result,
-        Err(Ok(Error::InsufficientApprovals)),
-        "MultiSig release fails when one approval expired"
-    );
+    super::assert_contract_error(result, Error::InsufficientApprovals);
 
     assert!(client.approve_milestone_release(&contract_id, &client_addr, &0));
     assert!(client.release_milestone(&contract_id, &client_addr, &0));
@@ -549,7 +540,7 @@ fn test_multisig_both_approvals_expire_after_ttl() {
     advance_ledger(&env, &escrow_id, PENDING_APPROVAL_TTL_LEDGERS + 1);
 
     let result = client.try_release_milestone(&contract_id, &client_addr, &0);
-    assert_eq!(result, Err(Ok(Error::InsufficientApprovals)));
+    super::assert_contract_error(result, Error::InsufficientApprovals);
 }
 
 /// A read of a live approval within `PENDING_APPROVAL_BUMP_THRESHOLD` of expiry
@@ -672,5 +663,5 @@ fn test_approval_ttl_independent_per_milestone() {
     advance_ledger(&env, &escrow_id, PENDING_APPROVAL_TTL_LEDGERS / 2 + 1);
 
     let result_0 = client.try_release_milestone(&contract_id, &client_addr, &0);
-    assert_eq!(result_0, Err(Ok(Error::InsufficientApprovals)));
+    super::assert_contract_error(result_0, Error::InsufficientApprovals);
 }

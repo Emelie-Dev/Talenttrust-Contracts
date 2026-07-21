@@ -33,6 +33,12 @@
 //! This "fail‑closed" behaviour is important for approvals and migrations: a missing entry is
 //! interpreted as not approved/not migrated, preventing any stale permission from being honored.
 //!
+//! Storage ownership: this module owns TTL policy and helper access patterns,
+//! not business records. It extends caller-provided keys, with first-class
+//! helpers for `DataKey::Contract(contract_id)`, the paired milestone vector
+//! key `(DataKey::Contract(contract_id), "milestones")`, `NextContractId`,
+//! participant index keys, pending approvals, and pending migrations.
+//!
 use crate::{DataKey, Error, Milestone};
 use soroban_sdk::{Env, IntoVal, Symbol, TryFromVal, Val, Vec};
 

@@ -2,6 +2,15 @@
 
 Rust/Soroban escrow contract for TalentTrust freelancer milestones.
 
+The crate-level rustdoc module map is in [`src/lib.rs`](src/lib.rs). Generate
+it from the repository root with:
+
+```bash
+cargo doc -p escrow --no-deps
+```
+
+Then open `target/doc/escrow/index.html`.
+
 ## Implemented Features
 
 - Create a contract between a client and a freelancer.
