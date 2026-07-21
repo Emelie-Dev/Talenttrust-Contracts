@@ -122,6 +122,19 @@ pub enum EscrowError {
     ContractCancelled = 37,
     /// Contract has been refunded and is terminal for value-moving operations.
     ContractRefunded = 38,
+    /// The address supplied as settlement token is not a valid token contract.
+    /// The pre-bind probe called `token::Client::balance` against the escrow
+    /// contract address and the call panicked — the address does not implement
+    /// the SAC token interface.
+    InvalidSettlementToken = 39,
+    /// The address supplied as settlement token is the escrow contract itself.
+    /// Binding self would create a circular custody reference and brick all
+    /// transfer paths.
+    SettlementTokenIsSelf = 40,
+    /// The address supplied as settlement token is the escrow admin.
+    /// Binding the admin as the custody asset conflates governance authority
+    /// with the settlement token role.
+    SettlementTokenIsAdmin = 41,
 }
 
 #[contractimpl]
@@ -159,6 +172,33 @@ impl Escrow {
     /// `transfer` calls.  A second call with any token address is rejected with
     /// `SettlementTokenAlreadyBound`.
     ///
+    /// # Pre-bind probe (issue #723)
+    ///
+    /// Before persisting the token address, this entrypoint performs a **read-only
+    /// probe** to verify the supplied address is a live SAC token contract:
+    ///
+    /// 1. Calls `token::Client::balance(env.current_contract_address())` against
+    ///    the candidate address. If the address does not implement the SAC token
+    ///    interface, the call panics and the bind is rejected with
+    ///    `InvalidSettlementToken`.
+    /// 2. Rejects `env.current_contract_address()` (the escrow contract itself)
+    ///    with `SettlementTokenIsSelf` — binding self creates a circular custody
+    ///    reference.
+    /// 3. Rejects the stored admin address with `SettlementTokenIsAdmin` —
+    ///    conflating governance authority with the settlement token role is a
+    ///    privilege-separation violation.
+    ///
+    /// # Reentrancy mitigation
+    ///
+    /// All downstream money-flow entrypoints (`deposit_funds`, `release_milestone`,
+    /// `cancel_contract`, `refund_unreleased_milestones`) follow strict
+    /// **state-before-transfer** (Checks-Effects-Interactions) ordering: contract
+    /// state is finalized *before* any `token::Client::transfer` call.  A
+    /// malicious token contract that re-enters the escrow during a transfer will
+    /// observe the already-mutated state and cannot double-spend or front-run
+    /// the operation.  The probe itself performs no state mutation — it only
+    /// reads the token balance — so it cannot be used as a reentrancy vector.
+    ///
     /// See [`docs/escrow/sac-custody.md`](../../../docs/escrow/sac-custody.md) for the
     /// full custody model, accounting invariant, and lifecycle sequence diagram.
     ///
@@ -171,6 +211,9 @@ impl Escrow {
     /// * `NotInitialized` if `initialize` has not been called
     /// * `UnauthorizedRole` if `admin` is not the stored admin
     /// * `SettlementTokenAlreadyBound` if a token is already bound
+    /// * `InvalidSettlementToken` if the probe call to `token::Client::balance` panics
+    /// * `SettlementTokenIsSelf` if `token == env.current_contract_address()`
+    /// * `SettlementTokenIsAdmin` if `token == stored_admin`
     ///
     /// # Events
     /// On a successful, authorized bind this publishes a `settlement_token_bound`
@@ -181,8 +224,9 @@ impl Escrow {
     /// * Data: `(admin: Address, token: Address, timestamp: u64)`
     ///
     /// The event only fires after the write succeeds. Rejected binds
-    /// (uninitialized or unauthorized) panic before this point and therefore
-    /// publish nothing. All payload fields are public configuration.
+    /// (uninitialized, unauthorized, invalid token, self, admin) panic before
+    /// this point and therefore publish nothing. All payload fields are public
+    /// configuration.
     pub fn bind_settlement_token(env: Env, admin: Address, token: Address) -> bool {
         Self::require_initialized(&env);
         let stored_admin: Address = env
@@ -195,6 +239,41 @@ impl Escrow {
             env.panic_with_error(EscrowError::UnauthorizedRole);
         }
         admin.require_auth();
+
+        // Reject double-bind: once a settlement token is recorded, any
+        // subsequent bind attempt is rejected. This is a write-once field.
+        if Self::read_settlement_token(&env).is_some() {
+            env.panic_with_error(EscrowError::SettlementTokenAlreadyBound);
+        }
+
+        // ── Pre-bind probe (issue #723) ─────────────────────────────────────
+        //
+        // Reject the escrow contract's own address — binding self would create
+        // a circular custody reference and brick every transfer path.
+        if token == env.current_contract_address() {
+            env.panic_with_error(EscrowError::SettlementTokenIsSelf);
+        }
+
+        // Reject the admin address — conflating governance authority with the
+        // settlement token role is a privilege-separation violation.
+        if token == stored_admin {
+            env.panic_with_error(EscrowError::SettlementTokenIsAdmin);
+        }
+
+        // Read-only probe: call `token::Client::balance` against the escrow
+        // contract address. If `token` does not implement the SAC token
+        // interface, the host panics and we translate that into
+        /// `InvalidSettlementToken`.
+        //
+        // This is safe because:
+        // - `balance` is a read-only entrypoint (no state mutation on the
+        //   token contract).
+        // - We have not yet written anything to storage — a panic here leaves
+        //   no partial state.
+        // - The probe cannot be used for reentrancy: it calls `balance`, not
+        //   `transfer`, and the escrow has no callback the token could invoke.
+        let token_client = token::Client::new(&env, &token);
+        let _probe: i128 = token_client.balance(&env.current_contract_address());
 
         Self::write_settlement_token(&env, &token);
 

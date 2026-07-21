@@ -237,11 +237,11 @@ mod tests {
                     funded_amount: 0,
                     released: false,
                     refunded: false,
-                                work_evidence: None,
-                                refunded_amount: 0,
-                                deadline: None,
-                            }],
-                        );
+                    work_evidence: None,
+                    refunded_amount: 0,
+                    deadline: None,
+                }],
+            );
             let _ = release_auth;
             let milestone_key = Symbol::new(env, "milestones");
             env.storage().persistent().set(
@@ -271,6 +271,7 @@ mod tests {
             released_amount: 0,
             refunded_amount: 0,
             release_authorization: ReleaseAuthorization::ClientOnly,
+            reputation_issued: false,
         };
 
         let contract_id = 1u32;
@@ -288,6 +289,7 @@ mod tests {
                     refunded: false,
                     work_evidence: None,
                     refunded_amount: 0,
+                    deadline: None,
                 }],
             );
             let milestone_key = Symbol::new(&env, "milestones");
@@ -326,6 +328,8 @@ mod tests {
             released_amount: 0,
             refunded_amount: 0,
             release_authorization: ReleaseAuthorization::MultiSig,
+
+            reputation_issued: false,
         };
 
         let contract_id = 1u32;
@@ -343,6 +347,7 @@ mod tests {
                     refunded: false,
                     work_evidence: None,
                     refunded_amount: 0,
+                    deadline: None,
                 }],
             );
             let milestone_key = Symbol::new(&env, "milestones");
@@ -388,6 +393,7 @@ mod tests {
             released_amount: 0,
             refunded_amount: 0,
             release_authorization: ReleaseAuthorization::ClientOnly,
+            reputation_issued: false,
         };
 
         let contract_id = 1u32;
@@ -405,6 +411,7 @@ mod tests {
                     refunded: false,
                     work_evidence: None,
                     refunded_amount: 0,
+                    deadline: None,
                 }],
             );
             let milestone_key = Symbol::new(&env, "milestones");
