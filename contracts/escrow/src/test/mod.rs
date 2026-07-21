@@ -6,9 +6,16 @@ use soroban_sdk::{testutils::Address as _, vec, Address, Env, Vec};
 use crate::{Contract, ContractStatus, Escrow, EscrowClient, EscrowError, ReleaseAuthorization};
 
 // --- Submodules ---
-// Only sac_custody for issue #723 testing; other modules have pre-existing
-// breakage unrelated to this fix.
-mod sac_custody;
+mod approval_expiry;
+mod client_migration;
+mod dispute;
+mod emergency_controls;
+mod mainnet_readiness;
+mod pause_controls;
+mod persistence;
+mod release_authorization;
+mod security;
+mod ttl_tests;
 
 // --- Shared constants ---
 
