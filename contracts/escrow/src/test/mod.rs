@@ -264,6 +264,51 @@ pub fn total_milestone_amount() -> i128 {
     MILESTONE_ONE + MILESTONE_TWO + MILESTONE_THREE
 }
 
+/// Generate a fresh (client, freelancer) address pair for a test.
+pub fn generated_participants(env: &Env) -> (Address, Address) {
+    (Address::generate(env), Address::generate(env))
+}
+
+/// Create, fund, and fully release a 3-milestone contract, driving it to
+/// [`ContractStatus::Completed`]. Returns (client_addr, freelancer_addr, contract_id).
+pub fn complete_contract(env: &Env, client: &EscrowClient) -> (Address, Address, u32) {
+    let client_addr = Address::generate(env);
+    let freelancer_addr = Address::generate(env);
+    let contract_id = client.create_contract(
+        &client_addr,
+        &freelancer_addr,
+        &None,
+        &default_milestones(env),
+        &ReleaseAuthorization::ClientOnly,
+    );
+    let total = total_milestone_amount();
+    client.deposit_funds(&contract_id, &client_addr, &total);
+    for milestone_index in 0..3u32 {
+        client.approve_milestone_release(&contract_id, &client_addr, &milestone_index);
+        client.release_milestone(&contract_id, &client_addr, &milestone_index);
+    }
+    (client_addr, freelancer_addr, contract_id)
+}
+
+/// Create a 3-milestone contract with an arbiter configured (not yet funded).
+/// Returns (client_addr, freelancer_addr, arbiter_addr, contract_id).
+pub fn create_contract_with_arbiter(
+    env: &Env,
+    client: &EscrowClient,
+) -> (Address, Address, Address, u32) {
+    let client_addr = Address::generate(env);
+    let freelancer_addr = Address::generate(env);
+    let arbiter_addr = Address::generate(env);
+    let contract_id = client.create_contract(
+        &client_addr,
+        &freelancer_addr,
+        &Some(arbiter_addr.clone()),
+        &default_milestones(env),
+        &ReleaseAuthorization::ClientOnly,
+    );
+    (client_addr, freelancer_addr, arbiter_addr, contract_id)
+}
+
 /// Create a contract and return (client_addr, freelancer_addr, contract_id).
 pub fn create_contract(env: &Env, client: &EscrowClient) -> (Address, Address, u32) {
     let client_addr = Address::generate(env);

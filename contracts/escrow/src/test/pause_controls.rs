@@ -10,8 +10,8 @@
 //! the plain pause() / unpause() path. The pause check runs before require_auth,
 //! so a paused contract rejects uniformly regardless of caller.
 
-use crate::{Escrow, EscrowClient, EscrowError, ReleaseAuthorization};
-use soroban_sdk::{testutils::Address as _, vec, Address, Env};
+use crate::{Error, Escrow, EscrowClient, EscrowError, ReleaseAuthorization};
+use soroban_sdk::{testutils::Address as _, vec, Address, Env, String};
 
 // --- helpers ---
 
@@ -244,11 +244,12 @@ fn unpause_restores_cancel_contract() {
 fn pause_blocks_issue_reputation() {
     let (env, contract_id, _admin) = setup_initialized();
     let client = EscrowClient::new(&env, &contract_id);
-    let (client_addr, freelancer_addr, id) = setup_completed_contract(&env, &client);
+    let (client_addr, _freelancer_addr, id) = setup_completed_contract(&env, &client);
     client.pause();
 
+    let comment = String::from_str(&env, "Great work");
     super::assert_contract_error(
-        client.try_issue_reputation(&id, &client_addr, &freelancer_addr, &5_i128),
+        client.try_issue_reputation(&id, &client_addr, &5_u32, &comment),
         EscrowError::ContractPaused,
     );
 }

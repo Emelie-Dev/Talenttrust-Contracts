@@ -1,9 +1,10 @@
 #![cfg(test)]
 
 use soroban_sdk::{
-    testutils::Address as _,
+    symbol_short,
+    testutils::{Address as _, Events as _},
     token::{Client as TokenClient, StellarAssetClient},
-    vec, Address, Env,
+    vec, Address, Env, Symbol, TryFromVal,
 };
 
 use crate::{
@@ -28,7 +29,7 @@ fn setup_cancel_context(env: &Env) -> (EscrowClient<'_>, Address, Address, u32) 
 
     let token_admin = Address::generate(env);
     let token_address = env.register_stellar_asset_contract(token_admin);
-    client.set_settlement_token(&token_address);
+    client.set_settlement_token(&admin, &token_address);
 
     let token_client = StellarAssetClient::new(env, &token_address);
     token_client.mint(&client_addr, &10_000_0000000_i128);
@@ -54,7 +55,7 @@ fn escrow_address(env: &Env, client: &EscrowClient<'_>) -> Address {
 fn cancel_created_contract_marks_it_cancelled_without_refund() {
     let env = Env::default();
     let (client, client_addr, _, contract_id) = setup_cancel_context(&env);
-    let token_address = client.get_settlement_token();
+    let token_address = client.get_settlement_token().unwrap();
     let token_client = TokenClient::new(&env, &token_address);
     let escrow_addr = escrow_address(&env, &client);
     let client_balance_before = token_client.balance(&client_addr);
@@ -80,7 +81,7 @@ fn cancel_funded_contract_refunds_the_remaining_balance_to_the_client() {
     let contract = client.get_contract(&contract_id);
     assert_eq!(contract.status, ContractStatus::Funded);
 
-    let token_address = client.get_settlement_token();
+    let token_address = client.get_settlement_token().unwrap();
     let token_client = TokenClient::new(&env, &token_address);
     let escrow_addr = escrow_address(&env, &client);
     let client_balance_before = token_client.balance(&client_addr);
@@ -109,7 +110,7 @@ fn cancel_refund_leaves_other_contract_funds_in_escrow() {
         &vec![&env, 400_i128],
         &ReleaseAuthorization::ClientOnly,
     );
-    let token_address = client.get_settlement_token();
+    let token_address = client.get_settlement_token().unwrap();
     let token_client = TokenClient::new(&env, &token_address);
     let escrow_addr = escrow_address(&env, &client);
 
@@ -196,6 +197,11 @@ fn cancel_emits_cancelled_event() {
 
     assert!(client.cancel_contract(&contract_id, &client_addr));
 
+    let cancelled_topic = symbol_short!("cancelled");
     let events = env.events().all();
-    assert!(events.iter().any(|event| event.0 == soroban_sdk::symbol_short!("cancelled")));
+    assert!(events.iter().any(|event| {
+        event.1.len() > 0
+            && Symbol::try_from_val(&env, &event.1.get(0).unwrap()).ok().as_ref()
+                == Some(&cancelled_topic)
+    }));
 }

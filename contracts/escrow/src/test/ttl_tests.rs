@@ -8,7 +8,7 @@
 
 use soroban_sdk::{
     symbol_short,
-    testutils::{storage::Temporary as _, Ledger as _},
+    testutils::{storage::Temporary as _, Address as _, Ledger as _},
     Env, Symbol,
 };
 
