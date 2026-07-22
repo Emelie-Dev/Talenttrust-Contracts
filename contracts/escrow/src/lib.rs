@@ -62,7 +62,7 @@ mod utils;
 
 use crate::utils::now_seconds;
 use soroban_sdk::{
-    contract, contracterror, contractimpl, symbol_short, token, Address, Env, String, Symbol, Vec,
+    contract, contracterror, contractimpl, symbol_short, token, Address, Env, String, Vec,
 };
 
 pub use amount_validation::accumulate_amounts;
@@ -163,16 +163,6 @@ pub enum EscrowError {
     /// Binding the admin as the custody asset conflates governance authority
     /// with the settlement token role.
     SettlementTokenIsAdmin = 41,
-}
-
-#[contractimpl]
-impl Escrow {
-    // ── Hello / CI ───────────────────────────────────────────────────────────
-
-    /// Hello-world style function for testing and CI.
-    pub fn hello(_env: Env, to: Symbol) -> Symbol {
-        to
-    }
 }
 
 impl Escrow {

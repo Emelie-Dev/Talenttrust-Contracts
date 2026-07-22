@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use soroban_sdk::{symbol_short, testutils::Address as _, vec, Address, Env, Vec};
+use soroban_sdk::{testutils::Address as _, vec, Address, Env, Vec};
 
 use crate::{Contract, ContractStatus, Escrow, EscrowClient, Milestone, ReleaseAuthorization};
 
@@ -90,16 +90,6 @@ pub fn assert_milestone_flags(
 }
 
 #[test]
-fn test_hello() {
-    let env = Env::default();
-    let contract_id = env.register(Escrow, ());
-    let client = EscrowClient::new(&env, &contract_id);
-
-    let result = client.hello(&symbol_short!("World"));
-    assert_eq!(result, symbol_short!("World"));
-}
-
-#[test]
 fn test_create_contract() {
     let env = Env::default();
     env.mock_all_auths();
@@ -149,7 +139,6 @@ mod deposit;
 mod create_contract;
 mod access_control;
 mod approval_expiry;
-mod hello;
 mod lifecycle;
 mod flows;
 mod security;

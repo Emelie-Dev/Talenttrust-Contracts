@@ -13,15 +13,6 @@ The list intentionally omits planned or reserved entrypoints that are not implem
 
 ## Public entrypoints
 
-### hello
-
-- Signature: `hello(env: Env, to: Symbol) -> Symbol`
-- Kind: Read-only
-- Auth: None
-- Semantics: Returns the provided symbol unchanged.
-- Events: None
-- Errors: None
-
 ### initialize
 
 - Signature: `initialize(env: Env, admin: Address) -> bool`

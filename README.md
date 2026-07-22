@@ -17,6 +17,8 @@ cargo doc -p escrow --no-deps
 
 Then open `target/doc/escrow/index.html`.
 
+The supported deployed interface is documented in the [Escrow ABI reference](docs/escrow/abi-reference.md). It intentionally excludes template scaffolding endpoints; consumers should integrate only with the listed contract methods.
+
 ---
 
 ## Feature Status Matrix
