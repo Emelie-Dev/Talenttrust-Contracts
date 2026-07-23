@@ -62,8 +62,7 @@ mod utils;
 
 use crate::utils::now_seconds;
 use soroban_sdk::{
-    contract, contracterror, contractimpl, log, symbol_short, token, Address, Env, String, Symbol,
-    Vec,
+    contract, contractimpl, log, symbol_short, token, Address, Env, String, Symbol, Vec,
 };
 
 pub use amount_validation::accumulate_amounts;
@@ -99,122 +98,11 @@ mod create_contract;
 mod dispute;
 mod governance;
 
-/// Governance-level errors for admin-gated operations.
-#[contracterror]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(u32)]
-pub enum Error {
-    InvalidParticipant = 1,
-    EmptyMilestones = 2,
-    InvalidMilestoneAmount = 3,
-    InvalidDepositAmount = 4,
-    InvalidMilestone = 5,
-    ContractNotFound = 6,
-    EmptyRefundRequest = 7,
-    DuplicateMilestoneInRefund = 8,
-    AlreadyReleased = 9,
-    AlreadyRefunded = 10,
-    InsufficientFunds = 11,
-    AlreadyInitialized = 12,
-    InsufficientAccumulatedFees = 13,
-    /// Returned by lifecycle entrypoints when `initialize` has not been called.
-    ///
-    /// All money-flow operations require initialization so the admin-controlled
-    /// safety rails (pause, emergency controls, protocol fees) are always in
-    /// scope before any funds can move.
-    NotInitialized = 14,
-    UnauthorizedRole = 15,
-    ContractPaused = 16,
-    EmergencyActive = 17,
-    InvalidState = 18,
-    InvalidRating = 19,
-    SelfRating = 20,
-    ReputationAlreadyIssued = 21,
-    NotCompleted = 22,
-    FreelancerMismatch = 23,
-    InvalidStatusTransition = 24,
-    ArbiterRequired = 25,
-    InvalidDisputeSplit = 26,
-    AccountingInvariantViolated = 27,
-    PotentialOverflow = 28,
-    AlreadyFinalized = 29,
-    AmountMustBePositive = 30,
-    /// No settlement token has been bound for custody transfers.
-    SettlementTokenNotConfigured = 31,
-    /// A settlement token has already been bound.
-    SettlementTokenAlreadyBound = 32,
-    /// The sum of milestone amounts exceeded the configured maximum or overflowed.
-    TotalCapExceeded = 33,
-    /// Too many milestones were provided.
-    TooManyMilestones = 34,
-    /// An arbiter was required by the release authorization mode but not provided.
-    MissingArbiter = 35,
-    /// The provided arbiter is invalid (same as client or freelancer).
-    InvalidArbiter = 36,
-    /// Contract is cancelled and must not accept further value-moving operations.
-    ContractCancelled = 37,
-    /// Contract has been refunded and is terminal for value-moving operations.
-    ContractRefunded = 38,
-    /// The address supplied as settlement token is not a valid token contract.
-    /// The pre-bind probe called `token::Client::balance` against the escrow
-    /// contract address and the call panicked — the address does not implement
-    /// the SAC token interface.
-    InvalidSettlementToken = 39,
-    /// The address supplied as settlement token is the escrow contract itself.
-    /// Binding self would create a circular custody reference and brick all
-    /// transfer paths.
-    SettlementTokenIsSelf = 40,
-    /// The address supplied as settlement token is the escrow admin.
-    /// Binding the admin as the custody asset conflates governance authority
-    /// with the settlement token role.
-    SettlementTokenIsAdmin = 41,
-    /// Reputation feedback comment was empty.
-    EmptyComment = 42,
-    /// Reputation feedback comment exceeded the 200-character maximum.
-    CommentTooLong = 43,
-    /// Returned when `accept_governance_admin` is called before
-    /// `ADMIN_ROTATION_MIN_DELAY_LEDGERS` have elapsed since the matching
-    /// `propose_governance_admin` call.  Mirrors the canonical
-    /// [`crate::Error::TimelockNotElapsed`] variant (types.rs) so off-chain
-    /// callers can decode the timelock violation on either enum.  Numeric
-    /// value matches for cross-enum `assert_contract_error` comparisons.
-    /// Mirrors the legacy [`Error::TimelockNotElapsed`] for stable host error
-    /// code semantics.  See `Error` in `types.rs` for the
-    /// canonical discriminant reference.
-    TimelockNotElapsed = 48,
-    /// Specified milestone index is out of bounds.  Mirrors the legacy
-    /// [`Error::IndexOutOfBounds`] disc so source sites that panic with the
-    /// legacy name produce a stable host error code.
-    IndexOutOfBounds = 49,
-    /// Per-milestone approval stage.  Mirrors the legacy
-    /// [`Error::AlreadyApproved`] disc for the approvals flow.
-    AlreadyApproved = 50,
-    /// Approval-stage failure: not enough sustained approvals to release.
-    /// Mirrors the legacy [`Error::InsufficientApprovals`] disc.
-    InsufficientApprovals = 51,
-    /// Internal allocator error: a contract id collision was detected.
-    /// Mirrors the legacy [`Error::ContractIdCollision`] disc.
-    ContractIdCollision = 52,
-    /// Internal allocator error: the contract id space overflowed.
-    /// Mirrors the legacy [`Error::ContractIdOverflow`] disc.
-    ContractIdOverflow = 53,
-    /// Work-evidence string exceeded the maximum length.  Mirrors the
-    /// legacy [`Error::EvidenceTooLong`] disc.
-    EvidenceTooLong = 54,
-    /// Governance parameter validation failure.  Mirrors the legacy
-    /// [`Error::InvalidProtocolParameters`] disc.
-    InvalidProtocolParameters = 55,
-    /// A milestone deadline is set but the deadline has not yet expired.
-    /// Mirrors the legacy [`Error::MilestoneNotOverdue`] disc.
-    MilestoneNotOverdue = 56,
-}
-
-/// Re-export the canonical [`Error`] enum as [`EscrowError`] so legacy call
-/// sites in the source code that use `EscrowError::X` resolve to the same
-/// discriminant values the tests assert against.  Declared here in the
-/// crate root (not in `types.rs`) so it does not form a cross-file alias
-/// cycle (`lib.rs` → `types.rs` → crate root).
-pub use crate::Error as EscrowError;
+// Error enum is declared in `types.rs` with `#[contracterror]`.
+// Re-export here so all crate modules can use `crate::Error::*` and
+// `crate::EscrowError::*`.
+pub use types::Error;
+pub use types::Error as EscrowError;
 
 
 impl Escrow {
