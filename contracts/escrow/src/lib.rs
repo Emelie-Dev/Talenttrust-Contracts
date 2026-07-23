@@ -184,11 +184,11 @@ pub enum EscrowError {
     /// and produce a stable host error code.
     IndexOutOfBounds = 49,
     /// Plural form of `InvalidParticipant` retained from the legacy
-    /// [`crate::types::Error::InvalidParticipants`] so call sites calling the
+    /// [`crate::types::EscrowError::InvalidParticipant`] so call sites calling the
     /// plural name continue to compile.  Semantically identical.
     InvalidParticipants = 50,
     /// Per-milestone "already released" designation retained from the legacy
-    /// [`crate::types::Error::MilestoneAlreadyReleased`] variant.  Equivalent
+    /// [`crate::types::EscrowError::AlreadyReleased`] variant.  Equivalent
     /// in meaning to [`EscrowError::AlreadyReleased`] but exposed under the
     /// legacy name for backward compatibility with tests and source.
     MilestoneAlreadyReleased = 51,
@@ -205,7 +205,7 @@ pub enum EscrowError {
     /// Retained from [`crate::types::Error::ContractIdOverflow`].
     ContractIdOverflow = 55,
     /// Cancelled contract guard.  Retained from the legacy
-    /// [`crate::types::Error::AlreadyCancelled`] variant.  Tests may also
+    /// [`crate::types::EscrowError::ContractCancelled`] variant.  Tests may also
     /// assert [`EscrowError::ContractCancelled`] (discriminant 37); this
     /// variant co-exists for source sites that historically used the legacy
     /// name and is registered to the same numeric 56+ slot to avoid
@@ -218,7 +218,7 @@ pub enum EscrowError {
     /// [`crate::types::Error::InvalidProtocolParameters`].
     InvalidProtocolParameters = 58,
     /// Per-milestone funded total would exceed the configured escrow cap.
-    /// Retained from [`crate::types::Error::EscrowCapExceeded`]; tests may
+    /// Retained from [`crate::types::EscrowError::TotalCapExceeded`]; tests may
     /// also assert [`EscrowError::TotalCapExceeded`] (discriminant 33).  Both
     /// co-exist; migrate call sites opportunistically.
     EscrowCapExceeded = 59,
@@ -805,7 +805,7 @@ impl Escrow {
         let mut milestone = milestones.get(milestone_index).unwrap().clone();
 
         if milestone.released {
-            env.panic_with_error(Error::MilestoneAlreadyReleased);
+            env.panic_with_error(EscrowError::AlreadyReleased);
         }
 
         if milestone.refunded {
@@ -833,7 +833,7 @@ impl Escrow {
         let mut milestone = milestones.get(milestone_index).unwrap().clone();
 
         if milestone.released {
-            env.panic_with_error(Error::MilestoneAlreadyReleased);
+            env.panic_with_error(EscrowError::AlreadyReleased);
         }
 
         if milestone.refunded {
@@ -1660,7 +1660,7 @@ impl Escrow {
         }
 
         if contract.status == ContractStatus::Cancelled {
-            env.panic_with_error(Error::AlreadyCancelled);
+            env.panic_with_error(EscrowError::ContractCancelled);
         }
 
         if contract.status != ContractStatus::Created && contract.status != ContractStatus::Funded {
@@ -1955,7 +1955,7 @@ impl Escrow {
         let mut milestone = milestones.get(milestone_index).unwrap();
 
         if milestone.released {
-            env.panic_with_error(Error::MilestoneAlreadyReleased);
+            env.panic_with_error(EscrowError::AlreadyReleased);
         }
         if milestone.refunded {
             env.panic_with_error(EscrowError::AlreadyRefunded);

@@ -79,7 +79,7 @@ pub fn approve_milestone(
 
     // Check if milestone is already released
     if milestone.released {
-        return Err(Error::MilestoneAlreadyReleased);
+        return Err(EscrowError::AlreadyReleased);
     }
 
     // Determine caller role and check authorization
