@@ -171,6 +171,13 @@ pub enum EscrowError {
     EmptyComment = 42,
     /// Reputation feedback comment exceeded the 200-character maximum.
     CommentTooLong = 43,
+    /// Returned when `accept_governance_admin` is called before
+    /// `ADMIN_ROTATION_MIN_DELAY_LEDGERS` have elapsed since the matching
+    /// `propose_governance_admin` call.  Mirrors the canonical
+    /// [`crate::Error::TimelockNotElapsed`] variant (types.rs) so off-chain
+    /// callers can decode the timelock violation on either enum.  Numeric
+    /// value matches for cross-enum `assert_contract_error` comparisons.
+    TimelockNotElapsed = 48,
 }
 
 impl Escrow {
