@@ -86,12 +86,6 @@ pub use types::{
     SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION,
 };
 
-/// Re-export the canonical [`EscrowError`] enum as [`Error`] so legacy call
-/// sites in the source code that use `Error::X` resolve to the same
-/// discriminant values the tests assert against.  Declared here in the
-/// crate root (not in `types.rs`) so it does not form a cross-file alias
-/// cycle (`lib.rs` → `types.rs` → crate root).
-pub use crate::EscrowError as Error;
 
 // Maximum bounds constants - re-export from amount_validation for API visibility
 pub const MAX_MILESTONES: u32 = 10;
@@ -214,6 +208,13 @@ pub enum EscrowError {
     /// Mirrors the legacy [`Error::MilestoneNotOverdue`] disc.
     MilestoneNotOverdue = 56,
 }
+
+/// Re-export the canonical [`EscrowError`] enum as [`Error`] so legacy call
+/// sites in the source code that use `Error::X` resolve to the same
+/// discriminant values the tests assert against.  Declared here in the
+/// crate root (not in `types.rs`) so it does not form a cross-file alias
+/// cycle (`lib.rs` → `types.rs` → crate root).
+pub use crate::EscrowError as Error;
 
 
 impl Escrow {
