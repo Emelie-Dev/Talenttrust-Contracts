@@ -408,7 +408,7 @@ fn resolve_full_refund_conserves_and_marks_refunded() {
 #[test]
 fn resolve_full_payout_conserves_and_marks_completed() {
     let env = make_env();
-    let (client, _) = make_client(&env);
+    let client = make_client(&env);
     let client_addr = Address::generate(&env);
     let freelancer_addr = Address::generate(&env);
     let arbiter_addr = Address::generate(&env);
@@ -439,7 +439,7 @@ fn resolve_full_payout_conserves_and_marks_completed() {
 #[test]
 fn resolve_partial_refund_conserves_70_30_split() {
     let env = make_env();
-    let (client, _) = make_client(&env);
+    let client = make_client(&env);
     let client_addr = Address::generate(&env);
     let freelancer_addr = Address::generate(&env);
     let arbiter_addr = Address::generate(&env);
@@ -468,7 +468,7 @@ fn resolve_partial_refund_conserves_70_30_split() {
 #[test]
 fn resolve_split_conserves_custom_amounts() {
     let env = make_env();
-    let (client, _) = make_client(&env);
+    let client = make_client(&env);
     let client_addr = Address::generate(&env);
     let freelancer_addr = Address::generate(&env);
     let arbiter_addr = Address::generate(&env);
@@ -507,7 +507,7 @@ fn resolve_split_conserves_custom_amounts() {
 #[test]
 fn raise_dispute_by_client_succeeds() {
     let env = make_env();
-    let (client, _) = make_client(&env);
+    let client = make_client(&env);
     let (client_addr, _, _, contract_id) = funded_contract_with_arbiter(&env, &client);
 
     assert!(client.raise_dispute(&contract_id, &client_addr));
@@ -521,7 +521,7 @@ fn raise_dispute_by_client_succeeds() {
 #[test]
 fn raise_dispute_by_freelancer_succeeds() {
     let env = make_env();
-    let (client, _) = make_client(&env);
+    let client = make_client(&env);
     let (_, freelancer_addr, _, contract_id) = funded_contract_with_arbiter(&env, &client);
 
     assert!(client.raise_dispute(&contract_id, &freelancer_addr));
@@ -535,7 +535,7 @@ fn raise_dispute_by_freelancer_succeeds() {
 #[test]
 fn raise_dispute_by_non_party_is_rejected() {
     let env = make_env();
-    let (client, _) = make_client(&env);
+    let client = make_client(&env);
     let (_, _, _, contract_id) = funded_contract_with_arbiter(&env, &client);
     let outsider = Address::generate(&env);
 
@@ -553,7 +553,7 @@ fn raise_dispute_by_non_party_is_rejected() {
 #[test]
 fn raise_dispute_without_arbiter_is_rejected() {
     let env = make_env();
-    let (client, _) = make_client(&env);
+    let client = make_client(&env);
     let (client_addr, _, contract_id) = funded_contract_no_arbiter(&env, &client);
 
     super::assert_contract_error(
@@ -571,7 +571,7 @@ fn raise_dispute_without_arbiter_is_rejected() {
 #[test]
 fn raise_dispute_on_completed_contract_is_rejected() {
     let env = make_env();
-    let (client, _) = make_client(&env);
+    let client = make_client(&env);
     let milestones = vec![&env, 100_i128];
     let client_addr = Address::generate(&env);
     let freelancer_addr = Address::generate(&env);
@@ -601,7 +601,7 @@ fn raise_dispute_on_completed_contract_is_rejected() {
 #[test]
 fn resolve_dispute_by_arbiter_succeeds() {
     let env = make_env();
-    let (client, _) = make_client(&env);
+    let client = make_client(&env);
     let (_, _, arbiter_addr, contract_id) = disputed_contract(&env, &client);
 
     assert!(client.resolve_dispute(&contract_id, &arbiter_addr, &DisputeResolution::FullRefund,));
@@ -614,7 +614,7 @@ fn resolve_dispute_by_arbiter_succeeds() {
 #[test]
 fn resolve_dispute_by_non_arbiter_is_rejected() {
     let env = make_env();
-    let (client, _) = make_client(&env);
+    let client = make_client(&env);
     let (client_addr, _, _, contract_id) = disputed_contract(&env, &client);
     let outsider = Address::generate(&env);
 
@@ -639,7 +639,7 @@ fn resolve_dispute_by_non_arbiter_is_rejected() {
 #[test]
 fn double_resolve_is_rejected() {
     let env = make_env();
-    let (client, _) = make_client(&env);
+    let client = make_client(&env);
     let (_, _, arbiter_addr, contract_id) = disputed_contract(&env, &client);
 
     // First resolution succeeds.
@@ -661,7 +661,7 @@ fn double_resolve_is_rejected() {
 #[test]
 fn raise_dispute_after_settle_is_rejected() {
     let env = make_env();
-    let (client, _) = make_client(&env);
+    let client = make_client(&env);
     let milestones = vec![&env, 50_i128, 50_i128];
     let client_addr = Address::generate(&env);
     let freelancer_addr = Address::generate(&env);
@@ -694,7 +694,7 @@ fn raise_dispute_after_settle_is_rejected() {
 #[test]
 fn resolve_moves_funds_correctly_full_payout() {
     let env = make_env();
-    let (client, _) = make_client(&env);
+    let client = make_client(&env);
     let (_, _freelancer_addr, arbiter_addr, contract_id) = disputed_contract(&env, &client);
 
     assert!(client.resolve_dispute(&contract_id, &arbiter_addr, &DisputeResolution::FullPayout,));
@@ -711,7 +711,7 @@ fn resolve_moves_funds_correctly_full_payout() {
 #[test]
 fn resolve_moves_funds_correctly_full_refund() {
     let env = make_env();
-    let (client, _) = make_client(&env);
+    let client = make_client(&env);
     let (_, _, arbiter_addr, contract_id) = disputed_contract(&env, &client);
 
     assert!(client.resolve_dispute(&contract_id, &arbiter_addr, &DisputeResolution::FullRefund,));
@@ -729,7 +729,7 @@ fn resolve_moves_funds_correctly_full_refund() {
 #[test]
 fn raise_dispute_on_refunded_contract_is_rejected() {
     let env = make_env();
-    let (client, _) = make_client(&env);
+    let client = make_client(&env);
     let (client_addr, freelancer_addr, arbiter_addr, contract_id) =
         funded_contract_with_arbiter(&env, &client);
 
@@ -752,7 +752,7 @@ fn raise_dispute_on_refunded_contract_is_rejected() {
 #[test]
 fn resolve_after_finalize_is_rejected() {
     let env = make_env();
-    let (client, _) = make_client(&env);
+    let client = make_client(&env);
     let (client_addr, _, arbiter_addr, contract_id) = disputed_contract(&env, &client);
 
     // Finalize the disputed contract.
