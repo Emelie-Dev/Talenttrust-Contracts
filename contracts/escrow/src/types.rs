@@ -31,14 +31,27 @@ pub struct ContractSummary {
     pub milestones: Vec<MilestoneSummary>,
 }
 
+/// Returned by `get_contract_participants`.
+///
+/// Contains only the participant addresses for a contract: the client,
+/// freelancer, and optional arbiter.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ContractParticipants {
+    /// The client address that funded the contract.
+    pub client: Address,
+    /// The freelancer address performing the work.
+    pub freelancer: Address,
+    /// Optional arbiter address for dispute resolution.
+    pub arbiter: Option<Address>,
+}
+
 /// Protocol-wide bounds for contract validation.
 ///
 /// This type carries the hard-coded limits used by `create_contract` and other
 /// validation paths. It is returned by `get_bounds()` for off-chain indexers
-/// and client applications.
-///
-/// Dedicated struct for protocol bounds prevents coupling the limits ABI to the
-/// per-contract summary schema version.
+/// and client applications.</｜DSML｜tool>
+
 #[contracttype]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ContractBounds {
