@@ -49,6 +49,7 @@ Read-only queries:
 - `get_protocol_fee_bps() -> u32`
 - `get_accumulated_protocol_fees() -> i128`
 - `get_bounds() -> ContractBounds` *(returns the compile-time protocol bounds: max milestones, max single milestone amount, max total escrow amount, max fee bps; see [`ContractBounds`](../../contracts/escrow/src/types.rs))*
+- `get_milestone_progress(contract_id) -> (u32, u32)` — returns `(completed, total)` milestone counts; returns `(0, 0)` for an unknown id instead of panicking, unlike the other read-only getters above
 
 ### Read-only getter semantics
 

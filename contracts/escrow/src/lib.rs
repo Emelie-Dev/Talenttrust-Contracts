@@ -1368,6 +1368,37 @@ impl Escrow {
         contract.funded_amount - contract.released_amount - contract.refunded_amount
     }
 
+    /// Returns `(completed, total)` milestone counts for a contract.
+    ///
+    /// Read-only and side-effect-free on the unknown-contract path. Unlike
+    /// `get_contract` / `get_milestones` / `get_refundable_balance`, this
+    /// getter does not panic with `ContractNotFound` for an unknown
+    /// `contract_id` — it returns `(0, 0)` instead, since it's meant as a
+    /// cheap indexer-friendly probe rather than a strict existence check.
+    pub fn get_milestone_progress(env: Env, contract_id: u32) -> (u32, u32) {
+        if env
+            .storage()
+            .persistent()
+            .get::<_, Contract>(&DataKey::Contract(contract_id))
+            .is_none()
+        {
+            return (0, 0);
+        }
+
+        let milestones: Vec<Milestone> = env
+            .storage()
+            .persistent()
+            .get(&ttl::milestone_storage_key(&env, contract_id))
+            .unwrap_or_else(|| Vec::new(&env));
+
+        let total = milestones.len() as u32;
+        let completed = milestones.iter().filter(|m| m.released).count() as u32;
+
+        ttl::extend_contract_and_milestones_ttl(&env, contract_id);
+
+        (completed, total)
+    }
+
     /// Retrieves approval status for a milestone.
     ///
     /// Returns `None` when no approval record exists or when the TTL has
