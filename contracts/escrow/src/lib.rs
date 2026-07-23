@@ -181,37 +181,30 @@ pub enum EscrowError {
     /// code semantics.  See `Error` in `types.rs` for the
     /// canonical discriminant reference.
     TimelockNotElapsed = 48,
-    /// Mirrors the legacy [`Error::IndexOutOfBounds`] for stable host error
-    /// code semantics.  See `Error` in `types.rs` for the
-    /// canonical discriminant reference.
+    /// Specified milestone index is out of bounds.  Mirrors the legacy
+    /// [`Error::IndexOutOfBounds`] disc so source sites that panic with the
+    /// legacy name produce a stable host error code.
     IndexOutOfBounds = 49,
-    /// Mirrors the legacy [`Error::AlreadyApproved`] for stable host error
-    /// code semantics.  See `Error` in `types.rs` for the
-    /// canonical discriminant reference.
+    /// Per-milestone approval stage.  Mirrors the legacy
+    /// [`Error::AlreadyApproved`] disc for the approvals flow.
     AlreadyApproved = 50,
-    /// Mirrors the legacy [`Error::InsufficientApprovals`] for stable host error
-    /// code semantics.  See `Error` in `types.rs` for the
-    /// canonical discriminant reference.
+    /// Approval-stage failure: not enough sustained approvals to release.
+    /// Mirrors the legacy [`Error::InsufficientApprovals`] disc.
     InsufficientApprovals = 51,
-    /// Mirrors the legacy [`Error::ContractIdCollision`] for stable host error
-    /// code semantics.  See `Error` in `types.rs` for the
-    /// canonical discriminant reference.
+    /// Internal allocator error: a contract id collision was detected.
+    /// Mirrors the legacy [`Error::ContractIdCollision`] disc.
     ContractIdCollision = 52,
-    /// Mirrors the legacy [`Error::ContractIdOverflow`] for stable host error
-    /// code semantics.  See `Error` in `types.rs` for the
-    /// canonical discriminant reference.
+    /// Internal allocator error: the contract id space overflowed.
+    /// Mirrors the legacy [`Error::ContractIdOverflow`] disc.
     ContractIdOverflow = 53,
-    /// Mirrors the legacy [`Error::EvidenceTooLong`] for stable host error
-    /// code semantics.  See `Error` in `types.rs` for the
-    /// canonical discriminant reference.
+    /// Work-evidence string exceeded the maximum length.  Mirrors the
+    /// legacy [`Error::EvidenceTooLong`] disc.
     EvidenceTooLong = 54,
-    /// Mirrors the legacy [`Error::InvalidProtocolParameters`] for stable host error
-    /// code semantics.  See `Error` in `types.rs` for the
-    /// canonical discriminant reference.
+    /// Governance parameter validation failure.  Mirrors the legacy
+    /// [`Error::InvalidProtocolParameters`] disc.
     InvalidProtocolParameters = 55,
-    /// Mirrors the legacy [`Error::MilestoneNotOverdue`] for stable host error
-    /// code semantics.  See `Error` in `types.rs` for the
-    /// canonical discriminant reference.
+    /// A milestone deadline is set but the deadline has not yet expired.
+    /// Mirrors the legacy [`Error::MilestoneNotOverdue`] disc.
     MilestoneNotOverdue = 56,
 }
 
@@ -513,7 +506,7 @@ impl Escrow {
     /// The unique contract ID
     ///
     /// # Errors
-    /// * `InvalidParticipants` - If client and freelancer are the same address
+    /// * `InvalidParticipant` - If client and freelancer are the same address
     /// * `EmptyMilestones` - If no milestones are provided
     /// * `InvalidMilestoneAmount` - If any milestone amount is <= 0
     /// Pull the settlement-token deposit from the client into the escrow contract address.
@@ -1631,7 +1624,7 @@ impl Escrow {
     /// * `EmergencyActive` - If the contract is in an active emergency pause.
     /// * `ContractNotFound` - If the contract does not exist.
     /// * `UnauthorizedRole` - If the caller is not the stored client.
-    /// * `AlreadyCancelled` - If the contract was already cancelled.
+    /// * `ContractCancelled` - If the contract was already cancelled.
     /// * `InvalidStatusTransition` - If the contract is not `Created`/`Funded` or has already released funds.
     pub fn cancel_contract(env: Env, contract_id: u32, client: Address) -> bool {
         Self::require_not_paused(&env);
@@ -1890,7 +1883,7 @@ impl Escrow {
     /// * `UnauthorizedRole`   — `caller` is not the freelancer
     /// * `InvalidState`       — contract is not `Funded`
     /// * `IndexOutOfBounds`   — `milestone_index` exceeds milestone count
-    /// * `MilestoneAlreadyReleased` — milestone is already released
+    /// * `AlreadyReleased` — milestone is already released
     /// * `AlreadyRefunded`    — milestone has been refunded
     /// * `EvidenceTooLong`    — evidence string exceeds 256 bytes
     pub fn submit_work_evidence(
