@@ -20,12 +20,13 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Install Rust toolchain
-        # `dtolnay/rust-toolchain@1.88.0` replaces the deprecated
-        # `actions-rs/toolchain@v1` (Node 20 + `set-output` warnings) and
-        # honours `rust-toolchain.toml` automatically.
         uses: dtolnay/rust-toolchain@1.88.0
         with:
-          profile: minimal
+          # Explicitly install clippy + rustfmt so the fmt and clippy gates
+          # work on every OS in the strategy matrix (the `profile` input is
+          # not accepted by this action version; components come from the
+          # explicitly declared list and the rust-toolchain.toml file).
+          components: clippy, rustfmt
 
       - name: Cache Cargo
         # `Swatinem/rust-cache@v2` automatically keys the registry + build
