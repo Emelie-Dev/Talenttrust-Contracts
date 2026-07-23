@@ -81,10 +81,17 @@ pub use ttl::{ADMIN_ROTATION_MIN_DELAY_LEDGERS, PENDING_MIGRATION_TTL_LEDGERS};
 // re-exported here; `dispute.rs` uses them via `crate::DisputeResolution`.
 pub use types::{
     Contract, ContractBounds, ContractStatus, ContractSummary, DataKey, DepositMode,
-    DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone, MilestoneApprovals,
+    DisputeResolution, DisputeSplit, GovernedParameters, Milestone, MilestoneApprovals,
     MilestoneSummary, PendingAdminProposal, ReadinessChecklist, ReleaseAuthorization, Reputation,
     SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION,
 };
+
+/// Re-export the canonical [`EscrowError`] enum as [`Error`] so legacy call
+/// sites in the source code that use `Error::X` resolve to the same
+/// discriminant values the tests assert against.  Declared here in the
+/// crate root (not in `types.rs`) so it does not form a cross-file alias
+/// cycle (`lib.rs` → `types.rs` → crate root).
+pub use crate::EscrowError as Error;
 
 // Maximum bounds constants - re-export from amount_validation for API visibility
 pub const MAX_MILESTONES: u32 = 10;

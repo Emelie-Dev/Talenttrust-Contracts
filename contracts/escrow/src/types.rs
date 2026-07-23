@@ -1,5 +1,4 @@
 use soroban_sdk::{contracttype, Address, String, Vec};
-
 // ── Indexer summary types ────────────────────────────────────────────────────
 
 #[allow(dead_code)]
@@ -92,22 +91,23 @@ pub enum DataKey {
     SettlementToken,
 }
 
-/// Canonical contract error type for all entrypoint-facing errors.
-///
-/// Alias of [`crate::EscrowError`] (declared in `lib.rs`) so that the
-/// Soroban host error domain is registered exactly once at compile time.
-/// Source code that historically used `Error::X` continues to compile, and
-/// the discriminant value of every panic site now matches the discriminant
-/// value asserted by tests, eliminating the host-side "contract error code
-/// mismatch" failures caused by the previous dual-enum registration.
-///
-/// New variants that the canonical enum does not yet cover have been added
-/// directly to [`crate::EscrowError`] under discriminants `49..=60`.  Source
-/// sites that previously used names from the legacy 53-variant `Error` enum
-/// now resolve through this alias to the same numeric slot, so
-/// `assert_contract_error(..., EscrowError::X)` continues to compare
-/// equal-against-stored on every panic.
-pub use crate::EscrowError as Error;
+// Canonical contract error type for all entrypoint-facing errors lives in
+// `lib.rs` as the `#[contracterror]` enum `EscrowError`.  The crate root
+// re-exports it under the legacy alias [`crate::Error`], so source sites
+// that historically used `Error::X` resolve to the same numeric slot as
+// the `EscrowError::X` form that tests assert against.  The re-export is
+// declared at the crate-root level (see `lib.rs`); it intentionally does
+// NOT live here in `types.rs` to avoid a cross-file alias cycle through
+// the crate root.
+//
+// Historical note: `types.rs::Error` was previously a 53-variant
+// `#[contracterror]` enum.  That dual registration produced 188
+// `soroban_env_host::host.rs:847` "contract error code mismatch" failures
+// on the full `cargo test -p escrow --quiet` run, because panic sites in
+// source and test-assertion sites used different variants of the two
+// enums and collapsed into different host-domain `Contract(N)` codes.
+// Aligning all source/test call sites to a single `#[contracterror]`
+// enum (and using the crate-root alias for `Error`) is the resolution.
 
 /// Contract lifecycle states
 #[contracttype]
