@@ -20,8 +20,11 @@ jobs:
           toolchain: 1.88.0
           targets: wasm32-unknown-unknown
 
-      - name: Build contract
-        run: cargo build --workspace --release
+      - name: Check contract (host)
+        run: cargo check --workspace
+
+      - name: Build contract (WASM)
+        run: cargo build -p escrow --release --target wasm32-unknown-unknown
 
       - name: Compile tests
         run: cargo test --workspace --quiet --no-run
