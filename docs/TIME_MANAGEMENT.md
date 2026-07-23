@@ -1,5 +1,8 @@
 # Centralized Ledger Time Management
 
+> **See also:** [`docs/escrow/ledger-time-source.md`](escrow/ledger-time-source.md)
+> for the authoritative reference on precision, trust assumptions, and call sites.
+
 ## Overview
 
 This project uses a centralized time management system to ensure deterministic behavior and reliable testing. All time-related operations must use the `now_seconds()` helper function.

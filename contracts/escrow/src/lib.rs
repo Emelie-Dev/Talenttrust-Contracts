@@ -19,7 +19,7 @@
 //! | `migration` | Client migration proposals, acceptance checks, cancellation, and pending-migration reads. | Temporary `DataKey::PendingClientMigration(contract_id)`; reads and updates `DataKey::Contract(contract_id)`. |
 //! | `ttl` | TTL constants plus helpers for temporary and persistent storage renewal. | Extends caller-provided keys, especially `Contract(id)`, `(Contract(id), "milestones")`, `NextContractId`, participant indexes, approvals, and migrations. |
 //! | `types` | Shared Soroban types, error enums, summaries, governance records, dispute records, and the canonical `DataKey` enum. | Declares storage key schema only; does not access storage itself. |
-//! | `utils` | Small deterministic helpers shared by entrypoints, currently ledger timestamp access. | None. |
+//! | `utils` | Small deterministic helpers shared by entrypoints, currently ledger timestamp access (`now_seconds`). See `docs/escrow/ledger-time-source.md`. | None. |
 //! | `create_contract` | Contract creation, participant/milestone validation, ID allocation, and creation events. | `DataKey::Contract(id)`, `(DataKey::Contract(id), "milestones")`, `NextContractId`, and `GovernedParameters`. |
 //! | `dispute` | Pure dispute payout arithmetic and final-status selection for dispute resolution. | None directly; root dispute entrypoints update `DataKey::Contract(contract_id)`. |
 //! | `governance` | Admin-controlled protocol fee, governed parameter, readiness, and admin-rotation entrypoints. | `DataKey::Admin`, `ProtocolFeeBps`, `PendingAdmin`, `GovernedParameters`, and `ReadinessChecklist`. |
@@ -953,7 +953,8 @@ impl Escrow {
     ///
     /// # Security
     /// Uses `now_seconds(&env)` which is the single source of truth for ledger time.
-    /// Time cannot be manipulated by contract callers.
+    /// Time cannot be manipulated by contract callers. See
+    /// `docs/escrow/ledger-time-source.md` for precision and trust assumptions.
     pub fn is_milestone_overdue(env: Env, contract_id: u32, milestone_index: u32) -> bool {
         let contract: Contract = match env
             .storage()
