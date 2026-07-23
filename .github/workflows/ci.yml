@@ -8,10 +8,12 @@ on:
 
 jobs:
   build-and-test:
-    # `ubuntu-latest` is faster than the prior `windows-latest` and surfaces
-    # platform-independent regressions on the cheaper runner.  The MSVC
-    # linker check is no longer needed on Linux.
-    runs-on: ubuntu-latest
+    # Cross-platform matrix: run on Ubuntu (faster/default), Windows (MSVC),
+    # and macOS (Unix) to surface platform-specific regressions before merge.
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
 
     steps:
       - name: Checkout repository
@@ -26,18 +28,14 @@ jobs:
           profile: minimal
 
       - name: Cache Cargo
-        # `Swatinem/rust-cache@v2` replaces `actions/cache@v4` for both the
-        # registry and the build cache.  It is keyed on Cargo.lock + workspace
-        # metadata and needs no manual `path:` globs.
+        # `Swatinem/rust-cache@v2` automatically keys the registry + build
+        # cache on Cargo.lock + workspace metadata per runner.
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: contracts/escrow -> target
 
       - name: Build contract
-        run: cargo build --workspace --release
-
-      - name: Build contract
-        # Compile the contract first so its dependent crate metadata is
+        # Compile the workspace first so its dependent crate metadata is
         # cached before the lint and test steps.
         run: cargo build --workspace --release
 
@@ -55,16 +53,15 @@ jobs:
 
       - name: Compile tests
         # Compilation gate: succeeds when every test module typechecks
-        # against the contract.  The Error ↔ EscrowError alias in this
-        # PR ensures every test compiles against the single canonical
-        # `#[contracterror]` enum.
+        # against the contract.  The Error ↔ EscrowError alias ensures
+        # every test compiles against the single canonical `#[contracterror]`
+        # enum.
         run: cargo test --workspace --quiet --no-run
 
       - name: Run escrow tests (full suite)
-        # Run the entire `cargo test -p escrow` suite.  The Error ↔
-        # EscrowError reconciliation (alias + 12 supplemental variants in
-        # `EscrowError`) eliminates the pre-existing 188 host-side "contract
-        # error code mismatch" failures, so the full suite is now green.
+        # Run the entire `cargo test -p escrow` suite.  The reconciliation
+        # eliminates the pre-existing 188 host-side "contract error code
+        # mismatch" failures, so the full suite is now green.
         run: cargo test -p escrow --quiet
 
       - name: Build Rust documentation

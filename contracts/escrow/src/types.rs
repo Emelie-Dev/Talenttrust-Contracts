@@ -91,23 +91,27 @@ pub enum DataKey {
     SettlementToken,
 }
 
-// Canonical contract error type for all entrypoint-facing errors lives in
-// `lib.rs` as the `#[contracterror]` enum `EscrowError`.  The crate root
-// re-exports it under the legacy alias [`crate::Error`], so source sites
-// that historically used `Error::X` resolve to the same numeric slot as
-// the `EscrowError::X` form that tests assert against.  The re-export is
-// declared at the crate-root level (see `lib.rs`); it intentionally does
-// NOT live here in `types.rs` to avoid a cross-file alias cycle through
-// the crate root.
-//
-// Historical note: `types.rs::Error` was previously a 53-variant
-// `#[contracterror]` enum.  That dual registration produced 188
-// `soroban_env_host::host.rs:847` "contract error code mismatch" failures
-// on the full `cargo test -p escrow --quiet` run, because panic sites in
-// source and test-assertion sites used different variants of the two
-// enums and collapsed into different host-domain `Contract(N)` codes.
-// Aligning all source/test call sites to a single `#[contracterror]`
-// enum (and using the crate-root alias for `Error`) is the resolution.
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║  Canonical error type                                                    ║
+// ║                                                                          ║
+// ║  The `#[contracterror]` enum for this contract is `EscrowError`          ║
+// ║  (declared in `lib.rs`).  The crate root re-exports it under the         ║
+// ║  legacy alias `pub use crate::EscrowError as Error;` — that alias is     ║
+// ║  inside lib.rs, NOT here, to avoid a parse-time cross-file cycle.        ║
+// ║                                                                          ║
+// ║  DO NOT put `#[contracterror]` ANYWHERE in this file.  A previous        ║
+// ║  revision had `types.rs::Error` as a separate `#[contracterror]` enum    ║
+// ║  with 53 variants.  That dual registration produced 188 host-side        ║
+// ║  "contract error code mismatch" failures (all panics at                  ║
+// ║  soroban-env-host-22.1.3/src/host.rs:847) because source panic sites     ║
+// ║  used different discriminant values than test assertion sites.           ║
+// ║                                                                          ║
+// ║  Fix: delete the old `pub enum Error { ... }`, replace with a crate-     ║
+// ║  root alias, add the 12 legacy-only variant names to `EscrowError` so    ║
+// ║  source `Error::X` resolves through the alias and produces the same      ║
+// ║  numeric slot that tests assert against.  See git log and commit         ║
+// ║  81d2db9 (the alias commit) for the full reconciliation history.         ║
+// ╚══════════════════════════════════════════════════════════════════════════╝
 
 /// Contract lifecycle states
 #[contracttype]
