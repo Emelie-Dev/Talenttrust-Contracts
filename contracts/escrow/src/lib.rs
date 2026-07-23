@@ -1211,6 +1211,31 @@ impl Escrow {
         contract
     }
 
+    /// Returns the arbiter address for a given contract, or `None` if no arbiter
+    /// is assigned or the contract does not exist.
+    ///
+    /// This is an O(1) read-only view that returns the stored arbiter directly
+    /// without reconstructing it from other state. It never panics — missing
+    /// contracts and unset arbiters both produce `None`.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `contract_id` - The contract ID to query
+    ///
+    /// # Returns
+    /// * `Some(Address)` if the contract exists and has an arbiter assigned
+    /// * `None` if the contract does not exist or has no arbiter
+    ///
+    /// # Security
+    /// This is a read-only operation that does **not** extend the contract's TTL.
+    /// Probing for arbiter state cannot be abused to keep entries alive.
+    pub fn get_arbiter(env: Env, contract_id: u32) -> Option<Address> {
+        env.storage()
+            .persistent()
+            .get::<_, Contract>(&DataKey::Contract(contract_id))
+            .and_then(|c| c.arbiter)
+    }
+
     /// Returns the next contract ID to be allocated (the high-water mark).
     ///
     /// This reader returns the current value of `NextContractId`, which represents
