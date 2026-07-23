@@ -811,7 +811,8 @@ impl Escrow {
         // Transfer the net amount (gross minus fee) to the freelancer.
         // The fee portion remains in the contract's token balance and is
         // tracked separately in AccumulatedProtocolFees.
-        let token = Self::read_settlement_token(&env).expect("Settlement token not set");
+        let token = Self::read_settlement_token(&env)
+            .unwrap_or_else(|| env.panic_with_error(Error::SettlementTokenNotConfigured));
         let token_client = token::Client::new(&env, &token);
         token_client.transfer(
             &env.current_contract_address(),
@@ -1076,7 +1077,8 @@ impl Escrow {
         }
 
         // Transfer tokens from contract to client
-        let token = Self::read_settlement_token(&env).expect("Settlement token not set");
+        let token = Self::read_settlement_token(&env)
+            .unwrap_or_else(|| env.panic_with_error(Error::SettlementTokenNotConfigured));
 
         let token_client = token::Client::new(&env, &token);
         token_client.transfer(
