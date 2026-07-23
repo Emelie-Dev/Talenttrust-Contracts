@@ -103,7 +103,7 @@ mod governance;
 #[contracterror]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
-pub enum EscrowError {
+pub enum Error {
     InvalidParticipant = 1,
     EmptyMilestones = 2,
     InvalidMilestoneAmount = 3,
@@ -209,12 +209,12 @@ pub enum EscrowError {
     MilestoneNotOverdue = 56,
 }
 
-/// Re-export the canonical [`EscrowError`] enum as [`Error`] so legacy call
-/// sites in the source code that use `Error::X` resolve to the same
+/// Re-export the canonical [`Error`] enum as [`EscrowError`] so legacy call
+/// sites in the source code that use `EscrowError::X` resolve to the same
 /// discriminant values the tests assert against.  Declared here in the
 /// crate root (not in `types.rs`) so it does not form a cross-file alias
 /// cycle (`lib.rs` → `types.rs` → crate root).
-pub use crate::EscrowError as Error;
+pub use crate::Error as EscrowError;
 
 
 impl Escrow {
