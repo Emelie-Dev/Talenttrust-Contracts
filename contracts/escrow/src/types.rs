@@ -1,4 +1,4 @@
-use soroban_sdk::{contracterror, contracttype, Address, String, Vec};
+use soroban_sdk::{contracttype, Address, String, Vec};
 
 // ── Indexer summary types ────────────────────────────────────────────────────
 
@@ -93,107 +93,21 @@ pub enum DataKey {
 }
 
 /// Canonical contract error type for all entrypoint-facing errors.
-#[contracterror]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
-#[repr(u32)]
-pub enum Error {
-    /// The specified milestone index is out of bounds.
-    IndexOutOfBounds = 3,
-    /// The milestone has already been released.
-    AlreadyReleased = 4,
-    /// The refund request is empty.
-    EmptyRefundRequest = 6,
-    /// Duplicate milestone indices specified in the refund request.
-    DuplicateMilestoneInRefund = 7,
-    /// The milestone has already been refunded.
-    AlreadyRefunded = 8,
-    /// Insufficient funds available to perform the operation.
-    InsufficientFunds = 9,
-    /// The requested contract was not found.
-    ContractNotFound = 10,
-    /// The caller is not authorized for this operation.
-    UnauthorizedRole = 11,
-    /// The contract requires an arbiter address but none was provided.
-    MissingArbiter = 12,
-    /// The provided arbiter address is invalid (e.g. same as client or freelancer).
-    InvalidArbiter = 13,
-    /// The client and freelancer addresses are identical or invalid.
-    InvalidParticipants = 14,
-    /// The amount must be strictly greater than zero.
-    AmountMustBePositive = 15,
-    /// The contract is in an invalid state for this operation.
-    InvalidState = 16,
-    /// The milestone has already been released.
-    MilestoneAlreadyReleased = 17,
-    /// The milestone has already been approved.
-    AlreadyApproved = 18,
-    /// The milestone has not received sufficient approvals to release.
-    InsufficientApprovals = 20,
-    /// The freelancer address does not match the stored freelancer.
-    FreelancerMismatch = 21,
-    /// The rating value is outside the allowed range (1 to 5).
-    InvalidRating = 22,
-    /// Reputation has already been issued for this contract.
-    ReputationAlreadyIssued = 23,
-    /// The milestone list cannot be empty.
-    EmptyMilestones = 25,
-    /// The milestone amount is invalid.
-    InvalidMilestoneAmount = 26,
-    /// A contract with the specified ID already exists.
-    ContractIdCollision = 27,
-    /// The contract ID has overflowed the maximum limit.
-    ContractIdOverflow = 28,
-    /// The comment string is empty.
-    EmptyComment = 29,
-    /// The comment string exceeds the maximum length limit.
-    CommentTooLong = 30,
-    /// The participant address is invalid.
-    InvalidParticipant = 31,
-    /// The deposit amount is invalid.
-    InvalidDepositAmount = 32,
-    /// The milestone configuration is invalid.
-    InvalidMilestone = 33,
-    /// The contract has already been initialized.
-    AlreadyInitialized = 34,
-    /// Insufficient accumulated fees available for extraction.
-    InsufficientAccumulatedFees = 35,
-    /// The contract has not been initialized.
-    NotInitialized = 36,
-    /// The contract is currently paused.
-    ContractPaused = 37,
-    /// Emergency mode is currently active.
-    EmergencyActive = 38,
-    /// Self-rating is not allowed.
-    SelfRating = 39,
-    /// The contract has not been completed.
-    NotCompleted = 40,
-    /// The requested contract status transition is invalid.
-    InvalidStatusTransition = 41,
-    /// An arbiter is required for this operation.
-    ArbiterRequired = 42,
-    /// The dispute split percentage is invalid.
-    InvalidDisputeSplit = 43,
-    /// The operation would violate the core accounting invariant.
-    AccountingInvariantViolated = 44,
-    /// Checked arithmetic operation resulted in an overflow.
-    PotentialOverflow = 45,
-    /// The contract has already been finalized.
-    AlreadyFinalized = 46,
-    /// The contract has already been cancelled.
-    AlreadyCancelled = 50,
-    /// The work evidence string exceeds the maximum length limit.
-    EvidenceTooLong = 47,
-    /// The governance admin rotation timelock has not elapsed.
-    TimelockNotElapsed = 48,
-    /// The provided protocol parameters are invalid.
-    InvalidProtocolParameters = 49,
-    /// The escrow cap would be exceeded by this operation.
-    EscrowCapExceeded = 51,
-    /// No settlement token has been bound for custody transfers.
-    SettlementTokenNotConfigured = 52,
-    /// The milestone deadline has not yet passed.
-    MilestoneNotOverdue = 53,
-}
+///
+/// Alias of [`crate::EscrowError`] (declared in `lib.rs`) so that the
+/// Soroban host error domain is registered exactly once at compile time.
+/// Source code that historically used `Error::X` continues to compile, and
+/// the discriminant value of every panic site now matches the discriminant
+/// value asserted by tests, eliminating the host-side "contract error code
+/// mismatch" failures caused by the previous dual-enum registration.
+///
+/// New variants that the canonical enum does not yet cover have been added
+/// directly to [`crate::EscrowError`] under discriminants `49..=60`.  Source
+/// sites that previously used names from the legacy 53-variant `Error` enum
+/// now resolve through this alias to the same numeric slot, so
+/// `assert_contract_error(..., EscrowError::X)` continues to compare
+/// equal-against-stored on every panic.
+pub use crate::EscrowError as Error;
 
 /// Contract lifecycle states
 #[contracttype]

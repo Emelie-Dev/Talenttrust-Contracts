@@ -178,6 +178,53 @@ pub enum EscrowError {
     /// callers can decode the timelock violation on either enum.  Numeric
     /// value matches for cross-enum `assert_contract_error` comparisons.
     TimelockNotElapsed = 48,
+    /// Specified milestone index is out of bounds.  Alias of the legacy
+    /// [`crate::types::Error::IndexOutOfBounds`] discriminant (3) so source
+    /// sites that panic with `Error::IndexOutOfBounds` continue to compile
+    /// and produce a stable host error code.
+    IndexOutOfBounds = 49,
+    /// Plural form of `InvalidParticipant` retained from the legacy
+    /// [`crate::types::Error::InvalidParticipants`] so call sites calling the
+    /// plural name continue to compile.  Semantically identical.
+    InvalidParticipants = 50,
+    /// Per-milestone "already released" designation retained from the legacy
+    /// [`crate::types::Error::MilestoneAlreadyReleased`] variant.  Equivalent
+    /// in meaning to [`EscrowError::AlreadyReleased`] but exposed under the
+    /// legacy name for backward compatibility with tests and source.
+    MilestoneAlreadyReleased = 51,
+    /// Per-milestone approval stage.  Retained from the legacy
+    /// [`crate::types::Error::AlreadyApproved`] variant for the approvals flow.
+    AlreadyApproved = 52,
+    /// Approval-stage failure: not enough sustained approvals to release.
+    /// Retained from [`crate::types::Error::InsufficientApprovals`].
+    InsufficientApprovals = 53,
+    /// Internal allocator error: a contract id collision was detected.
+    /// Retained from [`crate::types::Error::ContractIdCollision`].
+    ContractIdCollision = 54,
+    /// Internal allocator error: the contract id space overflowed.
+    /// Retained from [`crate::types::Error::ContractIdOverflow`].
+    ContractIdOverflow = 55,
+    /// Cancelled contract guard.  Retained from the legacy
+    /// [`crate::types::Error::AlreadyCancelled`] variant.  Tests may also
+    /// assert [`EscrowError::ContractCancelled`] (discriminant 37); this
+    /// variant co-exists for source sites that historically used the legacy
+    /// name and is registered to the same numeric 56+ slot to avoid
+    /// collision with [`EscrowError::ContractCancelled`].
+    AlreadyCancelled = 56,
+    /// Work-evidence string exceeded the maximum length.  Retained from
+    /// [`crate::types::Error::EvidenceTooLong`].
+    EvidenceTooLong = 57,
+    /// Governance parameter validation failure.  Retained from
+    /// [`crate::types::Error::InvalidProtocolParameters`].
+    InvalidProtocolParameters = 58,
+    /// Per-milestone funded total would exceed the configured escrow cap.
+    /// Retained from [`crate::types::Error::EscrowCapExceeded`]; tests may
+    /// also assert [`EscrowError::TotalCapExceeded`] (discriminant 33).  Both
+    /// co-exist; migrate call sites opportunistically.
+    EscrowCapExceeded = 59,
+    /// A milestone deadline is set but the deadline has not yet expired.
+    /// Retained from [`crate::types::Error::MilestoneNotOverdue`].
+    MilestoneNotOverdue = 60,
 }
 
 impl Escrow {

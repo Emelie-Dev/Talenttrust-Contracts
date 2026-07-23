@@ -36,18 +36,36 @@ jobs:
       - name: Build contract
         run: cargo build --workspace --release
 
+      - name: Build contract
+        # Compile the contract first so its dependent crate metadata is
+        # cached before the lint and test steps.
+        run: cargo build --workspace --release
+
+      - name: cargo fmt -- --check
+        # Required by issue #816: `Run cargo fmt, cargo clippy --all-targets
+        # -- -D warnings, and cargo test`.  Local pre-push should pass the
+        # same gate.
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy --all-targets -- -D warnings
+        # Required by issue #816.  The crate root already declares
+        # `#![allow(clippy::...)]` for legacy suppressions; this gate is
+        # expected to pass on the canonical source.
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
       - name: Compile tests
-        # Compilation gate: succeeds when every test module (including this
-        # PR's new `events_boundaries`) typechecks against the contract.
+        # Compilation gate: succeeds when every test module typechecks
+        # against the contract.  The Error ↔ EscrowError alias in this
+        # PR ensures every test compiles against the single canonical
+        # `#[contracterror]` enum.
         run: cargo test --workspace --quiet --no-run
 
-      - name: Run new boundary tests
-        # Filter to `events_boundaries` so this PR's scope is verified on every
-        # CI run.  Upstream `main` carries 188 unrelated pre-existing runtime
-        # test failures (`Error`/`EscrowError` discriminant misalignment
-        # across `src/` modules); reconciling them is a separate scoped fix
-        # tracked in a follow-up issue.
-        run: cargo test -p escrow events_boundaries --quiet
+      - name: Run escrow tests (full suite)
+        # Run the entire `cargo test -p escrow` suite.  The Error ↔
+        # EscrowError reconciliation (alias + 12 supplemental variants in
+        # `EscrowError`) eliminates the pre-existing 188 host-side "contract
+        # error code mismatch" failures, so the full suite is now green.
+        run: cargo test -p escrow --quiet
 
       - name: Build Rust documentation
         run: cargo doc --workspace --no-deps
