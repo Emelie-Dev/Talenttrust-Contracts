@@ -33,7 +33,7 @@ mod release_authorization;
 mod reputation;
 mod require_milestone;
 mod security;
-mod settlement_rounding;
+mod settlement_boundaries;
 mod ttl_tests;
 
 // --- Shared constants ---
