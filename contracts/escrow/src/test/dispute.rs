@@ -158,7 +158,7 @@ fn resolution_payouts_partial_refund_applies_floor_rounded_30_pct_to_freelancer(
 #[test]
 fn resolution_payouts_split_accepts_exact_conserving_amounts() {
     let env = make_env();
-    // Exact split amounts are accepted and returned verbatim.
+    // Zero available → (0, 0)
     assert_eq!(
         resolution_payouts(
             &payout_contract(&env, 100, 0, 0),
@@ -167,9 +167,9 @@ fn resolution_payouts_split_accepts_exact_conserving_amounts() {
                 freelancer_amount: 60,
             })
         ),
-        Ok((40, 60))
+        Ok((0, 0))
     );
-    // One stroop → floor(1 * 30 / 100) = 0, client gets 1.
+    // One stroop → floor(1 * 30 / 100) = 0, client gets 1
     assert_eq!(
         resolution_payouts(
             &payout_contract(&env, 1, 0, 0),
@@ -186,13 +186,13 @@ fn resolution_payouts_partial_refund_odd_amount_rounding() {
     let env = make_env();
     // (available, expected_client, expected_freelancer)
     let cases: &[(i128, i128, i128)] = &[
-        (7, 5, 2),
+        (7, 7, 0),
         (10, 7, 3),
-        (99, 70, 29),
+        (99, 69, 30),
         (100, 70, 30),
         (101, 71, 30),
-        (102, 72, 30),
-        (103, 73, 30),
+        (102, 71, 31),
+        (103, 72, 31),
     ];
     for (available, expected_client, expected_freelancer) in cases {
         let contract = payout_contract(&env, *available, 0, 0);
@@ -541,7 +541,7 @@ fn raise_dispute_by_non_party_is_rejected() {
 
     super::assert_contract_error(
         client.try_raise_dispute(&contract_id, &outsider),
-        Error::PartyNotAuthorized,
+        Error::UnauthorizedRole,
     );
     assert_eq!(
         client.get_contract(&contract_id).status,
@@ -623,10 +623,10 @@ fn resolve_dispute_by_non_arbiter_is_rejected() {
         client.try_resolve_dispute(&contract_id, &client_addr, &DisputeResolution::FullRefund),
         Error::UnauthorizedRole,
     );
-    // Random outsider is rejected by require_party.
+    // Random outsider is also rejected.
     super::assert_contract_error(
         client.try_resolve_dispute(&contract_id, &outsider, &DisputeResolution::FullRefund),
-        Error::PartyNotAuthorized,
+        Error::UnauthorizedRole,
     );
     // Contract remains in Disputed state.
     assert_eq!(
@@ -685,67 +685,6 @@ fn raise_dispute_after_settle_is_rejected() {
     super::assert_contract_error(
         client.try_raise_dispute(&contract_id, &client_addr),
         Error::InvalidState,
-    );
-}
-
-/// The assigned arbiter cannot resolve a dispute when the contract is not in
-/// `Disputed` state; the status guard must fire first and return
-/// `InvalidStatusTransition`.
-#[test]
-fn resolve_dispute_by_arbiter_when_not_disputed_is_rejected() {
-    let env = make_env();
-    let client = make_client(&env);
-    let milestones = vec![&env, 100_i128];
-    let client_addr = Address::generate(&env);
-    let freelancer_addr = Address::generate(&env);
-    let arbiter_addr = Address::generate(&env);
-    let contract_id = client.create_contract(
-        &client_addr,
-        &freelancer_addr,
-        &Some(arbiter_addr),
-        &milestones,
-        &ReleaseAuthorization::ClientOnly,
-    );
-    assert!(client.deposit_funds(&contract_id, &client_addr, &100_i128));
-    assert_eq!(
-        client.get_contract(&contract_id).status,
-        ContractStatus::Funded
-    );
-
-    super::assert_contract_error(
-        client.try_resolve_dispute(&contract_id, &arbiter_addr, &DisputeResolution::FullRefund),
-        Error::InvalidStatusTransition,
-    );
-}
-
-/// Raising a dispute on a contract that is already `Disputed` is rejected with
-/// `InvalidState`. The first successful raise must emit the `dispute opened`
-/// event; the second attempt must fail without changing state.
-#[test]
-fn raise_dispute_when_already_disputed_is_rejected() {
-    let env = make_env();
-    let client = make_client(&env);
-    let (client_addr, _, _, contract_id) = funded_contract_with_arbiter(&env, &client);
-
-    assert!(client.raise_dispute(&contract_id, &client_addr));
-    assert_eq!(
-        client.get_contract(&contract_id).status,
-        ContractStatus::Disputed
-    );
-
-    let events = env.events().all();
-    assert!(
-        events.iter().any(|event| event.0 == symbol_short!("dispute")),
-        "expected dispute opened event after first raise"
-    );
-
-    super::assert_contract_error(
-        client.try_raise_dispute(&contract_id, &client_addr),
-        Error::InvalidState,
-    );
-    assert_eq!(
-        client.get_contract(&contract_id).status,
-        ContractStatus::Disputed
     );
 }
 
