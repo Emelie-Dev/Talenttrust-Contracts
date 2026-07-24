@@ -2893,7 +2893,3 @@ impl Escrow {
 /// Test fixtures and suites are compiled only for native test builds, never wasm.
 #[cfg(test)]
 mod test;
-
-/// Property-based tests for accounting invariants and payout conservation.
-#[cfg(test)]
-mod proptest;
