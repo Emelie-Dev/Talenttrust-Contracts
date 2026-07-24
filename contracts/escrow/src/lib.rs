@@ -2520,6 +2520,136 @@ impl Escrow {
     // Dispute management
     // -----------------------------------------------------------------------
 
+    /// Returns true when arbiter assignment or reassignment is allowed for the
+    /// given contract status (pre-dispute, non-terminal states).
+    fn is_arbiter_mutation_allowed(status: ContractStatus) -> bool {
+        matches!(
+            status,
+            ContractStatus::Created
+                | ContractStatus::Funded
+                | ContractStatus::PartiallyFunded
+        )
+    }
+
+    /// Assigns an arbiter to a contract that was created without one.
+    ///
+    /// Only the client or freelancer may authorize the call. The arbiter must be
+    /// distinct from both parties. Assignment is permitted only while the contract
+    /// is in `Created`, `Funded`, or `PartiallyFunded` state and no arbiter is
+    /// already recorded.
+    ///
+    /// # Errors
+    /// * `UnauthorizedRole` - Caller is not the client or freelancer
+    /// * `InvalidArbiter` - Proposed arbiter equals client or freelancer
+    /// * `InvalidState` - Arbiter already assigned or status disallows assignment
+    pub fn assign_arbiter(
+        env: Env,
+        contract_id: u32,
+        caller: Address,
+        arbiter: Address,
+    ) -> bool {
+        Self::require_initialized(&env);
+        Self::require_not_paused(&env);
+        caller.require_auth();
+
+        let mut contract: Contract = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Contract(contract_id))
+            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
+
+        ttl::extend_contract_ttl(&env, contract_id);
+        Self::require_not_finalized(&env, contract_id);
+
+        if caller != contract.client && caller != contract.freelancer {
+            env.panic_with_error(Error::UnauthorizedRole);
+        }
+        if contract.arbiter.is_some() {
+            env.panic_with_error(Error::InvalidState);
+        }
+        if !Self::is_arbiter_mutation_allowed(contract.status) {
+            env.panic_with_error(Error::InvalidState);
+        }
+        if arbiter == contract.client || arbiter == contract.freelancer {
+            env.panic_with_error(Error::InvalidArbiter);
+        }
+
+        contract.arbiter = Some(arbiter.clone());
+        env.storage()
+            .persistent()
+            .set(&DataKey::Contract(contract_id), &contract);
+
+        ttl::extend_contract_ttl(&env, contract_id);
+
+        env.events().publish(
+            (symbol_short!("arbiter"), symbol_short!("assign")),
+            (contract_id, caller, arbiter),
+        );
+
+        true
+    }
+
+    /// Reassigns the arbiter on a contract that already has one assigned.
+    ///
+    /// Only the client or freelancer may authorize the call. Reassignment is
+    /// rejected while the contract is disputed or in a terminal state. Setting
+    /// the same arbiter address is a no-op that returns `true` without mutation.
+    ///
+    /// # Errors
+    /// * `UnauthorizedRole` - Caller is not the client or freelancer
+    /// * `InvalidArbiter` - New arbiter equals client or freelancer
+    /// * `InvalidState` - No arbiter assigned or status disallows reassignment
+    pub fn reassign_arbiter(
+        env: Env,
+        contract_id: u32,
+        caller: Address,
+        new_arbiter: Address,
+    ) -> bool {
+        Self::require_initialized(&env);
+        Self::require_not_paused(&env);
+        caller.require_auth();
+
+        let mut contract: Contract = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Contract(contract_id))
+            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
+
+        ttl::extend_contract_ttl(&env, contract_id);
+        Self::require_not_finalized(&env, contract_id);
+
+        if caller != contract.client && caller != contract.freelancer {
+            env.panic_with_error(Error::UnauthorizedRole);
+        }
+        let current = match &contract.arbiter {
+            Some(existing) => existing.clone(),
+            None => env.panic_with_error(Error::InvalidState),
+        };
+        if !Self::is_arbiter_mutation_allowed(contract.status) {
+            env.panic_with_error(Error::InvalidState);
+        }
+        if new_arbiter == current {
+            return true;
+        }
+        if new_arbiter == contract.client || new_arbiter == contract.freelancer {
+            env.panic_with_error(Error::InvalidArbiter);
+        }
+
+        contract.arbiter = Some(new_arbiter.clone());
+        env.storage()
+            .persistent()
+            .set(&DataKey::Contract(contract_id), &contract);
+
+        ttl::extend_contract_ttl(&env, contract_id);
+
+        env.events().publish(
+            (symbol_short!("arbiter"), symbol_short!("reassign")),
+            (contract_id, caller, new_arbiter),
+        );
+
+        true
+    }
+
     /// Opens a dispute for a funded or partially funded escrow contract.
     ///
     /// This entrypoint transitions the contract status to `Disputed`, preventing

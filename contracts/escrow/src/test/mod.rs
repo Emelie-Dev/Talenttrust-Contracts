@@ -10,7 +10,7 @@ use crate::{
 // --- Submodules ---
 mod accept_reject_boundaries;
 mod approval_expiry;
-mod boundaries;
+mod arbiter_auth;
 mod cancel_contract;
 mod client_migration;
 mod contract_id_allocation;
