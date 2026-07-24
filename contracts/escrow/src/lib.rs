@@ -82,8 +82,8 @@ pub use ttl::{ADMIN_ROTATION_MIN_DELAY_LEDGERS, PENDING_MIGRATION_TTL_LEDGERS};
 pub use types::{
     Contract, ContractBounds, ContractStatus, ContractSummary, DataKey, DepositMode,
     DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone, MilestoneApprovals,
-    MilestoneSummary, PendingAdminProposal, ReadinessChecklist, ReleaseAuthorization, Reputation,
-    SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION,
+    MilestoneSummary, PendingAdminProposal, ProtocolState, ReadinessChecklist,
+    ReleaseAuthorization, Reputation, SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION,
 };
 
 // Maximum bounds constants - re-export from amount_validation for API visibility
@@ -401,6 +401,81 @@ impl Escrow {
     /// Returns the stored governance admin address.
     pub fn get_admin(env: Env) -> Option<Address> {
         env.storage().persistent().get(&DataKey::Admin)
+    }
+
+    /// Returns a single, unified snapshot of the escrow protocol's global state.
+    ///
+    /// This is an O(1) read-only view: it performs no storage writes and never
+    /// panics.  Every field falls back to a sensible default when the
+    /// corresponding storage key has not been written yet (e.g. before
+    /// `initialize` is called), so callers can always consume the result
+    /// without branching on errors.
+    ///
+    /// # Use cases
+    ///
+    /// * **Indexer bootstrapping** — fetch the entire protocol configuration
+    ///   in one RPC round-trip instead of 10+ separate calls.
+    /// * **Dashboard / admin UI** — display a coherent state without
+    ///   reconstructing it from individual getters.
+    /// * **Pre-flight checks** — inspect `paused`, `emergency`,
+    ///   `settlement_token`, and `next_contract_id` atomically.
+    ///
+    /// # Returns
+    /// A [`ProtocolState`] struct whose fields mirror the individual getters
+    /// (`get_admin`, `is_paused`, `is_emergency`, `get_settlement_token`,
+    /// `get_next_contract_id`, `get_protocol_fee_bps`,
+    /// `get_accumulated_protocol_fees`, `get_governed_parameters`,
+    /// `get_mainnet_readiness_info`) but are read in a single pass.
+    pub fn get_protocol_state(env: Env) -> ProtocolState {
+        let governed = env
+            .storage()
+            .persistent()
+            .get::<_, GovernedParameters>(&DataKey::GovernedParameters);
+
+        ProtocolState {
+            initialized: env
+                .storage()
+                .persistent()
+                .get::<_, bool>(&DataKey::Initialized)
+                .unwrap_or(false),
+            admin: env.storage().persistent().get(&DataKey::Admin),
+            paused: env
+                .storage()
+                .persistent()
+                .get::<_, bool>(&DataKey::Paused)
+                .unwrap_or(false),
+            emergency: env
+                .storage()
+                .persistent()
+                .get::<_, bool>(&DataKey::Emergency)
+                .unwrap_or(false),
+            settlement_token: env.storage().persistent().get(&DataKey::SettlementToken),
+            next_contract_id: env
+                .storage()
+                .persistent()
+                .get::<_, u32>(&DataKey::NextContractId)
+                .unwrap_or(1),
+            protocol_fee_bps: governed
+                .as_ref()
+                .map(|g| g.protocol_fee_bps)
+                .unwrap_or_else(|| {
+                    env.storage()
+                        .persistent()
+                        .get::<_, u32>(&DataKey::ProtocolFeeBps)
+                        .unwrap_or(0)
+                }),
+            accumulated_protocol_fees: env
+                .storage()
+                .persistent()
+                .get::<_, i128>(&DataKey::AccumulatedProtocolFees)
+                .unwrap_or(0),
+            max_escrow_total_stroops: governed.map(|g| g.max_escrow_total_stroops),
+            readiness: env
+                .storage()
+                .persistent()
+                .get(&DataKey::ReadinessChecklist)
+                .unwrap_or_default(),
+        }
     }
 
     /// Returns the protocol-wide hard-coded bounds used by validation paths.
