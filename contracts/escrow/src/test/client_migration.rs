@@ -11,7 +11,10 @@ use soroban_sdk::{
     Address, Env, IntoVal, Symbol, TryFromVal, Val,
 };
 
-use super::{assert_contract_error, create_contract, register_client, total_milestone_amount};
+use super::{
+    assert_contract_error, create_contract, has_event_with_topic, register_client,
+    total_milestone_amount,
+};
 
 // ---------------------------------------------------------------------------
 // Helper: forcibly inject a contract status via env.as_contract.
@@ -25,28 +28,6 @@ fn set_escrow_status(env: &Env, escrow_addr: &Address, id: u32, status: Contract
         contract.status = status;
         env.storage().persistent().set(&key, &contract);
     });
-}
-
-// ---------------------------------------------------------------------------
-// Helper: check whether any emitted event has a given Symbol as its first topic.
-//
-// env.events().all() returns Vec<(Address, Vec<Val>, Val)>:
-//   tuple.0 = the contract Address that emitted the event
-//   tuple.1 = the topics Vec<Val>  ← Symbol is topics[0]
-//   tuple.2 = the data Val
-// ---------------------------------------------------------------------------
-
-fn has_event_with_topic(env: &Env, topic: &Symbol) -> bool {
-    env.events().all().iter().any(|event| {
-        let topics = &event.1;
-        topics.len() > 0 && {
-            if let Ok(sym) = Symbol::try_from_val(env, &topics.get(0).unwrap()) {
-                sym == *topic
-            } else {
-                false
-            }
-        }
-    })
 }
 
 // ---------------------------------------------------------------------------

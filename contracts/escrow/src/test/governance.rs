@@ -1,6 +1,6 @@
-use super::register_client;
-use soroban_sdk::testutils::{Address as _, Events};
-use soroban_sdk::{Address, Env, Symbol, TryFromVal};
+use super::{has_event_with_topic, has_event_with_topics, register_client};
+use soroban_sdk::testutils::Address as _;
+use soroban_sdk::{Address, Env, Symbol};
 
 #[test]
 fn admin_transfer_propose_and_accept_happy_path() {
@@ -193,21 +193,12 @@ fn cancel_emits_event() {
     client.propose_governance_admin(&proposed);
     client.cancel_governance_admin_proposal();
 
-    let events = env.events().all();
     let admin_topic = soroban_sdk::symbol_short!("admin");
     let cancelled_topic = soroban_sdk::Symbol::new(&env, "cancelled");
-    let found_cancelled = events.iter().any(|event| {
-        event.1.len() >= 2
-            && Symbol::try_from_val(&env, &event.1.get(0).unwrap())
-                .ok()
-                .as_ref()
-                == Some(&admin_topic)
-            && Symbol::try_from_val(&env, &event.1.get(1).unwrap())
-                .ok()
-                .as_ref()
-                == Some(&cancelled_topic)
-    });
-    assert!(found_cancelled, "cancel event should be emitted");
+    assert!(
+        has_event_with_topics(&env, &[admin_topic, cancelled_topic]),
+        "cancel event should be emitted"
+    );
 }
 
 #[test]
@@ -222,19 +213,10 @@ fn propose_emits_event() {
 
     client.propose_governance_admin(&proposed);
 
-    let events = env.events().all();
     let admin_topic = soroban_sdk::symbol_short!("admin");
     let proposed_topic = soroban_sdk::Symbol::new(&env, "proposed");
-    let found_proposed = events.iter().any(|event| {
-        event.1.len() >= 2
-            && Symbol::try_from_val(&env, &event.1.get(0).unwrap())
-                .ok()
-                .as_ref()
-                == Some(&admin_topic)
-            && Symbol::try_from_val(&env, &event.1.get(1).unwrap())
-                .ok()
-                .as_ref()
-                == Some(&proposed_topic)
-    });
-    assert!(found_proposed, "propose event should be emitted");
+    assert!(
+        has_event_with_topics(&env, &[admin_topic, proposed_topic]),
+        "propose event should be emitted"
+    );
 }

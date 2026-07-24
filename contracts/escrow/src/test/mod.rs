@@ -1,7 +1,10 @@
 #![cfg(test)]
 #![allow(dead_code)]
 
-use soroban_sdk::{testutils::Address as _, token::StellarAssetClient, vec, Address, Env, Vec};
+use soroban_sdk::{
+    testutils::Address as _, testutils::Events as _, token::StellarAssetClient, vec, Address, Env,
+    Symbol, TryFromVal, Vec,
+};
 
 use crate::{
     Contract, ContractStatus, Escrow, EscrowClient, EscrowError, Milestone, ReleaseAuthorization,
@@ -26,6 +29,44 @@ mod release_authorization;
 mod reputation;
 mod security;
 mod ttl_tests;
+
+// --- Shared helpers ---
+
+/// Check whether any emitted event has `topic` as its first topic.
+///
+/// `env.events().all()` returns `Vec<(Address, Vec<Val>, Val)>` where
+/// tuple.1 is the topics `Vec<Val>`.  The first topic is always a `Symbol`.
+pub fn has_event_with_topic(env: &Env, topic: &Symbol) -> bool {
+    env.events().all().iter().any(|event| {
+        let topics = &event.1;
+        topics.len() > 0
+            && Symbol::try_from_val(env, &topics.get(0).unwrap())
+                .ok()
+                .as_ref()
+                == Some(topic)
+    })
+}
+
+/// Check whether any emitted event has `expected` as its first N topics.
+///
+/// All `expected` symbols must match the corresponding position in the
+/// event's topic list.  An event with fewer topics than `expected` is
+/// rejected immediately.
+pub fn has_event_with_topics(env: &Env, expected: &[Symbol]) -> bool {
+    let want = expected.len() as u32;
+    env.events().all().iter().any(|event| {
+        let topics = &event.1;
+        if topics.len() < want {
+            return false;
+        }
+        (0..want).all(|i| {
+            Symbol::try_from_val(env, &topics.get(i).unwrap())
+                .ok()
+                .as_ref()
+                == Some(&expected[i as usize])
+        })
+    })
+}
 
 // --- Shared constants ---
 
@@ -347,5 +388,78 @@ pub fn assert_contract_error<
             "expected contract error {:?}, got unexpected result variant: {:?}",
             expected, _other
         ),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests for the shared event helpers
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod event_helper_tests {
+    use soroban_sdk::{symbol_short, testutils::Address as _, Address, Env, Symbol};
+
+    use super::{has_event_with_topic, has_event_with_topics, register_client};
+    use crate::{Escrow, EscrowClient};
+
+    #[test]
+    fn returns_true_when_topic_matches() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let _client = register_client(&env);
+        // register_client calls initialize, which emits ("init", "admin_set")
+
+        assert!(has_event_with_topic(&env, &symbol_short!("init")));
+    }
+
+    #[test]
+    fn returns_false_when_no_events_emitted() {
+        let env = Env::default();
+        env.mock_all_auths();
+        assert!(!has_event_with_topic(
+            &env,
+            &Symbol::new(&env, "nonexistent"),
+        ));
+    }
+
+    #[test]
+    fn returns_false_when_topic_does_not_match() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(Escrow, ());
+        let client = EscrowClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        assert!(!has_event_with_topic(
+            &env,
+            &Symbol::new(&env, "wrong_topic"),
+        ));
+    }
+
+    #[test]
+    fn multi_topic_matches_all() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let _client = register_client(&env);
+        // register_client calls initialize, which emits ("init", "admin_set")
+
+        assert!(has_event_with_topics(
+            &env,
+            &[symbol_short!("init"), Symbol::new(&env, "admin_set")],
+        ));
+    }
+
+    #[test]
+    fn multi_topic_rejects_partial_match() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let _client = register_client(&env);
+        // register_client calls initialize, which emits ("init", "admin_set")
+
+        assert!(!has_event_with_topics(
+            &env,
+            &[symbol_short!("init"), Symbol::new(&env, "wrong")],
+        ));
     }
 }

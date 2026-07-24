@@ -23,7 +23,7 @@ use soroban_sdk::{
     TryFromVal,
 };
 
-use super::register_client;
+use super::{has_event_with_topic, register_client};
 use crate::{ContractStatus, Error, Escrow, EscrowClient, EscrowError, ReleaseAuthorization};
 
 // ---------------------------------------------------------------------------
@@ -714,14 +714,7 @@ fn release_emits_events() {
     client.release_milestone(&contract_id, &client_addr, &0);
 
     // Check release event was emitted
-    let events = env.events().all();
-    assert!(events.len() > 0);
-
-    let topic_val = Symbol::new(&env, "milestone_released");
-    let release_event = events.iter().find(|event| {
-        event.1.len() > 0 && Symbol::from_val(&env, &event.1.get(0).unwrap()) == topic_val
-    });
-    assert!(release_event.is_some());
+    assert!(has_event_with_topic(&env, &Symbol::new(&env, "milestone_released")));
 }
 
 #[test]
