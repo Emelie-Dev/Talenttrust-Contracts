@@ -145,7 +145,7 @@ fn cancel_rejects_unauthorized_caller() {
 
     super::assert_contract_error(
         client.try_cancel_contract(&contract_id, &unauthorized),
-        Error::UnauthorizedRole,
+        Error::PartyNotAuthorized,
     );
 
     assert_eq!(

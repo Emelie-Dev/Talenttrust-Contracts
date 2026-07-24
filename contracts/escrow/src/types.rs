@@ -229,10 +229,9 @@ pub enum Error {
     SettlementTokenNotConfigured = 52,
     /// The milestone deadline has not yet passed.
     MilestoneNotOverdue = 53,
-    /// The release indices vector is empty.
-    EmptyReleaseIndices = 54,
-    /// Duplicate milestone indices specified in the release request.
-    DuplicateMilestoneInRelease = 55,
+    /// The caller is not a recognized party (client, freelancer, or arbiter) of
+    /// this contract.  Returned by the shared `require_party` helper.
+    PartyNotAuthorized = 54,
 }
 
 /// Contract lifecycle states

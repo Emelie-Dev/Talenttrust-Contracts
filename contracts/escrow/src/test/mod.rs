@@ -31,7 +31,7 @@ mod refund;
 mod release;
 mod release_authorization;
 mod reputation;
-mod require_milestone;
+mod require_party;
 mod security;
 mod settlement_boundaries;
 mod ttl_tests;

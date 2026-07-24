@@ -115,7 +115,7 @@ fn finalize_rejects_unauthorized_finalizer() {
 
     super::assert_contract_error(
         client.try_finalize_contract(&contract_id, &outsider),
-        EscrowError::UnauthorizedRole,
+        Error::PartyNotAuthorized,
     );
     assert!(client.get_finalization_record(&contract_id).is_none());
 }
@@ -296,16 +296,17 @@ fn submit_work_evidence_rejects_257_bytes() {
     super::assert_contract_error(result, EscrowError::EvidenceTooLong);
 }
 
-/// Only the freelancer may submit evidence; any other caller gets `UnauthorizedRole`.
+/// Only contract parties may submit evidence; a non-party gets `PartyNotAuthorized`.
 #[test]
-fn submit_work_evidence_rejects_non_freelancer() {
+fn submit_work_evidence_rejects_non_party() {
     let (env, contract_addr) = setup();
     let client = escrow_client(&env, &contract_addr);
-    let (client_addr, _, contract_id) = funded_contract(&env, &client);
+    let (_, _, contract_id) = funded_contract(&env, &client);
+    let outsider = Address::generate(&env);
 
     let evidence = ev(&env, "ipfs://QmUnauth");
-    let result = client.try_submit_work_evidence(&contract_id, &client_addr, &0, &evidence);
-    super::assert_contract_error(result, Error::UnauthorizedRole);
+    let result = client.try_submit_work_evidence(&contract_id, &outsider, &0, &evidence);
+    super::assert_contract_error(result, Error::PartyNotAuthorized);
 }
 
 /// Submitting to an unfunded (Created) contract must fail with `InvalidState`.

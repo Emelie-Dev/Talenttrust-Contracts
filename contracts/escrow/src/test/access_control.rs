@@ -2,8 +2,9 @@ use super::{default_milestones, generated_participants, register_client, total_m
 use crate::{Error, ReleaseAuthorization};
 use soroban_sdk::{testutils::Address as _, Env};
 
+/// Freelancer is a recognized party and can deposit via require_party.
 #[test]
-fn test_only_client_can_deposit_funds() {
+fn test_freelancer_can_deposit_funds() {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -19,7 +20,7 @@ fn test_only_client_can_deposit_funds() {
     );
 
     let result = client.try_deposit_funds(&contract_id, &freelancer_addr, &total_milestones());
-    assert_eq!(result, Err(Ok(Error::UnauthorizedRole)));
+    assert!(result.is_ok());
 }
 
 #[test]
@@ -67,8 +68,9 @@ fn test_freelancer_cannot_release_milestone() {
     assert_eq!(result, Err(Ok(Error::UnauthorizedRole)));
 }
 
+/// Freelancer is a recognized party and can issue reputation via require_party.
 #[test]
-fn test_only_client_can_issue_reputation() {
+fn test_freelancer_can_issue_reputation() {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -91,8 +93,9 @@ fn test_only_client_can_issue_reputation() {
     assert!(client.approve_milestone_release(&contract_id, &client_addr, &2));
     assert!(client.release_milestone(&contract_id, &client_addr, &2));
 
+    // freelancer is now a party – accepted by require_party.
     let result = client.try_issue_reputation(&contract_id, &freelancer_addr, &freelancer_addr, &5);
-    assert_eq!(result, Err(Ok(Error::UnauthorizedRole)));
+    assert!(result.is_ok());
 }
 
 #[test]

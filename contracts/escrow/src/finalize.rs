@@ -70,15 +70,6 @@ impl Escrow {
         }
     }
 
-    fn require_finalizer_role(env: &Env, contract: &Contract, finalizer: &Address) {
-        let is_client = *finalizer == contract.client;
-        let is_freelancer = *finalizer == contract.freelancer;
-        let is_arbiter = contract.arbiter.clone().is_some_and(|a| a == *finalizer);
-        if !is_client && !is_freelancer && !is_arbiter {
-            env.panic_with_error(Error::UnauthorizedRole);
-        }
-    }
-
     fn summarize_contract(env: &Env, contract_id: u32, contract: &Contract) -> ContractSummary {
         let milestone_key = Symbol::new(env, "milestones");
         let milestones: Vec<Milestone> = env
@@ -149,7 +140,7 @@ pub fn finalize_contract_impl(env: &Env, contract_id: u32, finalizer: Address) -
 
     let contract = Escrow::load_contract_for_finalization(&env, contract_id);
     Escrow::require_not_finalized(&env, contract_id);
-    Escrow::require_finalizer_role(&env, &contract, &finalizer);
+    Escrow::require_party(&env, &contract, &finalizer);
 
     Escrow::require_finalizable_status(&env, contract.status);
 
