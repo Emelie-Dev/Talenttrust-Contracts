@@ -1,11 +1,12 @@
 use crate::{
     accumulate_amounts, ttl, Contract, ContractStatus, DataKey, Error, EscrowError, Milestone,
 };
-use soroban_sdk::{Address, Env, Symbol, Vec};
+use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
 
 /// Validated deposit data that is safe to use before any token transfer.
 pub struct ValidatedDeposit {
     pub contract: Contract,
+    pub deposit_amount: i128,
     pub new_funded_amount: i128,
     pub new_total_deposited: i128,
     pub total_amount: i128,
@@ -79,6 +80,7 @@ pub fn validate_deposit(
 
     ValidatedDeposit {
         contract,
+        deposit_amount: amount,
         new_funded_amount,
         new_total_deposited,
         total_amount,
@@ -107,6 +109,11 @@ pub fn deposit_funds_impl(env: &Env, contract_id: u32, caller: Address, amount: 
 }
 
 /// Apply a deposit after the caller has been validated and the token transfer succeeded.
+///
+/// On success, emits `("deposit", contract_id)` with
+/// `(deposit_amount, funded_amount, total_deposited)` as data. The event is
+/// published only after the contract record has been persisted, so indexers can
+/// treat it as confirmation of the storage state they observe.
 pub fn apply_validated_deposit(
     env: &Env,
     contract_id: u32,
@@ -115,11 +122,11 @@ pub fn apply_validated_deposit(
 ) -> bool {
     let ValidatedDeposit {
         mut contract,
+        deposit_amount,
         new_funded_amount,
         new_total_deposited,
         total_amount,
     } = validated;
-
     ttl::extend_contract_ttl(&env, contract_id);
 
     caller.require_auth();
@@ -138,6 +145,17 @@ pub fn apply_validated_deposit(
     env.storage()
         .persistent()
         .set(&DataKey::Contract(contract_id), &contract);
+
+    // Keep the event specific to this storage transition. `deposit` is a
+    // seven-character symbol, distinct from all other escrow event topics.
+    env.events().publish(
+        (symbol_short!("deposit"), contract_id),
+        (
+            deposit_amount,
+            contract.funded_amount,
+            contract.total_deposited,
+        ),
+    );
 
     ttl::extend_contract_ttl(&env, contract_id);
 
