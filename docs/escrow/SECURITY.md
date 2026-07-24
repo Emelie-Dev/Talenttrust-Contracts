@@ -33,9 +33,29 @@ This document reflects the escrow API currently implemented in `contracts/escrow
   contract.
 - `cancel_contract` requires client or freelancer authorization and rejects
   completed or already-cancelled contracts.
-- `finalize_contract` requires client, freelancer, or assigned arbiter
-  authorization, is allowed only from `Completed` or `Disputed`, and locks
-  future contract-specific mutations with `AlreadyFinalized`.
+- `finalize_contract` enforces the following guards in evaluation order:
+  1. **require_not_paused** — rejects with `ContractPaused` when the pause flag
+     is active; rejects with `EmergencyActive` when the emergency flag is set
+     and the pause flag is not (the check inspects `Paused` before `Emergency`,
+     so activating the emergency pause sets both flags and surfaces
+     `ContractPaused`).
+  2. **finalizer.require_auth()** — the caller must authorize the transaction.
+  3. **load_contract** — rejects with `ContractNotFound` for an unknown
+     `contract_id`.
+  4. **require_not_finalized** — rejects with `AlreadyFinalized` if a
+     `FinalizationRecord` already exists for the contract.
+  5. **require_finalizer_role** — rejects with `UnauthorizedRole` unless
+     `finalizer` is the stored client, freelancer, or assigned arbiter.
+  6. **status check** — rejects with `InvalidStatusTransition` unless the
+     contract status is `Completed` or `Disputed`. All other statuses
+     (`Created`, `Funded`, `PartiallyFunded`, `Cancelled`, `Refunded`) are
+     rejected.
+
+  After passing all guards, an immutable `FinalizationRecord` is written to
+  persistent storage and a `finalized` event is emitted. All subsequent
+  contract-specific mutating calls (`release_milestone`,
+  `refund_unreleased_milestones`, `cancel_contract`, and a repeated
+  `finalize_contract`) then fail with `AlreadyFinalized`.
 - Aggregate amount math uses checked helpers where totals are accumulated.
 - Balance-changing operations verify the core accounting invariant:
   `total_deposited == released_amount + refunded_amount + available_balance`.
@@ -100,73 +120,45 @@ The following states are terminal for all value-moving entrypoints (`deposit_fun
 These explicit errors were introduced to make lifecycle audits clearer and to
 prevent ambiguous `InvalidState` errors from masking terminal-state violations.
 
-## Protocol Fee Model
+## finalize_contract Guard Matrix (issue #709)
 
-`calculate_protocol_fee` in `contracts/escrow/src/lib.rs` computes fees according
-to the following specification:
+`finalize_contract(contract_id, finalizer)` enforces guards in the order listed
+below. Each guard is independently tested in
+`contracts/escrow/src/test/security.rs`.
 
-### Formula
+| # | Guard | Error returned | Condition |
+|---|-------|----------------|-----------|
+| 1 | `require_not_paused` — pause flag | `ContractPaused` | `DataKey::Paused` is `true` |
+| 2 | `require_not_paused` — emergency flag | `EmergencyActive` | `DataKey::Emergency` is `true` and `Paused` is `false`; note that `activate_emergency_pause()` sets both flags so guard 1 fires first |
+| 3 | `finalizer.require_auth()` | Soroban auth failure (panics) | Caller did not sign the transaction |
+| 4 | `load_contract` | `ContractNotFound` | No `Contract` stored for `contract_id` |
+| 5 | `require_not_finalized` | `AlreadyFinalized` | `DataKey::Finalization(contract_id)` already exists |
+| 6 | `require_finalizer_role` | `UnauthorizedRole` | `finalizer` ≠ stored client, freelancer, or arbiter |
+| 7 | status check | `InvalidStatusTransition` | Status ∉ `{Completed, Disputed}` |
 
-```
-fee = floor(amount × fee_bps / 10_000)
-```
+### Status gate — terminal states that must be rejected
 
-`10_000 bps = 100 %`. The result uses **floor (round-toward-zero) division** —
-it never rounds up.
+| Status | Expected error |
+|--------|----------------|
+| `Created` | `InvalidStatusTransition` |
+| `Funded` | `InvalidStatusTransition` |
+| `PartiallyFunded` | `InvalidStatusTransition` |
+| `Cancelled` | `InvalidStatusTransition` |
+| `Refunded` | `InvalidStatusTransition` |
+| `Completed` | ✅ Allowed |
+| `Disputed` | ✅ Allowed |
 
-### Bounds
+### Post-finalize mutation block
 
-| Parameter | Valid range | Rejection |
-|-----------|-------------|-----------|
-| `fee_bps` | `0 ≤ bps ≤ 9_999` | `≥ 10_000` → `InvalidProtocolParameters` (code 49) |
-| `amount`  | `≥ 0` | `< 0` is guarded by milestone validation upstream |
+After a `FinalizationRecord` is written, `require_not_finalized` is called at
+the entry of every contract-specific mutating entrypoint:
 
-`set_protocol_fee_bps` rejects any value `≥ 10_000` with a typed
-`Error::InvalidProtocolParameters` (code 49). This ensures that the computed fee
-is always **strictly less than the milestone amount**, so the freelancer always
-receives at least 1 stroop net payout per released milestone.
+| Entrypoint | Error when finalized |
+|------------|---------------------|
+| `finalize_contract` (repeat) | `AlreadyFinalized` |
+| `release_milestone` | `AlreadyFinalized` |
+| `refund_unreleased_milestones` | `AlreadyFinalized` |
+| `cancel_contract` | `AlreadyFinalized` |
 
-### Rounding policy — floor
-
-Because Rust integer division truncates toward zero, and both `amount` and
-`fee_bps` are non-negative, the division is equivalent to
-`floor(amount × fee_bps / 10_000)`. The protocol always collects the rounded-down
-amount; the fractional remainder accrues to the freelancer. This means:
-
-- Freelancer receives **at least** `amount − fee` stroops.
-- Protocol receives **at most** the floored value.
-- The rounding direction is deterministic and does not vary between calls.
-
-### Overflow safety
-
-The intermediate product `amount × fee_bps` is computed with
-`i128::checked_mul`. If the multiplication would overflow `i128` the function
-panics with `Error::PotentialOverflow` (code 45). Under normal operation this is
-unreachable: escrow amounts are bounded by `MAX_SINGLE_AMOUNT_STROOPS` (≤ 10¹⁵
-stroops) and `fee_bps < 10_000`, so the product fits comfortably in `i128`
-(max ≈ 1.7 × 10³⁸). The guard is retained as a defense-in-depth measure.
-
-### Fee cap invariant
-
-For any `amount ≥ 1` and `fee_bps ≤ 9_999`:
-
-```
-fee = floor(amount × fee_bps / 10_000) ≤ floor(amount × 9_999 / 10_000) < amount
-```
-
-Therefore `amount − fee ≥ 1`. This invariant is enforced by the `fee > amount`
-post-computation check inside `calculate_protocol_fee`; a violation panics with
-`Error::PotentialOverflow`.
-
-### Storage
-
-Accumulated fees are tracked in `DataKey::AccumulatedProtocolFees` (persistent
-storage). The balance increments with each `release_milestone` call and is drained
-by `withdraw_protocol_fees`.
-
-### References
-
-- Formula, worked examples, and withdrawal sequence diagram:
-  [`docs/escrow/protocol-fees.md`](./protocol-fees.md)
-- Entrypoint spec: [`docs/escrow/abi-reference.md`](./abi-reference.md)
-- Tests: `contracts/escrow/src/test/protocol_fees.rs`
+Read-only queries (`get_contract`, `get_finalization_record`, `get_reputation`,
+etc.) are never blocked by the finalization record.
