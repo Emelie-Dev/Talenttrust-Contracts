@@ -8,6 +8,7 @@ use crate::{
 };
 
 // --- Submodules ---
+mod accept_reject_boundaries;
 mod approval_expiry;
 mod boundaries;
 mod cancel_contract;
