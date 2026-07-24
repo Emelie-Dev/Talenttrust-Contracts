@@ -1,7 +1,8 @@
 use crate::{
-    accumulate_amounts, ttl, Contract, ContractStatus, DataKey, Error, EscrowError, Milestone,
+    accumulate_amounts, ttl, Contract, ContractStatus, DataKey, Error, Escrow, EscrowError,
+    Milestone,
 };
-use soroban_sdk::{Address, Env, Symbol, Vec};
+use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
 
 /// Validated deposit data that is safe to use before any token transfer.
 pub struct ValidatedDeposit {
@@ -32,9 +33,7 @@ pub fn validate_deposit(
         .get(&DataKey::Contract(contract_id))
         .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
 
-    if caller != &contract.client {
-        env.panic_with_error(Error::UnauthorizedRole);
-    }
+    Escrow::require_party(env, &contract, caller);
 
     // Terminal-state guards: cancelled/refunded contracts must reject any
     // further value-moving operations such as deposits.
@@ -124,6 +123,7 @@ pub fn apply_validated_deposit(
 
     caller.require_auth();
 
+    let prev_total_deposited = contract.total_deposited;
     contract.funded_amount = new_funded_amount;
     contract.total_deposited = new_total_deposited;
 
@@ -140,6 +140,18 @@ pub fn apply_validated_deposit(
         .set(&DataKey::Contract(contract_id), &contract);
 
     ttl::extend_contract_ttl(&env, contract_id);
+
+    let deposit_amount = new_total_deposited - prev_total_deposited;
+
+    env.events().publish(
+        (symbol_short!("deposit"), contract_id),
+        (
+            caller,
+            deposit_amount,
+            contract.status,
+            env.ledger().timestamp(),
+        ),
+    );
 
     true
 }

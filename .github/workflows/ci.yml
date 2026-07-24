@@ -1,4 +1,4 @@
-name: Rust CI (Windows)
+name: Rust CI
 
 on:
   push:
@@ -8,51 +8,29 @@ on:
 
 jobs:
   build-and-test:
-    runs-on: windows-latest
+    # Cross-platform matrix: run on Ubuntu (faster/default), Windows (MSVC),
+    # and macOS (Unix) to surface platform-specific regressions before merge.
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: 1.88.0
-          profile: minimal
-          default: true
-
-      - name: Verify MSVC linker
         shell: pwsh
         run: |
-          if (-not (Get-Command link.exe -ErrorAction SilentlyContinue)) {
-            Write-Error "MSVC linker (link.exe) not found."
-            exit 1
-          } else {
-            Write-Host "MSVC linker found."
-          }
+          rustup set profile minimal
+          rustup toolchain install 1.88.0
+          rustup default 1.88.0
+          rustup target add wasm32-unknown-unknown --toolchain 1.88.0
 
-      - name: Cache Cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-registry-
+      - name: Build contract (WASM)
+        run: cargo build -p escrow --release --target wasm32-unknown-unknown
 
-      - name: Cache Cargo build
-        uses: actions/cache@v4
-        with:
-          path: target
-          key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-build-
-
-      - name: Build contract
-        run: cargo build --workspace --release
-
-      - name: Compile tests
+      - name: Compile tests (host)
         run: cargo test --workspace --quiet --no-run
 
       - name: Build Rust documentation
