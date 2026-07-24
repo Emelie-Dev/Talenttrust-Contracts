@@ -1,5 +1,5 @@
 use super::{complete_contract, create_contract, register_client};
-use crate::{Contract, ContractStatus, DataKey, EscrowError, ReleaseAuthorization};
+use crate::{Contract, ContractStatus, DataKey, Error, EscrowError, ReleaseAuthorization};
 use soroban_sdk::{testutils::Address as _, vec, Address, Env, String};
 fn valid_comment(env: &Env) -> String {
     String::from_str(env, "Great job!")
@@ -121,7 +121,7 @@ fn issue_reputation_rejects_unauthorized_caller() {
     let unauthorized = Address::generate(&env);
 
     let result = client.try_issue_reputation(&contract_id, &unauthorized, &5, &valid_comment(&env));
-    super::assert_contract_error(result, EscrowError::UnauthorizedRole);
+    super::assert_contract_error(result, Error::PartyNotAuthorized);
 }
 
 #[test]

@@ -1,5 +1,6 @@
 use crate::{
-    accumulate_amounts, ttl, Contract, ContractStatus, DataKey, Error, EscrowError, Milestone,
+    accumulate_amounts, ttl, Contract, ContractStatus, DataKey, Error, Escrow, EscrowError,
+    Milestone,
 };
 use soroban_sdk::{Address, Env, Symbol, Vec};
 
@@ -32,9 +33,7 @@ pub fn validate_deposit(
         .get(&DataKey::Contract(contract_id))
         .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
 
-    if caller != &contract.client {
-        env.panic_with_error(Error::UnauthorizedRole);
-    }
+    Escrow::require_party(env, &contract, caller);
 
     // Terminal-state guards: cancelled/refunded contracts must reject any
     // further value-moving operations such as deposits.

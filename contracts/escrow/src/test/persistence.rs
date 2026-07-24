@@ -111,7 +111,7 @@ fn finalize_rejects_unauthorized_finalizer() {
 
     super::assert_contract_error(
         client.try_finalize_contract(&contract_id, &outsider),
-        Error::UnauthorizedRole,
+        Error::PartyNotAuthorized,
     );
     assert!(client.get_finalization_record(&contract_id).is_none());
 }

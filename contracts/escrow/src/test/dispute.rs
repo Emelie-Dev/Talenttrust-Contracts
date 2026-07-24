@@ -541,7 +541,7 @@ fn raise_dispute_by_non_party_is_rejected() {
 
     super::assert_contract_error(
         client.try_raise_dispute(&contract_id, &outsider),
-        Error::UnauthorizedRole,
+        Error::PartyNotAuthorized,
     );
     assert_eq!(
         client.get_contract(&contract_id).status,
@@ -623,10 +623,10 @@ fn resolve_dispute_by_non_arbiter_is_rejected() {
         client.try_resolve_dispute(&contract_id, &client_addr, &DisputeResolution::FullRefund),
         Error::UnauthorizedRole,
     );
-    // Random outsider is also rejected.
+    // Random outsider is rejected by require_party.
     super::assert_contract_error(
         client.try_resolve_dispute(&contract_id, &outsider, &DisputeResolution::FullRefund),
-        Error::UnauthorizedRole,
+        Error::PartyNotAuthorized,
     );
     // Contract remains in Disputed state.
     assert_eq!(

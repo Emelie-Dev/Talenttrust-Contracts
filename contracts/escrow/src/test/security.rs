@@ -185,7 +185,7 @@ fn issue_reputation_rejects_unauthorized_caller() {
 
     let comment = reputation_comment(&env);
     let result = client.try_issue_reputation(&contract_id, &unauthorized, &5, &comment);
-    super::assert_contract_error(result, Error::UnauthorizedRole);
+    super::assert_contract_error(result, Error::PartyNotAuthorized);
 }
 
 /// Finalize a completed contract and return all identifiers.

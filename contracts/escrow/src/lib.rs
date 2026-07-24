@@ -1601,9 +1601,7 @@ impl Escrow {
 
         Self::require_not_finalized(&env, contract_id);
 
-        if client != contract.client {
-            env.panic_with_error(EscrowError::UnauthorizedRole);
-        }
+        Self::require_party(&env, &contract, &client);
 
         if contract.status == ContractStatus::Cancelled {
             env.panic_with_error(Error::AlreadyCancelled);
@@ -1693,9 +1691,7 @@ impl Escrow {
             .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
         ttl::extend_contract_ttl(&env, contract_id);
 
-        if caller != contract.client {
-            env.panic_with_error(Error::UnauthorizedRole);
-        }
+        Self::require_party(&env, &contract, &caller);
 
         if rating < 1 || rating > 5 {
             env.panic_with_error(Error::InvalidRating);
@@ -1872,9 +1868,7 @@ impl Escrow {
         ttl::extend_contract_ttl(&env, contract_id);
         Self::require_not_finalized(&env, contract_id);
 
-        if caller != contract.freelancer {
-            env.panic_with_error(EscrowError::UnauthorizedRole);
-        }
+        Self::require_party(&env, &contract, &caller);
 
         if contract.status != ContractStatus::Funded {
             env.panic_with_error(EscrowError::InvalidState);
@@ -2129,6 +2123,21 @@ impl Escrow {
 
     // ── Internal guards ──────────────────────────────────────────────────────
 
+    /// Verifies `caller` is the client, freelancer, or arbiter of `contract`.
+    ///
+    /// Panics with [`Error::PartyNotAuthorized`] when the caller is none of
+    /// those roles.  Mirrors the existing `require_initialized` /
+    /// `require_not_paused` guard pattern so every entrypoint can share a
+    /// single, uniform party check.
+    pub(crate) fn require_party(env: &Env, contract: &Contract, caller: &Address) {
+        let is_client = *caller == contract.client;
+        let is_freelancer = *caller == contract.freelancer;
+        let is_arbiter = contract.arbiter.as_ref() == Some(caller);
+        if !is_client && !is_freelancer && !is_arbiter {
+            env.panic_with_error(Error::PartyNotAuthorized);
+        }
+    }
+
     /// Panics with `NotInitialized` unless `initialize` has been called.
     pub(crate) fn require_initialized(env: &Env) {
         if !env
@@ -2197,10 +2206,7 @@ impl Escrow {
         ttl::extend_contract_ttl(&env, contract_id);
         Self::require_not_finalized(&env, contract_id);
 
-        // Verify caller is client or freelancer
-        if caller != contract.client && caller != contract.freelancer {
-            env.panic_with_error(Error::UnauthorizedRole);
-        }
+        Self::require_party(&env, &contract, &caller);
 
         // Require arbiter assignment
         if contract.arbiter.is_none() {
@@ -2287,6 +2293,7 @@ impl Escrow {
         }
 
         // Verify caller is the assigned arbiter
+        Self::require_party(&env, &contract, &arbiter);
         match &contract.arbiter {
             Some(contract_arbiter) if *contract_arbiter == arbiter => {}
             _ => env.panic_with_error(Error::UnauthorizedRole),
