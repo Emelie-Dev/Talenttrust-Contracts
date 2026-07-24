@@ -694,6 +694,11 @@ impl Escrow {
     /// * `ApprovalExpired` - If approvals have expired
     /// * `UnauthorizedRole` - If caller is not authorized to release
     ///
+    /// # Notes
+    /// When the final milestone is released (or refunded), the contract status
+    /// becomes `Completed` and one `PendingReputationCredits` entry is
+    /// incremented for the freelancer.
+    ///
     /// # Security
     /// - Requires valid approvals that haven't expired
     /// - Approvals are cleared after successful release
@@ -882,7 +887,12 @@ impl Escrow {
         let all_released = milestones.iter().all(|m| m.released || m.refunded);
         if all_released {
             contract.status = ContractStatus::Completed;
-            Self::grant_pending_reputation_credit(&env, &contract.freelancer);
+            let pending_key =
+                DataKey::PendingReputationCredits(contract.freelancer.clone());
+            let pending: i128 = env.storage().persistent().get(&pending_key).unwrap_or(0);
+            env.storage()
+                .persistent()
+                .set(&pending_key, &(pending + 1));
         }
 
         ttl::store_milestones(&env, contract_id, &milestones);
@@ -1237,6 +1247,12 @@ impl Escrow {
     /// # Returns
     /// The total amount refunded
     ///
+    /// # Notes
+    /// If some milestones are released and the remaining are refunded (mixed
+    /// outcome), status becomes `Completed` and one `PendingReputationCredits`
+    /// entry is incremented for the freelancer. If all milestones are refunded
+    /// (none released), status becomes `Refunded` and no credit is added.
+    ///
     /// # Errors
     /// * `ContractNotFound` - If contract doesn't exist
     /// * `EmptyRefundRequest` - If milestone_indices is empty
@@ -1361,9 +1377,13 @@ impl Escrow {
             if all_refunded {
                 contract.status = ContractStatus::Refunded;
             } else {
-                // Some released, some refunded
                 contract.status = ContractStatus::Completed;
-                Self::grant_pending_reputation_credit(&env, &contract.freelancer);
+                let pending_key =
+                    DataKey::PendingReputationCredits(contract.freelancer.clone());
+                let pending: i128 = env.storage().persistent().get(&pending_key).unwrap_or(0);
+                env.storage()
+                    .persistent()
+                    .set(&pending_key, &(pending + 1));
             }
         }
 
@@ -1955,10 +1975,10 @@ impl Escrow {
 
     /// Issues reputation credit for a completed contract.
     ///
-    /// # Comment length
-    /// `comment` must be between 1 and 200 **bytes** (inclusive). Because Soroban
-    /// `String::len()` returns the UTF-8 byte length, a multi-byte character (e.g.
-    /// a 3-byte emoji) counts as 3 toward the limit. ASCII characters are 1 byte each.
+    /// Consumes one `PendingReputationCredits` entry for the freelancer (which
+    /// was incremented when the contract reached `Completed` status). The
+    /// pending-credit counter is guaranteed non-negative by the guard at
+    /// `pending <= 0`, which panics with `InvalidState` if no credit exists.
     ///
     /// # Errors
     /// * `ContractPaused` - If the contract is paused while not in emergency mode
@@ -1972,11 +1992,14 @@ impl Escrow {
     /// * `NotCompleted` - If contract status is not `Completed`
     /// * `ReputationAlreadyIssued` - If reputation was already issued
     /// * `SelfRating` - If client and freelancer are the same address
+    /// * `InvalidState` - If no pending reputation credit exists for the
+    ///   freelancer (counter at 0), preventing a negative decrement.
     ///
     /// # Security
     /// * Pause/emergency gate runs BEFORE contract state read so paused
     ///   contracts cannot have reputation mutated while paused.
-    /// * The 200-byte cap prevents unbounded on-chain storage growth.
+    /// * Pending-credit guard (`if pending <= 0`) prevents underflow of
+    ///   the `PendingReputationCredits` counter.
     pub fn issue_reputation(
         env: Env,
         contract_id: u32,
@@ -2822,6 +2845,12 @@ impl Escrow {
     /// * `ContractPaused` - If pause or emergency controls are active
     /// * `AlreadyFinalized` - If contract has been finalized
     ///
+    /// # Notes
+    /// When the resolution results in a partial payout to the freelancer
+    /// (status becomes `Completed`), one `PendingReputationCredits` entry is
+    /// incremented for the freelancer. If all funds are returned to the client
+    /// (status becomes `Refunded`), no credit is added.
+    ///
     /// # Security
     /// - Only the assigned arbiter can resolve disputes
     /// - Split amounts must exactly match available balance
@@ -2870,9 +2899,21 @@ impl Escrow {
         contract.released_amount += freelancer_payout;
 
         // Set final status
+        let prev_status = contract.status;
         contract.status = dispute::final_status_after_resolution(&contract);
         if contract.status == ContractStatus::Completed {
             Self::grant_pending_reputation_credit(&env, &contract.freelancer);
+        }
+
+        if prev_status != ContractStatus::Completed
+            && contract.status == ContractStatus::Completed
+        {
+            let pending_key =
+                DataKey::PendingReputationCredits(contract.freelancer.clone());
+            let pending: i128 = env.storage().persistent().get(&pending_key).unwrap_or(0);
+            env.storage()
+                .persistent()
+                .set(&pending_key, &(pending + 1));
         }
 
         env.storage()

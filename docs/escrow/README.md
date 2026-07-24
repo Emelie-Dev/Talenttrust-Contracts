@@ -238,12 +238,16 @@ escrow.release_milestone(&contract_id, &client_addr, &0);
    the milestone is marked released and the contract status is updated — so
    a token-transfer failure leaves the contract untouched.
 
-When the final milestone is released, status becomes `Completed` and one
-pending reputation credit is added for the freelancer.
+When the final milestone is released, all unreleased milestones are refunded
+(mixed), or a dispute is resolved with partial payout to the freelancer, status
+becomes `Completed` and one pending reputation credit is added for the
+freelancer. If all milestones are refunded (none released), status becomes
+`Refunded` and no credit is added.
 
 `PendingReputationCredits` is a non-negative counter that tracks completed
 contracts awaiting client-issued reputation for a freelancer. `issue_reputation`
-consumes one pending credit and records the rating.
+consumes one pending credit and records the rating. The guard
+`if pending <= 0 { panic }` ensures the counter never goes negative.
 
 #### Batch Milestone Release
 ```rust
@@ -339,7 +343,7 @@ Test coverage for every cell in the matrix above lives in
 ### 5. Issue Reputation
 
 ```rust
-escrow.issue_reputation(&contract_id, &client_addr, &freelancer_addr, &5_i128);
+escrow.issue_reputation(&contract_id, &client_addr, &5, &String::from_str(&env, "Great job!"));
 ```
 
 Reputation requires `caller.require_auth()`, the caller must be the stored
