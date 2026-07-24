@@ -1,31 +1,41 @@
-use crate::{DataKey, EscrowError, ReadinessChecklist, GovernedParameters, Escrow, EscrowClient, EscrowArgs};
-use soroban_sdk::{contractimpl, symbol_short, Address, Env, Symbol};
+//! Governance and protocol-configuration entrypoints.
+//!
+//! This module owns admin-controlled persistent configuration:
+//! `DataKey::Admin` for authorization, `ProtocolFeeBps` for release fees,
+//! `GovernedParameters` for escrow caps, `ReadinessChecklist` for deployment
+//! readiness state, and `PendingAdmin` for two-step admin rotation proposals.
+//! Money movement for protocol-fee withdrawal remains in the crate root because
+//! it performs settlement-token transfers.
 
-/// Governance-related privileged operations and audit events.
-///
-/// This module implements a small set of admin-facing functions that
-/// produce parseable events for off-chain indexers. Events emitted here
-/// follow the existing convention of short `symbol_short!` topics used by
-/// other lifecycle events (e.g. `init`, `paused`, `emergency`).
-#[contractimpl]
-impl super::Escrow {
-    /// Set the protocol fee (basis points). Emits an event with
-    /// `(old_bps, new_bps, admin, timestamp)` under topic `protocol_fee_bps`.
+use crate::ttl::ADMIN_ROTATION_MIN_DELAY_LEDGERS;
+use crate::{
+    DataKey, Error, Escrow, EscrowArgs, EscrowClient, GovernedParameters, PendingAdminProposal,
+    ReadinessChecklist,
+};
+use soroban_sdk::{symbol_short, Address, Env, Symbol};
+
+#[soroban_sdk::contractimpl]
+impl Escrow {
+    /// Set the protocol fee in basis points.
+    ///
+    /// Admin-gated: the stored admin (under [`DataKey::Admin`]) must authorize
+    /// the call and the contract must be initialized.
+    ///
+    /// `new_bps` must be `≤ 10_000` (100%). The fee takes effect immediately for
+    /// the next `release_milestone` call.
+    ///
+    /// See [`docs/escrow/protocol-fees.md`](../../../docs/escrow/protocol-fees.md) for
+    /// the basis-point model, fee formula, accrual storage, and withdrawal flow.
+    ///
+    /// # Events
+    /// `(Symbol("protocol_fee_bps"),)` → `(old_bps, new_bps, admin, timestamp)`
     pub fn set_protocol_fee_bps(env: Env, new_bps: u32) -> bool {
-        if !env
-            .storage()
-            .persistent()
-            .get::<_, bool>(&crate::DataKey::Initialized)
-            .unwrap_or(false)
-        {
-            env.panic_with_error(EscrowError::NotInitialized);
-        }
-
+        Self::require_initialized(&env);
         let admin: Address = env
             .storage()
             .persistent()
             .get(&DataKey::Admin)
-            .unwrap_or_else(|| env.panic_with_error(crate::Error::NotInitialized));
+            .unwrap_or_else(|| env.panic_with_error(Error::NotInitialized));
         admin.require_auth();
 
         let old_bps: u32 = env
@@ -38,28 +48,38 @@ impl super::Escrow {
             .set(&DataKey::ProtocolFeeBps, &new_bps);
 
         env.events().publish(
-            (Symbol::new(env, "protocol_fee_bps"),),
+            (Symbol::new(&env, "protocol_fee_bps"),),
             (old_bps, new_bps, admin.clone(), env.ledger().timestamp()),
         );
         true
     }
 
-    /// Internal: propose a new admin with a timelock.
-    pub(crate) fn propose_governance_admin_impl(env: Env, proposed: Address) -> bool {
-        if !env
-            .storage()
+    pub fn get_governance_admin(env: Env) -> Option<Address> {
+        env.storage().persistent().get(&DataKey::Admin)
+    }
+
+    /// Returns the current protocol fee in basis points.
+    pub fn get_protocol_fee_bps(env: Env) -> u32 {
+        env.storage()
             .persistent()
-            .get::<_, bool>(&crate::DataKey::Initialized)
-            .unwrap_or(false)
-        {
-            env.panic_with_error(EscrowError::NotInitialized);
-        }
+            .get::<_, u32>(&DataKey::ProtocolFeeBps)
+            .unwrap_or(0)
+    }
+
+    // ── Two-step admin transfer ───────────────────────────────────────────────
+
+    /// Propose a new governance admin. Stores the proposal with a timelock.
+    ///
+    /// # Events
+    /// `(symbol_short!("admin"), Symbol("proposed"))` → `(admin, proposed, timestamp)`
+    pub(crate) fn propose_governance_admin_impl(env: &Env, proposed: Address) -> bool {
+        Self::require_initialized(env);
 
         let admin: Address = env
             .storage()
             .persistent()
             .get(&DataKey::Admin)
-            .unwrap_or_else(|| env.panic_with_error(crate::Error::NotInitialized));
+            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
         admin.require_auth();
 
         env.storage().persistent().set(
@@ -77,42 +97,35 @@ impl super::Escrow {
         true
     }
 
-    /// Internal: accept a pending admin proposal, enforcing the timelock.
-    pub(crate) fn accept_governance_admin_impl(env: Env) -> bool {
-        if !env
+    /// Accept a pending admin proposal, enforcing the timelock.
+    ///
+    /// # Events
+    /// `(symbol_short!("admin"), Symbol("accepted"))` → `(old_admin, new_admin, timestamp)`
+    pub(crate) fn accept_governance_admin_impl(env: &Env) -> bool {
+        Self::require_initialized(env);
+
+        let pending: PendingAdminProposal = env
             .storage()
             .persistent()
-            .get::<_, bool>(&crate::DataKey::Initialized)
-            .unwrap_or(false)
-        {
-            env.panic_with_error(EscrowError::NotInitialized);
-        }
+            .get(&DataKey::PendingAdmin)
+            .unwrap_or_else(|| env.panic_with_error(Error::InvalidState));
 
-        let pending: Option<PendingAdminProposal> =
-            env.storage().persistent().get(&DataKey::PendingAdmin);
-        if pending.is_none() {
-            env.panic_with_error(crate::Error::InvalidState);
-        }
-        let proposal = pending.unwrap();
-
-        // Enforce treasury rotation timelock: acceptance is only allowed after
-        // ADMIN_ROTATION_MIN_DELAY_LEDGERS have elapsed since the proposal.
         let elapsed = env
             .ledger()
             .sequence()
-            .saturating_sub(proposal.proposed_at_ledger);
+            .saturating_sub(pending.proposed_at_ledger);
         if elapsed < ADMIN_ROTATION_MIN_DELAY_LEDGERS {
-            env.panic_with_error(EscrowError::TimelockNotElapsed);
+            env.panic_with_error(Error::TimelockNotElapsed);
         }
 
-        let pending_admin = proposal.proposed;
+        let pending_admin = pending.proposed;
         pending_admin.require_auth();
 
         let old_admin: Address = env
             .storage()
             .persistent()
             .get(&DataKey::Admin)
-            .unwrap_or_else(|| env.panic_with_error(crate::Error::NotInitialized));
+            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
 
         env.storage()
             .persistent()
@@ -126,8 +139,47 @@ impl super::Escrow {
         true
     }
 
+    /// Cancel a pending governance admin proposal, aborting a two-step transfer.
+    ///
+    /// Only the current admin (the address stored under [`DataKey::Admin`]) may
+    /// cancel, and the contract must be initialized. On success the pending
+    /// proposal is removed so the previously proposed address can no longer call
+    /// [`Escrow::accept_governance_admin`] — a subsequent accept panics with
+    /// [`Error::InvalidState`].
+    ///
+    /// # Errors
+    /// * [`Error::NotInitialized`] — `initialize` has not been called.
+    /// * [`Error::InvalidState`] — there is no pending proposal to cancel.
+    ///
+    /// # Events
+    /// `(symbol_short!("admin"), Symbol("cancelled"))` → `(admin, cancelled_proposal, timestamp)`
+    pub(crate) fn cancel_governance_admin_proposal_impl(env: &Env) -> bool {
+        Self::require_initialized(env);
+
+        let admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
+        admin.require_auth();
+
+        let pending: PendingAdminProposal = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PendingAdmin)
+            .unwrap_or_else(|| env.panic_with_error(Error::InvalidState));
+
+        env.storage().persistent().remove(&DataKey::PendingAdmin);
+
+        env.events().publish(
+            (symbol_short!("admin"), Symbol::new(env, "cancelled")),
+            (admin, pending.proposed, env.ledger().timestamp()),
+        );
+        true
+    }
+
     /// Internal: return the currently pending admin address, if any.
-    pub(crate) fn get_pending_governance_admin_impl(env: Env) -> Option<Address> {
+    pub(crate) fn get_pending_governance_admin_impl(env: &Env) -> Option<Address> {
         let proposal: Option<PendingAdminProposal> =
             env.storage().persistent().get(&DataKey::PendingAdmin);
         proposal.map(|p| p.proposed)
@@ -139,6 +191,12 @@ impl super::Escrow {
     }
 
     /// Set both governance parameters at once and update the readiness checklist.
+    ///
+    /// Sets `protocol_fee_bps` (must be `≤ 10_000`) and `max_escrow_total_stroops`
+    /// atomically. Also flips `ReadinessChecklist::governed_params_set` to `true`.
+    ///
+    /// See [`docs/escrow/protocol-fees.md`](../../../docs/escrow/protocol-fees.md) for
+    /// the full basis-point model and fee lifecycle.
     pub fn set_governed_params(
         env: Env,
         admin: Address,
@@ -151,22 +209,22 @@ impl super::Escrow {
             .get::<_, bool>(&crate::DataKey::Initialized)
             .unwrap_or(false)
         {
-            env.panic_with_error(EscrowError::NotInitialized);
+            env.panic_with_error(Error::NotInitialized);
         }
 
         let stored_admin: Address = env
             .storage()
             .persistent()
             .get(&DataKey::Admin)
-            .unwrap_or_else(|| env.panic_with_error(EscrowError::NotInitialized));
+            .unwrap_or_else(|| env.panic_with_error(Error::NotInitialized));
 
         if admin != stored_admin {
-            env.panic_with_error(EscrowError::UnauthorizedRole);
+            env.panic_with_error(Error::UnauthorizedRole);
         }
         admin.require_auth();
 
         if protocol_fee_bps > 10_000 {
-            env.panic_with_error(EscrowError::InvalidProtocolParameters);
+            env.panic_with_error(Error::InvalidProtocolParameters);
         }
 
         let params = GovernedParameters {
@@ -192,8 +250,6 @@ impl super::Escrow {
 
     /// Retrieve the current governed parameters.
     pub fn get_governed_parameters(env: Env) -> Option<GovernedParameters> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::GovernedParameters)
+        env.storage().persistent().get(&DataKey::GovernedParameters)
     }
 }

@@ -7,7 +7,17 @@ Soroban smart contracts for the TalentTrust freelancer escrow protocol on Stella
 - **Escrow contract** (`contracts/escrow`): Holds funds in escrow, supports milestone-based payments and reputation credential issuance. **Token custody is on-chain** via a Stellar Asset Contract (SAC) bound at admin setup; `deposit_funds` and `release_milestone` perform real `token::Client::transfer` calls.
 - **Planned escrow fee model**: Configurable protocol fee is now wired into `release_milestone` (`set_protocol_fee_bps`); fee retention into `AccumulatedProtocolFees` is implemented. A separate `withdraw_protocol_fees` entrypoint remains tracked in [#314](https://github.com/Talenttrust/Talenttrust-Contracts/issues/314).
 
-Reviewer-oriented notes live in [docs/escrow/README.md](docs/escrow/README.md), with storage-key details in [docs/escrow/state-persistence.md](docs/escrow/state-persistence.md), threat analysis in [docs/escrow/SECURITY.md](docs/escrow/SECURITY.md), and release authorization modes in [docs/escrow/authorization.md](docs/escrow/authorization.md).
+Reviewer-oriented notes live in [docs/escrow/README.md](docs/escrow/README.md), with the crate-level rustdoc module map in [contracts/escrow/src/lib.rs](contracts/escrow/src/lib.rs), storage-key details in [docs/escrow/state-persistence.md](docs/escrow/state-persistence.md), threat analysis in [docs/escrow/SECURITY.md](docs/escrow/SECURITY.md), and release authorization modes in [docs/escrow/authorization.md](docs/escrow/authorization.md).
+
+To generate the escrow module map locally, run:
+
+```bash
+cargo doc -p escrow --no-deps
+```
+
+Then open `target/doc/escrow/index.html`.
+
+The supported deployed interface is documented in the [Escrow ABI reference](docs/escrow/abi-reference.md). It intentionally excludes template scaffolding endpoints; consumers should integrate only with the listed contract methods.
 
 ---
 
@@ -21,6 +31,7 @@ Reviewer-oriented notes live in [docs/escrow/README.md](docs/escrow/README.md), 
 | `finalize_contract`        | **Implemented** | Freezes contract mutable updates                                                                  |
 | `cancel_contract`          | **Implemented** | Early termination contract transitions                                                            |
 | `issue_reputation`         | **Implemented** | Milestone rating metrics for completed contracts                                                  |
+| `get_bounds`               | **Implemented** | Read protocol compile-time limits (max milestones, amounts, fee bps) via `ContractBounds` type   |
 | Emergency Circuit Breakers | **Implemented** | Public administrative pause and emergency flags                                                   |
 | Protocol Fee Accumulation  | **Implemented** | Logic built directly into milestone releases                                                      |
 | Protocol Fee Withdrawal    | **Planned**     | Entrypoints tracked in [#314](https://github.com/Talenttrust/Talenttrust-Contracts/issues/314)    |
@@ -36,9 +47,10 @@ The escrow implementation follows a fail-closed state machine:
 - a Stellar Asset Contract (SAC) settlement token is admin-bound exactly once via `bind_settlement_token`; each subsequent `deposit_funds` and `release_milestone` calls `token::Client::transfer` and updates accounting atomically
 - deposits pull SAC tokens from the client BEFORE `funded_amount` is updated, so a failed transfer leaves accounting untouched
 - deposits cannot exceed the required escrow total
+- cancellation returns the full refundable SAC balance to the client while preserving funds held for other active contracts
 - releases pay the freelancer (less protocol fee) via SAC transfer BEFORE milestone state is updated, so a failed payout leaves state untouched
 - releases require a valid unreleased milestone, caller authorization via `caller.require_auth()`, and valid non-expired approvals matching the contract's `ReleaseAuthorization` mode
-- reputation is gated behind contract completion and is issued once per contract
+- reputation is gated behind contract completion and is issued once per contract; each completed escrow accrues one pending credit for its freelancer, while fully refunded escrows accrue none. Issuing reputation consumes one credit and updates the freelancer's completed-contract count
 - finalization records immutable close metadata for completed or disputed contracts and blocks later contract-specific mutations
 - one-time admin initialization protects pause and emergency controls; two-step admin transfer is planned in [#318](https://github.com/Talenttrust/Talenttrust-Contracts/issues/318)
 - pause and emergency controls block all state-changing escrow operations while active
