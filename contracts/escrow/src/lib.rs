@@ -56,6 +56,7 @@ mod approvals;
 mod deposit;
 mod finalize;
 mod migration;
+mod status_index;
 mod ttl;
 mod types;
 mod utils;
@@ -882,15 +883,19 @@ impl Escrow {
             let old_status = contract.status.clone();
             contract.status = ContractStatus::Completed;
             Self::grant_pending_reputation_credit(&env, &contract.freelancer);
+            ttl::store_milestones(&env, contract_id, &milestones);
+            env.storage()
+                .persistent()
+                .set(&DataKey::Contract(contract_id), &contract);
+            ttl::extend_contract_ttl(&env, contract_id);
+            status_index::update_status_index(&env, contract_id, &old_status, &contract.status);
+        } else {
+            ttl::store_milestones(&env, contract_id, &milestones);
+            env.storage()
+                .persistent()
+                .set(&DataKey::Contract(contract_id), &contract);
+            ttl::extend_contract_ttl(&env, contract_id);
         }
-
-        ttl::store_milestones(&env, contract_id, &milestones);
-        env.storage()
-            .persistent()
-            .set(&DataKey::Contract(contract_id), &contract);
-
-        // Extend TTL on contract write (milestone TTL already extended by store_milestones)
-        ttl::extend_contract_ttl(&env, contract_id);
 
         // ── Events ──────────────────────────────────────────────────────────
         //
@@ -1128,6 +1133,7 @@ impl Escrow {
         // Check if all unreleased milestones are refunded
         let all_refunded_or_released = milestones.iter().all(|m| m.released || m.refunded);
         if all_refunded_or_released {
+            let old_status = contract.status.clone();
             let all_refunded = milestones.iter().all(|m| m.refunded);
             if all_refunded {
                 contract.status = ContractStatus::Refunded;
@@ -1136,15 +1142,19 @@ impl Escrow {
                 contract.status = ContractStatus::Completed;
                 Self::grant_pending_reputation_credit(&env, &contract.freelancer);
             }
+            ttl::store_milestones(&env, contract_id, &milestones);
+            env.storage()
+                .persistent()
+                .set(&DataKey::Contract(contract_id), &contract);
+            ttl::extend_contract_ttl(&env, contract_id);
+            status_index::update_status_index(&env, contract_id, &old_status, &contract.status);
+        } else {
+            ttl::store_milestones(&env, contract_id, &milestones);
+            env.storage()
+                .persistent()
+                .set(&DataKey::Contract(contract_id), &contract);
+            ttl::extend_contract_ttl(&env, contract_id);
         }
-
-        ttl::store_milestones(&env, contract_id, &milestones);
-        env.storage()
-            .persistent()
-            .set(&DataKey::Contract(contract_id), &contract);
-
-        // Extend TTL on contract write (milestone TTL already extended by store_milestones)
-        ttl::extend_contract_ttl(&env, contract_id);
 
         // Emit `refunded` event after all state mutations succeed.
         //
@@ -1635,12 +1645,15 @@ impl Escrow {
             .refunded_amount
             .checked_add(refund_amount)
             .unwrap_or_else(|| env.panic_with_error(EscrowError::InsufficientFunds));
+        let old_status = contract.status.clone();
         contract.status = ContractStatus::Cancelled;
 
         env.storage()
             .persistent()
             .set(&DataKey::Contract(contract_id), &contract);
         ttl::extend_contract_ttl(&env, contract_id);
+
+        status_index::update_status_index(&env, contract_id, &old_status, &contract.status);
 
         env.events().publish(
             (symbol_short!("cancelled"), contract_id),
@@ -2213,12 +2226,15 @@ impl Escrow {
             _ => env.panic_with_error(Error::InvalidState),
         }
 
+        let old_status = contract.status.clone();
         contract.status = ContractStatus::Disputed;
         env.storage()
             .persistent()
             .set(&DataKey::Contract(contract_id), &contract);
 
         ttl::extend_contract_ttl(&env, contract_id);
+
+        status_index::update_status_index(&env, contract_id, &old_status, &contract.status);
 
         env.events().publish(
             (symbol_short!("dispute"), symbol_short!("opened")),
@@ -2302,6 +2318,7 @@ impl Escrow {
         contract.released_amount += freelancer_payout;
 
         // Set final status
+        let old_status = contract.status.clone();
         contract.status = dispute::final_status_after_resolution(&contract);
         if contract.status == ContractStatus::Completed {
             Self::grant_pending_reputation_credit(&env, &contract.freelancer);
@@ -2313,12 +2330,63 @@ impl Escrow {
 
         ttl::extend_contract_ttl(&env, contract_id);
 
+        status_index::update_status_index(&env, contract_id, &old_status, &contract.status);
+
         env.events().publish(
             (symbol_short!("dispute"), symbol_short!("resolved")),
             (contract_id, resolution.code()),
         );
 
         true
+    }
+
+    /// Returns a paginated list of contract IDs currently in `status`.
+    ///
+    /// Backed by a maintained `DataKey::StatusIndex(status_code)` persistent vector
+    /// that is updated on every status transition. Operators can cheaply answer
+    /// "which escrows are currently Disputed or Funded" without scanning the full
+    /// ID space.
+    ///
+    /// # Arguments
+    /// * `env`    — The Soroban environment
+    /// * `status` — The lifecycle state to enumerate
+    /// * `start`  — Zero-based offset into the index (not a contract ID)
+    /// * `limit`  — Maximum IDs to return; capped at `MAX_PAGE_LIMIT` (50)
+    ///
+    /// # Returns
+    /// A `Vec<u32>` of contract IDs in insertion order. Empty when `start` is
+    /// out of range or the index has no entries for `status`.
+    ///
+    /// # Auth
+    /// Auth-free and read-only; extends the index TTL on read.
+    pub fn list_contracts_by_status(
+        env: Env,
+        status: ContractStatus,
+        start: u32,
+        limit: u32,
+    ) -> Vec<u32> {
+        status_index::list_by_status(&env, &status, start, limit)
+    }
+
+    /// Returns a paginated list of contract IDs for a participant.
+    ///
+    /// Backed by `DataKey::ParticipantContracts(address, role)` written once
+    /// at contract creation.
+    ///
+    /// * `role` — `0` for client, `1` for freelancer
+    /// * `start` — Zero-based offset into the list
+    /// * `limit` — Maximum IDs to return; capped at `MAX_PAGE_LIMIT` (50)
+    ///
+    /// # Auth
+    /// Auth-free and read-only; extends the index TTL on read.
+    pub fn list_contracts_by_participant(
+        env: Env,
+        participant: Address,
+        role: u32,
+        start: u32,
+        limit: u32,
+    ) -> Vec<u32> {
+        status_index::list_by_participant(&env, &participant, role, start, limit)
     }
 }
 

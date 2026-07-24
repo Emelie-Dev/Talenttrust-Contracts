@@ -1,5 +1,6 @@
 use crate::{
-    accumulate_amounts, ttl, Contract, ContractStatus, DataKey, Error, EscrowError, Milestone,
+    accumulate_amounts, status_index, ttl, Contract, ContractStatus, DataKey, Error, EscrowError,
+    Milestone,
 };
 use soroban_sdk::{Address, Env, Symbol, Vec};
 
@@ -129,6 +130,7 @@ pub fn apply_validated_deposit(
 
     ttl::extend_milestone_ttl(&env, contract_id);
 
+    let old_status = contract.status.clone();
     if contract.funded_amount == total_amount {
         contract.status = ContractStatus::Funded;
     } else {
@@ -140,6 +142,11 @@ pub fn apply_validated_deposit(
         .set(&DataKey::Contract(contract_id), &contract);
 
     ttl::extend_contract_ttl(&env, contract_id);
+
+    // Update status index if the status changed.
+    if old_status != contract.status {
+        status_index::update_status_index(env, contract_id, &old_status, &contract.status);
+    }
 
     true
 }

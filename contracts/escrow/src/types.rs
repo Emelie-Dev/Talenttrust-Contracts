@@ -90,6 +90,11 @@ pub enum DataKey {
     Finalization(u32),
     // Settlement token
     SettlementToken,
+    // Participant contract index: (address, role) -> Vec<u32>
+    // role: 0 = client, 1 = freelancer
+    ParticipantContracts(Address, u32),
+    // Status index: status_code -> Vec<u32>
+    StatusIndex(u32),
 }
 
 /// Canonical contract error type for all entrypoint-facing errors.
