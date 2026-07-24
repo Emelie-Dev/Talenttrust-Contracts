@@ -14,6 +14,7 @@ mod client_migration;
 mod contract_id_allocation;
 mod create_contract_bounds;
 mod deposit;
+mod deposit_events;
 mod dispute;
 mod emergency_controls;
 mod input_sanitization_amounts;
