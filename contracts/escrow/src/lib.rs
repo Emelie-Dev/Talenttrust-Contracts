@@ -1440,43 +1440,29 @@ impl Escrow {
         contract
     }
 
-    /// Returns the participant addresses for a contract.
+    /// Returns the arbiter address for a given contract, or `None` if no arbiter
+    /// is assigned or the contract does not exist.
     ///
-    /// Loads the existing `Contract` record and returns only the `client`,
-    /// `freelancer`, and optional `arbiter` addresses. This is a lighter
-    /// read than `get_contract` when only participant identities are needed.
+    /// This is an O(1) read-only view that returns the stored arbiter directly
+    /// without reconstructing it from other state. It never panics — missing
+    /// contracts and unset arbiters both produce `None`.
     ///
     /// # Arguments
     /// * `env` - The contract environment
-    /// * `contract_id` - The contract ID
+    /// * `contract_id` - The contract ID to query
     ///
     /// # Returns
-    /// A [`ContractParticipants`] struct containing:
-    /// * `client` - The client address that funded the contract
-    /// * `freelancer` - The freelancer address performing the work
-    /// * `arbiter` - `Some(Address)` if an arbiter was assigned, `None` otherwise
+    /// * `Some(Address)` if the contract exists and has an arbiter assigned
+    /// * `None` if the contract does not exist or has no arbiter
     ///
-    /// # Panics
-    /// Panics with `ContractNotFound` if no contract exists for `contract_id`,
-    /// matching the error semantics of `get_contract`.
-    ///
-    /// # TTL
-    /// Extends the contract entry's persistent TTL on successful read,
-    /// consistent with `get_contract` and `get_refundable_balance`.
-    pub fn get_contract_participants(env: Env, contract_id: u32) -> ContractParticipants {
-        let contract: Contract = env
-            .storage()
+    /// # Security
+    /// This is a read-only operation that does **not** extend the contract's TTL.
+    /// Probing for arbiter state cannot be abused to keep entries alive.
+    pub fn get_arbiter(env: Env, contract_id: u32) -> Option<Address> {
+        env.storage()
             .persistent()
-            .get(&DataKey::Contract(contract_id))
-            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
-
-        ttl::extend_contract_ttl(&env, contract_id);
-
-        ContractParticipants {
-            client: contract.client,
-            freelancer: contract.freelancer,
-            arbiter: contract.arbiter,
-        }
+            .get::<_, Contract>(&DataKey::Contract(contract_id))
+            .and_then(|c| c.arbiter)
     }
 
     /// Returns the next contract ID to be allocated (the high-water mark).
