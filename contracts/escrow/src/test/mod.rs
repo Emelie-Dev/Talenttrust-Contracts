@@ -8,24 +8,32 @@ use crate::{
 };
 
 // --- Submodules ---
+mod accept_reject_boundaries;
 mod approval_expiry;
+mod boundaries;
 mod cancel_contract;
 mod client_migration;
+mod contract_id_allocation;
 mod create_contract_bounds;
 mod deposit;
+mod deposit_events;
 mod dispute;
 mod emergency_controls;
 mod events_boundaries;
 mod input_sanitization_amounts;
 mod input_sanitization_identities;
 mod mainnet_readiness;
+mod milestone_boundaries;
 mod pause_controls;
 mod persistence;
+mod protocol_fees;
 mod refund;
 mod release;
 mod release_authorization;
 mod reputation;
+mod require_milestone;
 mod security;
+mod settlement_rounding;
 mod ttl_tests;
 
 // --- Shared constants ---
@@ -264,9 +272,14 @@ pub fn total_milestone_amount() -> i128 {
     MILESTONE_ONE + MILESTONE_TWO + MILESTONE_THREE
 }
 
-/// Generate a fresh (client, freelancer) address pair for a test.
-pub fn generated_participants(env: &Env) -> (Address, Address) {
-    (Address::generate(env), Address::generate(env))
+/// Generate a fresh (client, freelancer, arbiter) address triple for a test.
+/// Returns (client, freelancer, arbiter) where all addresses are distinct.
+pub fn generated_participants(env: &Env) -> (Address, Address, Address) {
+    (
+        Address::generate(env),
+        Address::generate(env),
+        Address::generate(env),
+    )
 }
 
 /// Create, fund, and fully release a 3-milestone contract, driving it to
