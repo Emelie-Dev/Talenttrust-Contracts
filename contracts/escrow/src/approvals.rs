@@ -211,6 +211,121 @@ pub fn check_approvals(
     }
 }
 
+/// Revokes the caller's own approval for a milestone.
+///
+/// Only the party who originally approved can revoke their own flag.
+/// Other parties' approval flags are left intact. If all three flags
+/// become false after revocation, the entire approval record is removed
+/// from temporary storage.
+///
+/// # Arguments
+/// * `env` - The contract environment
+/// * `contract_id` - The contract ID
+/// * `milestone_index` - The index of the milestone
+/// * `caller` - The address of the caller requesting revocation
+///
+/// # Returns
+/// `true` if the revocation was successful
+///
+/// # Errors
+/// * `ContractNotFound` - If contract doesn't exist
+/// * `IndexOutOfBounds` - If milestone index is invalid
+/// * `MilestoneAlreadyReleased` - If milestone was already released
+/// * `UnauthorizedRole` - If caller is not a contract participant
+/// * `InsufficientApprovals` - If no approval record exists for this milestone
+///
+/// # Security
+/// - Caller must be authenticated via require_auth()
+/// - A party can only revoke their own approval flag
+/// - Cannot revoke after the milestone has been released
+/// - When all flags become false, the record is removed entirely
+pub fn revoke_approval(
+    env: &Env,
+    contract_id: u32,
+    milestone_index: u32,
+    caller: &Address,
+) -> Result<bool, Error> {
+    // Load contract
+    let contract: Contract = env
+        .storage()
+        .persistent()
+        .get(&DataKey::Contract(contract_id))
+        .ok_or(Error::ContractNotFound)?;
+
+    // Load milestones
+    let milestones: Vec<Milestone> = env
+        .storage()
+        .persistent()
+        .get(&crate::ttl::milestone_storage_key(env, contract_id))
+        .ok_or(Error::ContractNotFound)?;
+
+    // Validate milestone index
+    if milestone_index >= milestones.len() {
+        return Err(Error::IndexOutOfBounds);
+    }
+
+    let milestone = milestones.get(milestone_index).unwrap();
+
+    // Check if milestone is already released
+    if milestone.released {
+        return Err(Error::MilestoneAlreadyReleased);
+    }
+
+    // Determine caller role
+    let is_client = caller == &contract.client;
+    let is_freelancer = caller == &contract.freelancer;
+    let is_arbiter = contract.arbiter.as_ref() == Some(caller);
+
+    // Verify caller is a valid participant
+    if !is_client && !is_freelancer && !is_arbiter {
+        return Err(Error::UnauthorizedRole);
+    }
+
+    // Load approval record — must exist to revoke
+    let approval_key = DataKey::MilestoneApprovals(contract_id, milestone_index);
+    let mut approvals: MilestoneApprovals = env
+        .storage()
+        .temporary()
+        .get(&approval_key)
+        .ok_or(Error::InsufficientApprovals)?;
+
+    // Clear only the caller's flag
+    if is_client {
+        if !approvals.client_approved {
+            return Err(Error::InsufficientApprovals);
+        }
+        approvals.client_approved = false;
+    } else if is_freelancer {
+        if !approvals.freelancer_approved {
+            return Err(Error::InsufficientApprovals);
+        }
+        approvals.freelancer_approved = false;
+    } else if is_arbiter {
+        if !approvals.arbiter_approved {
+            return Err(Error::InsufficientApprovals);
+        }
+        approvals.arbiter_approved = false;
+    }
+
+    // If all flags are now false, remove the record entirely
+    let all_false =
+        !approvals.client_approved && !approvals.freelancer_approved && !approvals.arbiter_approved;
+
+    if all_false {
+        env.storage().temporary().remove(&approval_key);
+    } else {
+        // Store updated approval with TTL
+        env.storage().temporary().set(&approval_key, &approvals);
+        env.storage().temporary().extend_ttl(
+            &approval_key,
+            PENDING_APPROVAL_BUMP_THRESHOLD,
+            PENDING_APPROVAL_TTL_LEDGERS,
+        );
+    }
+
+    Ok(true)
+}
+
 /// Clears approval records for a milestone after successful release.
 ///
 /// This prevents approval reuse and cleans up temporary storage.

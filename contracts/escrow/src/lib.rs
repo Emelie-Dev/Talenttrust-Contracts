@@ -691,6 +691,60 @@ impl Escrow {
             .unwrap_or_else(|e| env.panic_with_error(e))
     }
 
+    /// Revokes the caller's own approval for a milestone before release.
+    ///
+    /// Only the party who originally approved can revoke their own flag.
+    /// Other parties' approval flags are left intact. If all three flags
+    /// become false after revocation, the entire approval record is removed
+    /// from temporary storage.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `contract_id` - The contract ID
+    /// * `caller` - The address of the caller requesting revocation
+    /// * `milestone_index` - The index of the milestone to revoke approval for
+    ///
+    /// # Returns
+    /// `true` if revocation was successful
+    ///
+    /// # Errors
+    /// * `ContractPaused` - If the contract is paused while not in emergency mode
+    /// * `EmergencyActive` - If the contract is in an active emergency pause
+    /// * `AlreadyFinalized` - If the contract has already been finalized
+    /// * `ContractNotFound` - If the contract doesn't exist
+    /// * `IndexOutOfBounds` - If milestone index is invalid
+    /// * `MilestoneAlreadyReleased` - If milestone was already released
+    /// * `UnauthorizedRole` - If caller is not a contract participant
+    /// * `InsufficientApprovals` - If no approval record exists for this milestone
+    ///
+    /// # Security
+    /// * Caller must authenticate via require_auth()
+    /// * A party can only revoke their own approval flag
+    /// * Cannot revoke after the milestone has been released
+    ///
+    /// # Events
+    /// On success, emits a `revoked` event with `(contract_id, milestone_index, caller)`.
+    pub fn revoke_milestone_approval(
+        env: Env,
+        contract_id: u32,
+        caller: Address,
+        milestone_index: u32,
+    ) -> bool {
+        Self::require_not_paused(&env);
+        Self::require_not_finalized(&env, contract_id);
+        caller.require_auth();
+        let result = approvals::revoke_approval(&env, contract_id, milestone_index, &caller)
+            .unwrap_or_else(|e| env.panic_with_error(e));
+
+        // Emit revoked event
+        env.events().publish(
+            (Symbol::new(&env, "revoked"),),
+            (contract_id, milestone_index, caller),
+        );
+
+        result
+    }
+
     /// Grants exactly one pending reputation credit to the freelancer.
     ///
     /// This is called exactly once when a contract successfully transitions to

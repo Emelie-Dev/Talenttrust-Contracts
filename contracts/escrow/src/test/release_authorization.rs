@@ -1310,6 +1310,222 @@ fn stranger_rejected_on_all_modes() {
 }
 
 // ===========================================================================
+//  revoke_milestone_approval
+// ===========================================================================
+
+/// Client can revoke their own approval in ClientOnly mode.
+#[test]
+fn revoke_approval_client_only() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = new_client(&env);
+    let (client_addr, freelancer_addr, _) = setup(&env);
+
+    let id = funded_no_approvals(
+        &env,
+        &client,
+        &client_addr,
+        &freelancer_addr,
+        &ReleaseAuthorization::ClientOnly,
+        None,
+    );
+
+    // Approve
+    assert!(client.approve_milestone_release(&id, &client_addr, &0));
+    let approvals = client.get_milestone_approvals(&id, &0).unwrap();
+    assert!(approvals.client_approved);
+
+    // Revoke
+    assert!(client.revoke_milestone_approval(&id, &client_addr, &0));
+    let approvals = client.get_milestone_approvals(&id, &0);
+    assert!(
+        approvals.is_none(),
+        "record should be removed when all flags false"
+    );
+}
+
+/// In MultiSig mode, revoking one party's approval leaves the other intact.
+#[test]
+fn revoke_approval_multisig_partial() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = new_client(&env);
+    let (client_addr, freelancer_addr, _) = setup(&env);
+
+    let id = funded_no_approvals(
+        &env,
+        &client,
+        &client_addr,
+        &freelancer_addr,
+        &ReleaseAuthorization::MultiSig,
+        None,
+    );
+
+    // Both approve
+    assert!(client.approve_milestone_release(&id, &client_addr, &0));
+    assert!(client.approve_milestone_release(&id, &freelancer_addr, &0));
+    let approvals = client.get_milestone_approvals(&id, &0).unwrap();
+    assert!(approvals.client_approved);
+    assert!(approvals.freelancer_approved);
+
+    // Client revokes only their own flag
+    assert!(client.revoke_milestone_approval(&id, &client_addr, &0));
+    let approvals = client.get_milestone_approvals(&id, &0).unwrap();
+    assert!(!approvals.client_approved, "client flag should be false");
+    assert!(
+        approvals.freelancer_approved,
+        "freelancer flag should remain true"
+    );
+
+    // Release should now fail — only freelancer approved
+    let result = client.try_release_milestone(&id, &client_addr, &0);
+    assert_contract_error(result, Error::InsufficientApprovals);
+}
+
+/// Revoke without prior approval fails with InsufficientApprovals.
+#[test]
+fn revoke_without_approval_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = new_client(&env);
+    let (client_addr, freelancer_addr, _) = setup(&env);
+
+    let id = funded_no_approvals(
+        &env,
+        &client,
+        &client_addr,
+        &freelancer_addr,
+        &ReleaseAuthorization::ClientOnly,
+        None,
+    );
+
+    // No approval recorded yet
+    let result = client.try_revoke_milestone_approval(&id, &client_addr, &0);
+    assert_contract_error(result, Error::InsufficientApprovals);
+}
+
+/// Revoke after milestone release fails with MilestoneAlreadyReleased.
+#[test]
+fn revoke_after_release_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = new_client(&env);
+    let (client_addr, freelancer_addr, _) = setup(&env);
+
+    let id = funded_no_approvals(
+        &env,
+        &client,
+        &client_addr,
+        &freelancer_addr,
+        &ReleaseAuthorization::ClientOnly,
+        None,
+    );
+
+    // Approve
+    assert!(client.approve_milestone_release(&id, &client_addr, &0));
+
+    // Manually mark milestone as released to simulate post-release state
+    let escrow_addr = client.address.clone();
+    env.as_contract(&escrow_addr, || {
+        let milestone_key = soroban_sdk::Symbol::new(&env, "milestones");
+        let mut milestones: soroban_sdk::Vec<crate::Milestone> = env
+            .storage()
+            .persistent()
+            .get(&(crate::DataKey::Contract(id), milestone_key.clone()))
+            .unwrap();
+        let mut m = milestones.get(0).unwrap();
+        m.released = true;
+        milestones.set(0, m);
+        env.storage()
+            .persistent()
+            .set(&(crate::DataKey::Contract(id), milestone_key), &milestones);
+    });
+
+    // Revoke should now fail
+    let result = client.try_revoke_milestone_approval(&id, &client_addr, &0);
+    assert_contract_error(result, Error::MilestoneAlreadyReleased);
+}
+
+/// Stranger cannot revoke — UnauthorizedRole.
+#[test]
+fn revoke_by_stranger_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = new_client(&env);
+    let (client_addr, freelancer_addr, _) = setup(&env);
+
+    let id = funded_no_approvals(
+        &env,
+        &client,
+        &client_addr,
+        &freelancer_addr,
+        &ReleaseAuthorization::ClientOnly,
+        None,
+    );
+
+    assert!(client.approve_milestone_release(&id, &client_addr, &0));
+
+    let stranger = Address::generate(&env);
+    let result = client.try_revoke_milestone_approval(&id, &stranger, &0);
+    assert_contract_error(result, Error::UnauthorizedRole);
+}
+
+/// Freelancer cannot revoke client's approval in ClientOnly mode.
+#[test]
+fn revoke_wrong_party_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = new_client(&env);
+    let (client_addr, freelancer_addr, _) = setup(&env);
+
+    let id = funded_no_approvals(
+        &env,
+        &client,
+        &client_addr,
+        &freelancer_addr,
+        &ReleaseAuthorization::ClientOnly,
+        None,
+    );
+
+    assert!(client.approve_milestone_release(&id, &client_addr, &0));
+
+    // Freelancer tries to revoke client's approval — should fail
+    // The freelancer is a valid participant but hasn't approved, so it returns InsufficientApprovals
+    let result = client.try_revoke_milestone_approval(&id, &freelancer_addr, &0);
+    assert_contract_error(result, Error::InsufficientApprovals);
+}
+
+/// Revoke emits a revoked event.
+#[test]
+fn revoke_emits_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = new_client(&env);
+    let (client_addr, freelancer_addr, _) = setup(&env);
+
+    let id = funded_no_approvals(
+        &env,
+        &client,
+        &client_addr,
+        &freelancer_addr,
+        &ReleaseAuthorization::ClientOnly,
+        None,
+    );
+
+    assert!(client.approve_milestone_release(&id, &client_addr, &0));
+    assert!(client.revoke_milestone_approval(&id, &client_addr, &0));
+
+    // Check event was emitted
+    let events = env.events().all();
+    let has_revoked_event = events.iter().any(|event| {
+        event.1.len() > 0
+            && soroban_sdk::Symbol::from_val(&env, &event.1.get(0).unwrap())
+                == soroban_sdk::Symbol::new(&env, "revoked")
+    });
+    assert!(has_revoked_event, "should have at least one revoked event");
+}
+
+// ===========================================================================
 //  Approval clearing after successful release
 // ===========================================================================
 
