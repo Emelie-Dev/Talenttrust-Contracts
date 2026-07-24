@@ -481,7 +481,7 @@ Implemented events:
 - `("released", contract_id, milestone_index)` on release (with payload `(freelancer, payout, fee, settlement_token)`)
 - `("b_rls", contract_id)` on batch release (with payload `(milestone_indices, total_gross, total_fee, new_released_amount, caller, timestamp)`)
 - `("rep_issd", contract_id)` on reputation issuance
-- `("cancelled", contract_id)` on cancellation
+- `("cancelled", contract_id)` on cancellation with payload `(caller, previous_status, timestamp)`
 - `("finalized", contract_id)` on finalization
 
 The `("deposited", contract_id)` event is emitted on every successful
