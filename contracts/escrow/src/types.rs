@@ -342,6 +342,39 @@ pub struct GovernedParameters {
     pub max_escrow_total_stroops: i128,
 }
 
+// ── Protocol state view ─────────────────────────────────────────────────────
+
+/// Unified, read-only snapshot of the escrow protocol's global state.
+///
+/// Returned by [`Escrow::get_protocol_state`] in a single O(1) storage read.
+/// All fields use sensible defaults when the corresponding key has not been
+/// written yet, so the function never panics — even on a freshly deployed
+/// contract that has not been initialized.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProtocolState {
+    /// Whether `initialize` has been called.
+    pub initialized: bool,
+    /// The current admin address, if set.
+    pub admin: Option<Address>,
+    /// Whether the contract is paused.
+    pub paused: bool,
+    /// Whether emergency mode is active.
+    pub emergency: bool,
+    /// The bound settlement token address, if any.
+    pub settlement_token: Option<Address>,
+    /// The next auto-incremented contract ID.
+    pub next_contract_id: u32,
+    /// Protocol fee in basis points.
+    pub protocol_fee_bps: u32,
+    /// Cumulative protocol fees awaiting withdrawal.
+    pub accumulated_protocol_fees: i128,
+    /// Maximum total escrow amount (from governed parameters), if set.
+    pub max_escrow_total_stroops: Option<i128>,
+    /// Deployment readiness checklist.
+    pub readiness: ReadinessChecklist,
+}
+
 /// Stores a pending governance admin proposal with the proposed address
 /// and the ledger sequence when it was proposed.
 /// Used for the admin rotation timelock mechanism.
