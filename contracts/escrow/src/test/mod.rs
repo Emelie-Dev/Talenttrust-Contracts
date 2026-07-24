@@ -25,6 +25,7 @@ mod mainnet_readiness;
 mod milestone_boundaries;
 mod pause_controls;
 mod persistence;
+mod protocol_fees;
 mod refund;
 mod release;
 mod release_authorization;
