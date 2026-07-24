@@ -34,6 +34,7 @@ SAC settlement-token binding:
 Read-only queries:
 
 - `get_contract(contract_id) -> EscrowContractData`
+- `get_contract_participants(contract_id) -> ContractParticipants`
 - `get_milestones(contract_id) -> Vec<Milestone>`
 - `get_refundable_balance(contract_id) -> i128`
 - `get_milestone_approvals(contract_id, milestone_index) -> Option<MilestoneApprovals>`
@@ -78,6 +79,11 @@ Per-getter details:
 - `get_contract(contract_id)` returns the full `EscrowContractData`
   (participants, arbiter, status, funded/released/refunded amounts,
   release_authorization). Reads persist the contract entry's TTL. Panics
+  `ContractNotFound` for an unknown id.
+- `get_contract_participants(contract_id)` returns only the participant
+  addresses (`client`, `freelancer`, and optional `arbiter`).  This is a
+  lighter read than `get_contract` when only participant identities are
+  needed.  Reads persist the contract entry's TTL.  Panics
   `ContractNotFound` for an unknown id.
 - `get_milestones(contract_id)` returns the milestones vector in creation
   order. Reads persist the milestones entry's TTL. Panics `ContractNotFound`

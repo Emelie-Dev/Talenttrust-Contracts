@@ -79,10 +79,10 @@ pub use ttl::{ADMIN_ROTATION_MIN_DELAY_LEDGERS, PENDING_MIGRATION_TTL_LEDGERS};
 // `DisputeResolution` and `DisputeSplit` are defined once in `types.rs` and
 // re-exported here; `dispute.rs` uses them via `crate::DisputeResolution`.
 pub use types::{
-    Contract, ContractBounds, ContractStatus, ContractSummary, DataKey, DepositMode,
-    DisputeResolution, DisputeSplit, GovernedParameters, Milestone, MilestoneApprovals,
-    MilestoneSummary, PendingAdminProposal, ReadinessChecklist, ReleaseAuthorization, Reputation,
-    ReputationView, SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION,
+    Contract, ContractBounds, ContractParticipants, ContractStatus, ContractSummary, DataKey,
+    DepositMode, DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone,
+    MilestoneApprovals, MilestoneSummary, PendingAdminProposal, ReadinessChecklist,
+    ReleaseAuthorization, Reputation, SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION,
 };
 
 
@@ -1438,6 +1438,45 @@ impl Escrow {
         // Extend TTL on contract read
         ttl::extend_contract_ttl(&env, contract_id);
         contract
+    }
+
+    /// Returns the participant addresses for a contract.
+    ///
+    /// Loads the existing `Contract` record and returns only the `client`,
+    /// `freelancer`, and optional `arbiter` addresses. This is a lighter
+    /// read than `get_contract` when only participant identities are needed.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `contract_id` - The contract ID
+    ///
+    /// # Returns
+    /// A [`ContractParticipants`] struct containing:
+    /// * `client` - The client address that funded the contract
+    /// * `freelancer` - The freelancer address performing the work
+    /// * `arbiter` - `Some(Address)` if an arbiter was assigned, `None` otherwise
+    ///
+    /// # Panics
+    /// Panics with `ContractNotFound` if no contract exists for `contract_id`,
+    /// matching the error semantics of `get_contract`.
+    ///
+    /// # TTL
+    /// Extends the contract entry's persistent TTL on successful read,
+    /// consistent with `get_contract` and `get_refundable_balance`.
+    pub fn get_contract_participants(env: Env, contract_id: u32) -> ContractParticipants {
+        let contract: Contract = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Contract(contract_id))
+            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
+
+        ttl::extend_contract_ttl(&env, contract_id);
+
+        ContractParticipants {
+            client: contract.client,
+            freelancer: contract.freelancer,
+            arbiter: contract.arbiter,
+        }
     }
 
     /// Returns the next contract ID to be allocated (the high-water mark).
