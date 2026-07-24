@@ -23,7 +23,7 @@ mod events_boundaries;
 mod input_sanitization_amounts;
 mod input_sanitization_identities;
 mod mainnet_readiness;
-mod milestone_boundaries;
+mod milestone_progress;
 mod pause_controls;
 mod persistence;
 mod protocol_fees;
