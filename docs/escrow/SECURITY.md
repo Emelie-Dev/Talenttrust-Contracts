@@ -39,6 +39,10 @@ This document reflects the escrow API currently implemented in `contracts/escrow
 - Aggregate amount math uses checked helpers where totals are accumulated.
 - Balance-changing operations verify the core accounting invariant:
   `total_deposited == released_amount + refunded_amount + available_balance`.
+- Dispute payout resolution preserves the available balance across all supported
+  branches: `FullRefund`, `FullPayout`, `PartialRefund`, and `Split` always
+  return non-negative payouts whose sum equals the available balance, and the
+  `Split` branch rejects any combination that would create or destroy value.
 - Finalization summaries use checked arithmetic and persistent storage. They do
   not expire through TTL and do not create, deduct, or withdraw protocol fees.
 

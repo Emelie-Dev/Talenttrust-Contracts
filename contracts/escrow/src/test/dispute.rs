@@ -158,7 +158,7 @@ fn resolution_payouts_partial_refund_applies_floor_rounded_30_pct_to_freelancer(
 #[test]
 fn resolution_payouts_split_accepts_exact_conserving_amounts() {
     let env = make_env();
-    // Zero available → (0, 0)
+    // Exact split amounts are accepted and returned verbatim.
     assert_eq!(
         resolution_payouts(
             &payout_contract(&env, 100, 0, 0),
@@ -167,9 +167,9 @@ fn resolution_payouts_split_accepts_exact_conserving_amounts() {
                 freelancer_amount: 60,
             })
         ),
-        Ok((0, 0))
+        Ok((40, 60))
     );
-    // One stroop → floor(1 * 30 / 100) = 0, client gets 1
+    // One stroop → floor(1 * 30 / 100) = 0, client gets 1.
     assert_eq!(
         resolution_payouts(
             &payout_contract(&env, 1, 0, 0),
@@ -186,13 +186,13 @@ fn resolution_payouts_partial_refund_odd_amount_rounding() {
     let env = make_env();
     // (available, expected_client, expected_freelancer)
     let cases: &[(i128, i128, i128)] = &[
-        (7, 7, 0),
+        (7, 5, 2),
         (10, 7, 3),
-        (99, 69, 30),
+        (99, 70, 29),
         (100, 70, 30),
         (101, 71, 30),
-        (102, 71, 31),
-        (103, 72, 31),
+        (102, 72, 30),
+        (103, 73, 30),
     ];
     for (available, expected_client, expected_freelancer) in cases {
         let contract = payout_contract(&env, *available, 0, 0);

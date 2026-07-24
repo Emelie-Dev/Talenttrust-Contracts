@@ -17,6 +17,22 @@ use crate::{
 // resolution_payouts: pure arithmetic for dispute payout calculations
 // ---------------------------------------------------------------------------
 
+/// Compute the currently available escrow balance without creating or destroying value.
+///
+/// The available balance is derived from the contract's accounting state as:
+/// `available = funded_amount - released_amount - refunded_amount`.
+fn available_balance(contract: &Contract) -> Result<i128, Error> {
+    let available = contract
+        .funded_amount
+        .checked_sub(contract.released_amount)
+        .and_then(|value| value.checked_sub(contract.refunded_amount))
+        .ok_or(Error::AccountingInvariantViolated)?;
+    if available < 0 {
+        return Err(Error::AccountingInvariantViolated);
+    }
+    Ok(available)
+}
+
 /// Compute the payout split for a dispute resolution.
 ///
 /// Returns `(client_payout, freelancer_payout)` where both values are non-negative
@@ -31,14 +47,7 @@ pub fn resolution_payouts(
     contract: &Contract,
     resolution: &DisputeResolution,
 ) -> Result<(i128, i128), Error> {
-    let available = contract
-        .funded_amount
-        .checked_sub(contract.released_amount)
-        .and_then(|value| value.checked_sub(contract.refunded_amount))
-        .ok_or(Error::AccountingInvariantViolated)?;
-    if available < 0 {
-        return Err(Error::AccountingInvariantViolated);
-    }
+    let available = available_balance(contract)?;
 
     match resolution {
         DisputeResolution::FullRefund => Ok((available, 0)),
