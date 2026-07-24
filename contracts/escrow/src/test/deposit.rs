@@ -4,7 +4,7 @@ use soroban_sdk::{
     symbol_short,
     testutils::Events as _,
     token::{Client as TokenClient, StellarAssetClient},
-    IntoVal, Val, Vec,
+    IntoVal, TryFromVal, Val, Vec,
 };
 
 fn assert_deposit_event(
@@ -16,14 +16,17 @@ fn assert_deposit_event(
 ) {
     let expected_topics: Vec<Val> = (symbol_short!("deposit"), fixture.escrow_id)
         .into_val(&fixture.env);
-    let expected_data: Val = (amount, funded_amount, total_deposited).into_val(&fixture.env);
+    let expected_data = (amount, funded_amount, total_deposited);
     let mut matching_events = 0;
 
     for event in events.iter() {
         if event.0 == fixture.escrow_address && event.1 == expected_topics {
             matching_events += 1;
+            let actual_data: (i128, i128, i128) =
+                TryFromVal::try_from_val(&fixture.env, &event.2)
+                    .expect("deposit event data must be an amount tuple");
             assert_eq!(
-                event.2, expected_data,
+                actual_data, expected_data,
                 "deposit event data must match persisted amounts"
             );
         }
