@@ -62,8 +62,7 @@ mod utils;
 
 use crate::utils::now_seconds;
 use soroban_sdk::{
-    contract, contracterror, contractimpl, log, symbol_short, token, Address, Env, String, Symbol,
-    Vec,
+    contract, contractimpl, log, symbol_short, token, Address, Env, String, Symbol, Vec,
 };
 
 pub use amount_validation::accumulate_amounts;
@@ -81,10 +80,11 @@ pub use ttl::{ADMIN_ROTATION_MIN_DELAY_LEDGERS, PENDING_MIGRATION_TTL_LEDGERS};
 // re-exported here; `dispute.rs` uses them via `crate::DisputeResolution`.
 pub use types::{
     Contract, ContractBounds, ContractStatus, ContractSummary, DataKey, DepositMode,
-    DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone, MilestoneApprovals,
+    DisputeResolution, DisputeSplit, GovernedParameters, Milestone, MilestoneApprovals,
     MilestoneSummary, PendingAdminProposal, ReadinessChecklist, ReleaseAuthorization, Reputation,
     ReputationView, SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION,
 };
+
 
 // Maximum bounds constants - re-export from amount_validation for API visibility
 pub const MAX_MILESTONES: u32 = 10;
@@ -97,6 +97,12 @@ pub struct Escrow;
 mod create_contract;
 mod dispute;
 mod governance;
+
+// Error enum is declared in `types.rs` with `#[contracterror]`.
+// Re-export here so all crate modules can use `crate::Error::*` and
+// `crate::EscrowError::*`.
+pub use types::Error;
+pub use types::Error as EscrowError;
 
 /// Governance-level errors for admin-gated operations.
 #[contracterror]
@@ -474,7 +480,7 @@ impl Escrow {
     /// The unique contract ID
     ///
     /// # Errors
-    /// * `InvalidParticipants` - If client and freelancer are the same address
+    /// * `InvalidParticipant` - If client and freelancer are the same address
     /// * `EmptyMilestones` - If no milestones are provided
     /// * `InvalidMilestoneAmount` - If any milestone amount is <= 0
     /// Pull the settlement-token deposit from the client into the escrow contract address.
@@ -760,7 +766,7 @@ impl Escrow {
             .unwrap_or_else(|e| env.panic_with_error(e));
 
         if milestone.released {
-            env.panic_with_error(Error::MilestoneAlreadyReleased);
+            env.panic_with_error(EscrowError::AlreadyReleased);
         }
 
         if milestone.refunded {
@@ -773,6 +779,14 @@ impl Escrow {
 
         let mut milestones: Vec<Milestone> = ttl::load_milestones(&env, contract_id);
         let mut milestone = milestones.get(milestone_index).unwrap().clone();
+
+        if milestone.released {
+            env.panic_with_error(EscrowError::AlreadyReleased);
+        }
+
+        if milestone.refunded {
+            env.panic_with_error(Error::AlreadyRefunded);
+        }
 
         // Check contract-level funding (per-milestone funded_amount is set after
         // release, so we check the aggregate contract balance here).
@@ -1801,7 +1815,7 @@ impl Escrow {
     /// * `EmergencyActive` - If the contract is in an active emergency pause.
     /// * `ContractNotFound` - If the contract does not exist.
     /// * `UnauthorizedRole` - If the caller is not the stored client.
-    /// * `AlreadyCancelled` - If the contract was already cancelled.
+    /// * `ContractCancelled` - If the contract was already cancelled.
     /// * `InvalidStatusTransition` - If the contract is not `Created`/`Funded` or has already released funds.
     pub fn cancel_contract(env: Env, contract_id: u32, client: Address) -> bool {
         Self::require_not_paused(&env);
@@ -1819,7 +1833,7 @@ impl Escrow {
         }
 
         if contract.status == ContractStatus::Cancelled {
-            env.panic_with_error(Error::AlreadyCancelled);
+            env.panic_with_error(EscrowError::ContractCancelled);
         }
 
         if contract.status != ContractStatus::Created
@@ -2144,7 +2158,7 @@ impl Escrow {
     /// * `UnauthorizedRole`   — `caller` is not the freelancer
     /// * `InvalidState`       — contract is not `Funded`
     /// * `IndexOutOfBounds`   — `milestone_index` exceeds milestone count
-    /// * `MilestoneAlreadyReleased` — milestone is already released
+    /// * `AlreadyReleased` — milestone is already released
     /// * `AlreadyRefunded`    — milestone has been refunded
     /// * `EvidenceTooLong`    — evidence string exceeds 256 bytes
     pub fn submit_work_evidence(
@@ -2189,7 +2203,7 @@ impl Escrow {
             });
 
         if milestone.released {
-            env.panic_with_error(Error::MilestoneAlreadyReleased);
+            env.panic_with_error(EscrowError::AlreadyReleased);
         }
         if milestone.refunded {
             env.panic_with_error(EscrowError::AlreadyRefunded);

@@ -191,7 +191,7 @@ fn test_create_rejects_same_client_and_freelancer() {
         &default_milestones(&env),
         &ReleaseAuthorization::ClientOnly,
     );
-    assert_eq!(result, Err(Ok(Error::InvalidParticipants)));
+    assert_eq!(result, Err(Ok(EscrowError::InvalidParticipant)));
 }
 
 #[test]
@@ -290,7 +290,7 @@ fn test_approve_rejects_already_released_milestone() {
     assert!(client.release_milestone(&contract_id, &client_addr, &0));
 
     let result = client.try_approve_milestone_release(&contract_id, &client_addr, &0);
-    assert_eq!(result, Err(Ok(Error::MilestoneAlreadyReleased)));
+    assert_eq!(result, Err(Ok(EscrowError::AlreadyReleased)));
 }
 
 #[test]
@@ -373,7 +373,7 @@ fn test_release_rejects_already_released_milestone() {
     assert!(client.approve_milestone_release(&contract_id, &client_addr, &0));
     assert!(client.release_milestone(&contract_id, &client_addr, &0));
     let result = client.try_release_milestone(&contract_id, &client_addr, &0);
-    assert_eq!(result, Err(Ok(Error::MilestoneAlreadyReleased)));
+    assert_eq!(result, Err(Ok(EscrowError::AlreadyReleased)));
 }
 
 #[test]

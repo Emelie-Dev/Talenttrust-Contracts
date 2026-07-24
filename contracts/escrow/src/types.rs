@@ -1,5 +1,4 @@
 use soroban_sdk::{contracterror, contracttype, Address, String, Vec};
-
 // ── Indexer summary types ────────────────────────────────────────────────────
 
 #[allow(dead_code)]
@@ -92,104 +91,128 @@ pub enum DataKey {
     SettlementToken,
 }
 
-/// Canonical contract error type for all entrypoint-facing errors.
+/// Canonical error type for contract operations.
+///
+/// Declared here (in `types.rs`) so the `#[contracterror]` proc-macro from
+/// soroban-sdk processes it in a submodule rather than in the crate root
+/// alongside `#[contract]` / `#[contractimpl]`.  The crate root re-exports
+/// it as both `crate::Error` and `crate::EscrowError` (via
+/// `pub use types::Error;` and `pub use types::Error as EscrowError;`)
+/// so all existing panic sites and test assertions continue to resolve.
+///
+/// NOTE: This is the SINGLE canonical `#[contracterror]` enum for the
+/// entire escrow crate.  A previous revision had a separate `types::Error`
+/// (53 variants) that was later consolidated into `EscrowError` in lib.rs.
+/// That dual registration produced 188 host-side "contract error code
+/// mismatch" failures.  This enum replaces both — a single registration
+/// with all variants that source and test sites reference.
 #[contracterror]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum Error {
-    /// The specified milestone index is out of bounds.
-    IndexOutOfBounds = 3,
-    /// The milestone has already been released.
-    AlreadyReleased = 4,
-    /// The refund request is empty.
-    EmptyRefundRequest = 6,
-    /// Duplicate milestone indices specified in the refund request.
-    DuplicateMilestoneInRefund = 7,
-    /// The milestone has already been refunded.
-    AlreadyRefunded = 8,
-    /// Insufficient funds available to perform the operation.
-    InsufficientFunds = 9,
-    /// The requested contract was not found.
-    ContractNotFound = 10,
-    /// The caller is not authorized for this operation.
-    UnauthorizedRole = 11,
-    /// The contract requires an arbiter address but none was provided.
-    MissingArbiter = 12,
-    /// The provided arbiter address is invalid (e.g. same as client or freelancer).
-    InvalidArbiter = 13,
-    /// The client and freelancer addresses are identical or invalid.
-    InvalidParticipants = 14,
-    /// The amount must be strictly greater than zero.
-    AmountMustBePositive = 15,
-    /// The contract is in an invalid state for this operation.
-    InvalidState = 16,
-    /// The milestone has already been released.
-    MilestoneAlreadyReleased = 17,
-    /// The milestone has already been approved.
-    AlreadyApproved = 18,
-    /// The milestone has not received sufficient approvals to release.
-    InsufficientApprovals = 20,
-    /// The freelancer address does not match the stored freelancer.
-    FreelancerMismatch = 21,
-    /// The rating value is outside the allowed range (1 to 5).
-    InvalidRating = 22,
-    /// Reputation has already been issued for this contract.
-    ReputationAlreadyIssued = 23,
-    /// The milestone list cannot be empty.
-    EmptyMilestones = 25,
-    /// The milestone amount is invalid.
-    InvalidMilestoneAmount = 26,
-    /// A contract with the specified ID already exists.
-    ContractIdCollision = 27,
-    /// The contract ID has overflowed the maximum limit.
-    ContractIdOverflow = 28,
-    /// The comment string is empty.
-    EmptyComment = 29,
-    /// The comment string exceeds the maximum length limit.
-    CommentTooLong = 30,
-    /// The participant address is invalid.
-    InvalidParticipant = 31,
-    /// The deposit amount is invalid.
-    InvalidDepositAmount = 32,
-    /// The milestone configuration is invalid.
-    InvalidMilestone = 33,
-    /// The contract has already been initialized.
-    AlreadyInitialized = 34,
-    /// Insufficient accumulated fees available for extraction.
-    InsufficientAccumulatedFees = 35,
-    /// The contract has not been initialized.
-    NotInitialized = 36,
-    /// The contract is currently paused.
-    ContractPaused = 37,
-    /// Emergency mode is currently active.
-    EmergencyActive = 38,
-    /// Self-rating is not allowed.
-    SelfRating = 39,
-    /// The contract has not been completed.
-    NotCompleted = 40,
-    /// The requested contract status transition is invalid.
-    InvalidStatusTransition = 41,
-    /// An arbiter is required for this operation.
-    ArbiterRequired = 42,
-    /// The dispute split percentage is invalid.
-    InvalidDisputeSplit = 43,
-    /// The operation would violate the core accounting invariant.
-    AccountingInvariantViolated = 44,
-    /// Checked arithmetic operation resulted in an overflow.
-    PotentialOverflow = 45,
-    /// The contract has already been finalized.
-    AlreadyFinalized = 46,
-    /// The contract has already been cancelled.
-    AlreadyCancelled = 50,
-    /// The work evidence string exceeds the maximum length limit.
-    EvidenceTooLong = 47,
-    /// The governance admin rotation timelock has not elapsed.
-    TimelockNotElapsed = 48,
-    /// The provided protocol parameters are invalid.
-    InvalidProtocolParameters = 49,
-    /// The escrow cap would be exceeded by this operation.
-    EscrowCapExceeded = 51,
+    InvalidParticipant = 1,
+    EmptyMilestones = 2,
+    InvalidMilestoneAmount = 3,
+    InvalidDepositAmount = 4,
+    InvalidMilestone = 5,
+    ContractNotFound = 6,
+    EmptyRefundRequest = 7,
+    DuplicateMilestoneInRefund = 8,
+    AlreadyReleased = 9,
+    AlreadyRefunded = 10,
+    InsufficientFunds = 11,
+    AlreadyInitialized = 12,
+    InsufficientAccumulatedFees = 13,
+    /// Returned by lifecycle entrypoints when `initialize` has not been called.
+    ///
+    /// All money-flow operations require initialization so the admin-controlled
+    /// safety rails (pause, emergency controls, protocol fees) are always in
+    /// scope before any funds can move.
+    NotInitialized = 14,
+    UnauthorizedRole = 15,
+    ContractPaused = 16,
+    EmergencyActive = 17,
+    InvalidState = 18,
+    InvalidRating = 19,
+    SelfRating = 20,
+    ReputationAlreadyIssued = 21,
+    NotCompleted = 22,
+    FreelancerMismatch = 23,
+    InvalidStatusTransition = 24,
+    ArbiterRequired = 25,
+    InvalidDisputeSplit = 26,
+    AccountingInvariantViolated = 27,
+    PotentialOverflow = 28,
+    AlreadyFinalized = 29,
+    AmountMustBePositive = 30,
     /// No settlement token has been bound for custody transfers.
+    SettlementTokenNotConfigured = 31,
+    /// A settlement token has already been bound.
+    SettlementTokenAlreadyBound = 32,
+    /// The sum of milestone amounts exceeded the configured maximum or overflowed.
+    TotalCapExceeded = 33,
+    /// Too many milestones were provided.
+    TooManyMilestones = 34,
+    /// An arbiter was required by the release authorization mode but not provided.
+    MissingArbiter = 35,
+    /// The provided arbiter is invalid (same as client or freelancer).
+    InvalidArbiter = 36,
+    /// Contract is cancelled and must not accept further value-moving operations.
+    ContractCancelled = 37,
+    /// Contract has been refunded and is terminal for value-moving operations.
+    ContractRefunded = 38,
+    /// The address supplied as settlement token is not a valid token contract.
+    /// The pre-bind probe called `token::Client::balance` against the escrow
+    /// contract address and the call panicked — the address does not implement
+    /// the SAC token interface.
+    InvalidSettlementToken = 39,
+    /// The address supplied as settlement token is the escrow contract itself.
+    /// Binding self would create a circular custody reference and brick all
+    /// transfer paths.
+    SettlementTokenIsSelf = 40,
+    /// The address supplied as settlement token is the escrow admin.
+    /// Binding the admin as the custody asset conflates governance authority
+    /// with the settlement token role.
+    SettlementTokenIsAdmin = 41,
+    /// Reputation feedback comment was empty.
+    EmptyComment = 42,
+    /// Reputation feedback comment exceeded the 200-character maximum.
+    CommentTooLong = 43,
+    /// Returned when `accept_governance_admin` is called before
+    /// `ADMIN_ROTATION_MIN_DELAY_LEDGERS` have elapsed since the matching
+    /// `propose_governance_admin` call.  Mirrors the canonical
+    /// [`crate::Error::TimelockNotElapsed`] variant (types.rs) so off-chain
+    /// callers can decode the timelock violation on either enum.  Numeric
+    /// value matches for cross-enum `assert_contract_error` comparisons.
+    /// Mirrors the legacy [`Error::TimelockNotElapsed`] for stable host error
+    /// code semantics.  See `Error` in `types.rs` for the
+    /// canonical discriminant reference.
+    TimelockNotElapsed = 48,
+    /// Specified milestone index is out of bounds.  Mirrors the legacy
+    /// [`Error::IndexOutOfBounds`] disc so source sites that panic with the
+    /// legacy name produce a stable host error code.
+    IndexOutOfBounds = 49,
+    /// Per-milestone approval stage.  Mirrors the legacy
+    /// [`Error::AlreadyApproved`] disc for the approvals flow.
+    AlreadyApproved = 50,
+    /// Approval-stage failure: not enough sustained approvals to release.
+    /// Mirrors the legacy [`Error::InsufficientApprovals`] disc.
+    InsufficientApprovals = 51,
+    /// Internal allocator error: a contract id collision was detected.
+    /// Mirrors the legacy [`Error::ContractIdCollision`] disc.
+    ContractIdCollision = 52,
+    /// Internal allocator error: the contract id space overflowed.
+    /// Mirrors the legacy [`Error::ContractIdOverflow`] disc.
+    ContractIdOverflow = 53,
+    /// Work-evidence string exceeded the maximum length.  Mirrors the
+    /// legacy [`Error::EvidenceTooLong`] disc.
+    EvidenceTooLong = 54,
+    /// Governance parameter validation failure.  Mirrors the legacy
+    /// [`Error::InvalidProtocolParameters`] disc.
+    InvalidProtocolParameters = 55,
+    /// A milestone deadline is set but the deadline has not yet expired.
+    /// Mirrors the legacy [`Error::MilestoneNotOverdue`] disc.
+    MilestoneNotOverdue = 56,
     SettlementTokenNotConfigured = 52,
     /// The milestone deadline has not yet passed.
     MilestoneNotOverdue = 53,

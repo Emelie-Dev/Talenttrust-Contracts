@@ -34,7 +34,7 @@ use soroban_sdk::{Address, Env, Vec};
 /// * `ContractNotFound` - If contract doesn't exist
 /// * `InvalidState` - If contract is not in Funded state
 /// * `IndexOutOfBounds` - If milestone index is invalid
-/// * `MilestoneAlreadyReleased` - If milestone was already released
+/// * `AlreadyReleased` - If milestone was already released
 /// * `UnauthorizedRole` - If caller is not authorized to approve
 /// * `AlreadyApproved` - If caller has already approved this milestone
 ///
@@ -79,7 +79,7 @@ pub fn approve_milestone(
 
     // Check if milestone is already released
     if milestone.released {
-        return Err(Error::MilestoneAlreadyReleased);
+        return Err(EscrowError::AlreadyReleased);
     }
 
     // Determine caller role and check authorization

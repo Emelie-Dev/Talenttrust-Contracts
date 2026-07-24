@@ -271,7 +271,7 @@ fn test_approve_already_released_milestone_fails() {
     assert!(client.release_milestone(&id, &client_addr, &0));
 
     let result = client.try_approve_milestone_release(&id, &client_addr, &0);
-    super::assert_contract_error(result, Error::MilestoneAlreadyReleased);
+    super::assert_contract_error(result, EscrowError::AlreadyReleased);
 }
 
 #[test]

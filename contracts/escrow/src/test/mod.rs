@@ -19,6 +19,7 @@ mod deposit;
 mod deposit_events;
 mod dispute;
 mod emergency_controls;
+mod events_boundaries;
 mod input_sanitization_amounts;
 mod input_sanitization_identities;
 mod mainnet_readiness;
