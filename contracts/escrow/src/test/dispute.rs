@@ -763,3 +763,253 @@ fn resolve_after_finalize_is_rejected() {
         Error::AlreadyFinalized,
     );
 }
+
+// ---------------------------------------------------------------------------
+// Dispute-record view (issue #795)
+// ---------------------------------------------------------------------------
+
+/// Unknown contract ids return `None` from `get_dispute_record` and `false`
+/// from `has_dispute` — neither entrypoint panics for missing IDs, matching
+/// the "sensible default" requirement of the indexer surface. This single
+/// test exercises both read views on a range of never-allocated ids so that
+/// future changes to the storage-key schema are caught here.
+#[test]
+fn dispute_view_returns_default_for_unknown_and_undisputed_contracts() {
+    let env = make_env();
+    let client = make_client(&env);
+    let (_, _, _, contract_id) = funded_contract_with_arbiter(&env, &client);
+
+    // Far above `get_next_contract_id` — these ids have never been allocated,
+    // so neither read view should see anything.
+    for id in [0_u32, 1, 42, 9999, u32::MAX] {
+        assert_eq!(client.get_dispute_record(&id), None, "id {}", id);
+        assert!(!client.has_dispute(&id), "id {}", id);
+    }
+
+    // An allocated-but-never-disputed contract also returns the default.
+    assert_eq!(client.get_dispute_record(&contract_id), None);
+    assert!(!client.has_dispute(&contract_id));
+}
+
+/// Raising a dispute records the raiser, raised_at_ledger, raised_at_timestamp,
+/// and leaves the resolution side as None.
+#[test]
+fn get_dispute_record_after_raise_keeps_resolution_side_none() {
+    let env = make_env();
+    let client = make_client(&env);
+    let (client_addr, _, _, contract_id) = funded_contract_with_arbiter(&env, &client);
+
+    env.ledger().with_mut(|li| {
+        li.sequence_number = 100;
+        li.timestamp = 1_700_000_000;
+    });
+
+    assert!(client.raise_dispute(&contract_id, &client_addr));
+    assert!(client.has_dispute(&contract_id));
+
+    let record = client
+        .get_dispute_record(&contract_id)
+        .expect("record should exist after raise");
+    assert_eq!(record.raiser, client_addr);
+    assert_eq!(record.raised_at_ledger, 100);
+    assert_eq!(record.raised_at_timestamp, 1_700_000_000);
+    assert!(record.resolver.is_none());
+    assert!(record.resolution.is_none());
+    assert!(record.resolved_at_ledger.is_none());
+    assert!(record.resolved_at_timestamp.is_none());
+}
+
+/// Freelancer-initiated disputes store the freelancer address as the raiser.
+#[test]
+fn get_dispute_record_after_raise_records_freelancer_as_raiser() {
+    let env = make_env();
+    let client = make_client(&env);
+    let (_, freelancer_addr, _, contract_id) = funded_contract_with_arbiter(&env, &client);
+
+    assert!(client.raise_dispute(&contract_id, &freelancer_addr));
+    let record = client
+        .get_dispute_record(&contract_id)
+        .expect("record should exist after raise");
+    assert_eq!(record.raiser, freelancer_addr);
+    assert!(record.resolution.is_none());
+}
+
+/// After a FullPayout resolve, the record carries the arbiter, FullPayout
+/// resolution, and the resolved-side timestamps.
+#[test]
+fn get_dispute_record_after_resolve_full_payout_populates_resolution_side() {
+    let env = make_env();
+    let client = make_client(&env);
+    let (_, _, arbiter_addr, contract_id) = disputed_contract(&env, &client);
+
+    env.ledger().with_mut(|li| {
+        li.sequence_number = 200;
+        li.timestamp = 1_700_000_500;
+    });
+
+    assert!(client.resolve_dispute(&contract_id, &arbiter_addr, &DisputeResolution::FullPayout));
+
+    assert!(client.has_dispute(&contract_id));
+    let record = client
+        .get_dispute_record(&contract_id)
+        .expect("record should persist after resolve");
+    assert_eq!(record.resolver, Some(arbiter_addr));
+    assert_eq!(record.resolution, Some(DisputeResolution::FullPayout));
+    assert_eq!(record.resolved_at_ledger, Some(200));
+    assert_eq!(record.resolved_at_timestamp, Some(1_700_000_500));
+}
+
+/// After a FullRefund resolve, the record carries FullRefund as the resolution.
+#[test]
+fn get_dispute_record_after_resolve_full_refund_carries_variant() {
+    let env = make_env();
+    let client = make_client(&env);
+    let (_, _, arbiter_addr, contract_id) = disputed_contract(&env, &client);
+
+    assert!(client.resolve_dispute(&contract_id, &arbiter_addr, &DisputeResolution::FullRefund));
+
+    let record = client
+        .get_dispute_record(&contract_id)
+        .expect("record should persist after resolve");
+    assert_eq!(record.resolver, Some(arbiter_addr));
+    assert_eq!(record.resolution, Some(DisputeResolution::FullRefund));
+}
+
+/// After a PartialRefund resolve, the record still stores the raise-side
+/// metadata and gains the PartialRefund resolution record on the resolve side.
+#[test]
+fn get_dispute_record_after_resolve_partial_refund_preserves_raise_side() {
+    let env = make_env();
+    let client = make_client(&env);
+    let (client_addr, freelancer_addr, arbiter_addr, contract_id) =
+        funded_contract_with_arbiter(&env, &client);
+
+    assert!(client.raise_dispute(&contract_id, &client_addr));
+    let before = client
+        .get_dispute_record(&contract_id)
+        .expect("record exists after raise");
+    assert_eq!(before.raiser, client_addr);
+    assert!(before.resolution.is_none());
+
+    assert!(client.resolve_dispute(&contract_id, &arbiter_addr, &DisputeResolution::PartialRefund));
+    let after = client
+        .get_dispute_record(&contract_id)
+        .expect("record persists after resolve");
+    assert_eq!(after.raiser, client_addr);
+    assert_eq!(after.raised_at_ledger, before.raised_at_ledger);
+    assert_eq!(after.raised_at_timestamp, before.raised_at_timestamp);
+    assert_eq!(after.resolver, Some(arbiter_addr));
+    assert_eq!(after.resolution, Some(DisputeResolution::PartialRefund));
+    assert!(after.resolved_at_ledger.is_some());
+    assert!(after.resolved_at_timestamp.is_some());
+}
+
+/// After a Split resolve, both legs of the split are stored verbatim and
+/// `get_dispute_record` is round-trippable.
+#[test]
+fn get_dispute_record_after_resolve_split_round_trips() {
+    let env = make_env();
+    let client = make_client(&env);
+    let client_addr = Address::generate(&env);
+    let freelancer_addr = Address::generate(&env);
+    let arbiter_addr = Address::generate(&env);
+    let milestones = soroban_sdk::vec![&env, 100_i128];
+    let contract_id = client.create_contract(
+        &client_addr,
+        &freelancer_addr,
+        &Some(arbiter_addr.clone()),
+        &milestones,
+        &ReleaseAuthorization::ClientOnly,
+    );
+    client.deposit_funds(&contract_id, &client_addr, &100_i128);
+    client.raise_dispute(&contract_id, &client_addr);
+
+    let split = DisputeSplit {
+        client_amount: 35,
+        freelancer_amount: 65,
+    };
+    client.resolve_dispute(&contract_id, &arbiter_addr, &DisputeResolution::Split(split.clone()));
+
+    let record = client.get_dispute_record(&contract_id).unwrap();
+    match record.resolution.expect("split resolution stored") {
+        DisputeResolution::Split(s) => {
+            assert_eq!(s.client_amount, 35);
+            assert_eq!(s.freelancer_amount, 65);
+        }
+        other => panic!("expected Split resolution, got {:?}", other),
+    }
+    assert_eq!(record.resolver, Some(arbiter_addr));
+    assert_eq!(record.raiser, client_addr);
+    let _ = freelancer_addr; // silence unused warning when arbiter is named
+}
+
+/// `has_dispute` remains true after resolve and only flips to false when the
+/// underlying storage entry is evicted or removed. Indexers can therefore
+/// rely on it as the cheap pre-flight probe for "dispute seen" regardless
+/// of whether the dispute has been resolved.
+#[test]
+fn has_dispute_remains_true_after_resolve() {
+    let env = make_env();
+    let client = make_client(&env);
+    let (_, _, arbiter_addr, contract_id) = disputed_contract(&env, &client);
+
+    assert!(client.has_dispute(&contract_id));
+    assert!(client.resolve_dispute(&contract_id, &arbiter_addr, &DisputeResolution::FullPayout));
+    assert!(
+        client.has_dispute(&contract_id),
+        "record persists after resolve for audit purposes"
+    );
+}
+
+/// Reading `get_dispute_record` does not panic on unknown contract ids and
+/// returns `Some(record)` if the dispute was ever raised — even if the
+/// contract has since been resolved to `Completed` or `Refunded`.
+#[test]
+fn get_dispute_record_does_not_panic_on_unknown_contract_id() {
+    let env = make_env();
+    let client = make_client(&env);
+
+    // `u32::MAX` is far above the high-water mark — no contract was ever
+    // assigned this id, so the read view must return `None` and `false`
+    // rather than panicking.
+    assert_eq!(client.get_dispute_record(&u32::MAX), None);
+    assert!(!client.has_dispute(&u32::MAX));
+}
+
+/// A non-arbiter resolve attempt must panic with `UnauthorizedRole` AND leave
+/// the dispute record in its original raise-side state (fail-closed).
+/// Covers the reviewer's "non-arbiter resolve leaves record untouched" gap.
+#[test]
+fn non_arbiter_resolve_leaves_dispute_record_unchanged() {
+    let env = make_env();
+    let client = make_client(&env);
+    let (client_addr, freelancer_addr, _arbiter_addr, contract_id) =
+        funded_contract_with_arbiter(&env, &client);
+
+    assert!(client.raise_dispute(&contract_id, &client_addr));
+    let before = client
+        .get_dispute_record(&contract_id)
+        .expect("record exists after raise");
+
+    // Both the client and an outsider are rejected — neither has arbiter auth.
+    let outsider = Address::generate(&env);
+    for rejected in [client_addr.clone(), freelancer_addr.clone(), outsider] {
+        super::assert_contract_error(
+            client.try_resolve_dispute(&contract_id, &rejected, &DisputeResolution::FullPayout),
+            Error::UnauthorizedRole,
+        );
+    }
+
+    // The record must still reflect only the raise side after every rejection.
+    assert!(client.has_dispute(&contract_id));
+    let after = client
+        .get_dispute_record(&contract_id)
+        .expect("record survives rejected resolve");
+    assert_eq!(after.raiser, before.raiser);
+    assert_eq!(after.raised_at_ledger, before.raised_at_ledger);
+    assert_eq!(after.raised_at_timestamp, before.raised_at_timestamp);
+    assert!(after.resolver.is_none());
+    assert!(after.resolution.is_none());
+    assert!(after.resolved_at_ledger.is_none());
+    assert!(after.resolved_at_timestamp.is_none());
+}

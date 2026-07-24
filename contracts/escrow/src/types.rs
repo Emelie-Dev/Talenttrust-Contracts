@@ -14,6 +14,44 @@ pub struct MilestoneSummary {
     pub refunded: bool,
 }
 
+// ── Dispute record ──────────────────────────────────────────────────────────
+
+/// Persisted record of a contract's dispute lifecycle.
+///
+/// Written by [`crate::dispute::write_dispute_record`] when `raise_dispute`
+/// succeeds and updated by [`crate::dispute::update_dispute_record`] when
+/// `resolve_dispute` succeeds. Persisted under [`DataKey::Dispute`] so that
+/// off-chain indexers and dashboards can read the dispute state in O(1)
+/// without reconstructing it from [`ContractStatus`].
+///
+/// Fields intentionally use `Option` for the resolution side so that the same
+/// struct shape covers "raised but unresolved", "resolved with FullRefund",
+/// "resolved with PartialRefund", "resolved with FullPayout", and "resolved
+/// with Split". Callers should pattern-match on `resolution` rather than infer
+/// state from `contract.status` alone.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DisputeRecord {
+    /// Address that called `raise_dispute` (client or freelancer).
+    pub raiser: Address,
+    /// Ledger sequence at the time of `raise_dispute`.
+    pub raised_at_ledger: u32,
+    /// Ledger timestamp at the time of `raise_dispute`.
+    pub raised_at_timestamp: u64,
+    /// Arbiter that called `resolve_dispute`. `None` while the dispute is
+    /// still open.
+    pub resolver: Option<Address>,
+    /// Resolution variant chosen by the arbiter. `None` while the dispute is
+    /// still open.
+    pub resolution: Option<DisputeResolution>,
+    /// Ledger sequence at the time of `resolve_dispute`. `None` while the
+    /// dispute is still open.
+    pub resolved_at_ledger: Option<u32>,
+    /// Ledger timestamp at the time of `resolve_dispute`. `None` while the
+    /// dispute is still open.
+    pub resolved_at_timestamp: Option<u64>,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ContractSummary {
@@ -90,6 +128,8 @@ pub enum DataKey {
     Finalization(u32),
     // Settlement token
     SettlementToken,
+    // Dispute record (issue #795)
+    Dispute(u32),
 }
 
 /// Canonical contract error type for all entrypoint-facing errors.
