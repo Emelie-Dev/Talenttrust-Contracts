@@ -32,7 +32,7 @@
 //! - **Funded → Funded**: Partial refund (some milestones remain unreleased/unrefunded)
 //! - **Funded → Completed**: All milestones either released or refunded (mixed state)
 
-use crate::{Contract, ContractStatus, DataKey, EscrowError, Milestone};
+use crate::{settlement, Contract, ContractStatus, DataKey, EscrowError, Milestone};
 use soroban_sdk::{Env, Symbol, Vec};
 
 /// Refunds unreleased milestones back to the client.
@@ -111,7 +111,7 @@ pub fn refund_unreleased_milestones(
     check_sufficient_balance(env, &contract, total_refund_amount);
 
     // Retrieve settlement token and perform transfer
-    let token_address: soroban_sdk::Address = env.storage().persistent().get(&DataKey::SettlementToken).unwrap_or_else(|| env.panic_with_error(EscrowError::NotInitialized));
+    let token_address: soroban_sdk::Address = settlement::require_settlement_token(env);
     let balance = soroban_sdk::token::Client::new(env, &token_address).balance(&env.current_contract_address());
     if balance < total_refund_amount {
         env.panic_with_error(EscrowError::InsufficientEscrowBalance);
