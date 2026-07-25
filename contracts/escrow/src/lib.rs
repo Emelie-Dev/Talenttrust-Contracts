@@ -67,6 +67,7 @@ use soroban_sdk::{
 };
 
 pub use amount_validation::accumulate_amounts;
+pub use amount_validation::checked_available_balance;
 pub use amount_validation::safe_add_amounts;
 pub use amount_validation::safe_subtract_amounts;
 pub use amount_validation::validate_deposit_amount;
@@ -700,7 +701,10 @@ impl Escrow {
     fn grant_pending_reputation_credit(env: &Env, freelancer: &Address) {
         let pending_key = DataKey::PendingReputationCredits(freelancer.clone());
         let pending: i128 = env.storage().persistent().get(&pending_key).unwrap_or(0);
-        env.storage().persistent().set(&pending_key, &(pending + 1));
+        let new_pending = pending
+            .checked_add(1)
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
+        env.storage().persistent().set(&pending_key, &new_pending);
     }
 
     /// Releases a specific milestone, transferring the net payout to the freelancer.
@@ -863,8 +867,12 @@ impl Escrow {
 
         // Check contract-level funding (per-milestone funded_amount is set after
         // release, so we check the aggregate contract balance here).
-        let available =
-            contract.funded_amount - contract.released_amount - contract.refunded_amount;
+        let available = crate::checked_available_balance(
+            contract.funded_amount,
+            contract.released_amount,
+            contract.refunded_amount,
+        )
+        .unwrap_or_else(|e| env.panic_with_error(e));
         if available < milestone.amount {
             env.panic_with_error(Error::InsufficientFunds);
         }
@@ -890,7 +898,9 @@ impl Escrow {
 
         /// `net_amount` — the amount actually transferred to the freelancer
         /// after deducting the protocol fee.
-        let net_amount = gross_amount - protocol_fee;
+        let net_amount = gross_amount
+            .checked_sub(protocol_fee)
+            .unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
 
         // The available balance must cover the full gross milestone amount
         // (net payout + fee) without dipping into already-accumulated fees or
@@ -900,10 +910,17 @@ impl Escrow {
             .persistent()
             .get(&DataKey::AccumulatedProtocolFees)
             .unwrap_or(0);
-        let available_balance = contract.funded_amount
-            - contract.released_amount
-            - contract.refunded_amount
-            - accumulated_fees;
+        let new_accumulated_fees = accumulated_fees
+            .checked_add(protocol_fee)
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
+        let available_balance = crate::checked_available_balance(
+            contract.funded_amount,
+            contract.released_amount,
+            contract.refunded_amount,
+        )
+        .unwrap_or_else(|e| env.panic_with_error(e))
+        .checked_sub(accumulated_fees)
+        .unwrap_or_else(|| env.panic_with_error(EscrowError::AccountingInvariantViolated));
         if available_balance < gross_amount {
             env.panic_with_error(EscrowError::InsufficientFunds);
         }
@@ -922,10 +939,9 @@ impl Escrow {
 
         // Accrue the fee into the protocol's accumulated balance.
         if protocol_fee > 0 {
-            env.storage().persistent().set(
-                &DataKey::AccumulatedProtocolFees,
-                &(accumulated_fees + protocol_fee),
-            );
+            env.storage()
+                .persistent()
+                .set(&DataKey::AccumulatedProtocolFees, &new_accumulated_fees);
         }
 
         milestone.released = true;
@@ -942,8 +958,11 @@ impl Escrow {
 
         // Accounting invariant: net released + refunded + all accumulated fees
         // must never exceed the total funded amount.
-        let new_accumulated = accumulated_fees + protocol_fee;
-        let invariant_sum = contract.released_amount + contract.refunded_amount + new_accumulated;
+        let invariant_sum = contract
+            .released_amount
+            .checked_add(contract.refunded_amount)
+            .and_then(|value| value.checked_add(new_accumulated_fees))
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
         if invariant_sum > contract.funded_amount {
             env.panic_with_error(EscrowError::AccountingInvariantViolated);
         }
@@ -1178,12 +1197,18 @@ impl Escrow {
             }
             // If no deadline (None), allow refund anytime (backward compatibility)
 
-            total_refund_amount += milestone.amount;
+            total_refund_amount = total_refund_amount
+                .checked_add(milestone.amount)
+                .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
         }
 
         // Check if there's enough balance
-        let available_balance =
-            contract.funded_amount - contract.released_amount - contract.refunded_amount;
+        let available_balance = crate::checked_available_balance(
+            contract.funded_amount,
+            contract.released_amount,
+            contract.refunded_amount,
+        )
+        .unwrap_or_else(|e| env.panic_with_error(e));
         if available_balance < total_refund_amount {
             env.panic_with_error(EscrowError::InsufficientFunds);
         }
@@ -1391,8 +1416,12 @@ impl Escrow {
             .get::<_, bool>(&DataKey::ReputationIssued(contract_id))
             .unwrap_or(contract.reputation_issued);
 
-        let refundable_balance =
-            contract.funded_amount - contract.released_amount - contract.refunded_amount;
+        let refundable_balance = crate::checked_available_balance(
+            contract.funded_amount,
+            contract.released_amount,
+            contract.refunded_amount,
+        )
+        .unwrap_or_else(|e| env.panic_with_error(e));
 
         ContractSummary {
             schema_version: CONTRACT_SUMMARY_SCHEMA_VERSION,
@@ -1556,7 +1585,12 @@ impl Escrow {
             .get(&DataKey::Contract(contract_id))
             .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
         ttl::extend_contract_ttl(&env, contract_id);
-        contract.funded_amount - contract.released_amount - contract.refunded_amount
+        crate::checked_available_balance(
+            contract.funded_amount,
+            contract.released_amount,
+            contract.refunded_amount,
+        )
+        .unwrap_or_else(|e| env.panic_with_error(e))
     }
 
     /// Retrieves approval status for a milestone.
@@ -1907,15 +1941,20 @@ impl Escrow {
 
         client.require_auth();
 
-        if client == freelancer {
-            env.panic_with_error(EscrowError::InvalidParticipant);
-        }
-        if milestone_amounts.is_empty() {
-            env.panic_with_error(EscrowError::EmptyMilestones);
-        }
-        let max_milestones = Self::effective_max_milestones(&env);
-        if milestone_amounts.len() > max_milestones {
-            env.panic_with_error(EscrowError::TooManyMilestones);
+        let refund_amount = crate::checked_available_balance(
+            contract.funded_amount,
+            contract.released_amount,
+            contract.refunded_amount,
+        )
+        .unwrap_or_else(|e| env.panic_with_error(e));
+        if refund_amount > 0 {
+            let token = Self::read_settlement_token(&env)
+                .unwrap_or_else(|| env.panic_with_error(EscrowError::NotInitialized));
+            token::Client::new(&env, &token).transfer(
+                &env.current_contract_address(),
+                &client,
+                &refund_amount,
+            );
         }
 
         let mut total: i128 = 0;
@@ -2052,8 +2091,14 @@ impl Escrow {
         let rep_key = DataKey::Reputation(contract.freelancer.clone());
         let mut rep: types::Reputation =
             env.storage().persistent().get(&rep_key).unwrap_or_default();
-        rep.completed_contracts = rep.completed_contracts.checked_add(1).unwrap_or_else(|| env.panic_with_error(Error::ArithmeticOverflow));
-        rep.total_rating = rep.total_rating.checked_add(rating as i128).unwrap_or_else(|| env.panic_with_error(Error::ArithmeticOverflow));
+        rep.completed_contracts = rep
+            .completed_contracts
+            .checked_add(1)
+            .unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
+        rep.total_rating = rep
+            .total_rating
+            .checked_add(rating as i128)
+            .unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
         rep.last_rating = rating as i128;
         env.storage().persistent().set(&rep_key, &rep);
 
@@ -2359,7 +2404,9 @@ impl Escrow {
             None => env.panic_with_error(Error::SettlementTokenNotConfigured),
         };
 
-        let new_accumulated = accumulated - amount;
+        let new_accumulated = accumulated
+            .checked_sub(amount)
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::InsufficientAccumulatedFees));
         env.storage()
             .persistent()
             .set(&DataKey::AccumulatedProtocolFees, &new_accumulated);
