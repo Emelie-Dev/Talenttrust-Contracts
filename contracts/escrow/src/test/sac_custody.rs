@@ -217,7 +217,7 @@ fn set_settlement_token_delegate_inherits_all_guards_and_events() {
     // set_settlement_token delegates to bind_settlement_token and successfully binds
     assert!(client.set_settlement_token(&admin, &sac));
     assert_eq!(client.get_settlement_token(), Some(sac));
-    assert!(has_settlement_token_bound_event(&env));
+    assert!(has_settlement_bound_event(&env));
 }
 
 #[test]
@@ -235,9 +235,9 @@ fn bind_settlement_token_rejects_uninit() {
 }
 
 /// Returns `true` when at least one published event carries
-/// `settlement_token_bound` as its first topic.
-fn has_settlement_token_bound_event(env: &Env) -> bool {
-    let topic = Symbol::new(env, "settlement_token_bound");
+/// `sttl_bind` as its first topic.
+fn has_settlement_bound_event(env: &Env) -> bool {
+    let topic = symbol_short!("sttl_bind");
     env.events().all().iter().any(|event| {
         event.1.len() > 0
             && Symbol::try_from_val(env, &event.1.get(0).unwrap())
@@ -248,7 +248,7 @@ fn has_settlement_token_bound_event(env: &Env) -> bool {
 }
 
 #[test]
-fn bind_settlement_token_emits_settlement_token_bound_event() {
+fn bind_settlement_token_emits_indexed_settlement_event() {
     let env = Env::default();
     env.mock_all_auths_allowing_non_root_auth();
     let client = register_client(&env);
@@ -259,13 +259,13 @@ fn bind_settlement_token_emits_settlement_token_bound_event() {
 
     // Topic must be present on a successful, authorized bind.
     assert!(
-        has_settlement_token_bound_event(&env),
-        "successful bind must publish settlement_token_bound"
+        has_settlement_bound_event(&env),
+        "successful bind must publish sttl_bind event"
     );
 }
 
 #[test]
-fn rejected_bind_does_not_emit_settlement_token_bound_event() {
+fn rejected_bind_does_not_emit_settlement_event() {
     let env = Env::default();
     env.mock_all_auths_allowing_non_root_auth();
     let contract_id = env.register(crate::Escrow, ());
@@ -279,8 +279,8 @@ fn rejected_bind_does_not_emit_settlement_token_bound_event() {
         crate::Error::NotInitialized,
     );
     assert!(
-        !has_settlement_token_bound_event(&env),
-        "rejected (uninitialized) bind must not publish settlement_token_bound"
+        !has_settlement_bound_event(&env),
+        "rejected (uninitialized) bind must not publish sttl_bind event"
     );
 }
 

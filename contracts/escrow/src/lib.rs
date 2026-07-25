@@ -242,11 +242,11 @@ impl Escrow {
     /// * `SettlementTokenIsAdmin` if `token == stored_admin`
     ///
     /// # Events
-    /// On a successful, authorized bind this publishes a `settlement_token_bound`
-    /// event so off-chain indexers and monitoring dashboards can observe which
-    /// asset an escrow settles in, and when the binding happened.
+    /// On a successful, authorized bind this publishes a settlement bind event
+    /// with an indexed short topic for efficient off-chain querying by indexers
+    /// and monitoring dashboards.
     ///
-    /// * Topics: `(Symbol "settlement_token_bound",)`
+    /// * Topics: `(symbol_short!("sttl_bind"),)`
     /// * Data: `(admin: Address, token: Address, timestamp: u64)`
     ///
     /// The event only fires after the write succeeds. Rejected binds
@@ -304,9 +304,9 @@ impl Escrow {
         Self::write_settlement_token(&env, &token);
 
         // Emit after the binding write succeeds so indexers can track the bound
-        // asset. Consistent topic naming with `init` / `protocol_fee_bps` events.
+        // asset using an indexed short topic for efficient off-chain querying.
         env.events().publish(
-            (Symbol::new(&env, "settlement_token_bound"),),
+            (symbol_short!("sttl_bind"),),
             (admin, token, env.ledger().timestamp()),
         );
         true
@@ -762,11 +762,10 @@ impl Escrow {
         approvals::check_approvals(&env, &contract, contract_id, milestone_index)
             .unwrap_or_else(|e| env.panic_with_error(e));
 
-        let milestone_key = Symbol::new(&env, "milestones");
         let mut milestones: Vec<Milestone> = env
             .storage()
             .persistent()
-            .get(&(DataKey::Contract(contract_id), milestone_key.clone()))
+            .get(&DataKey::Milestones(contract_id))
             .unwrap();
 
         // Extend TTL on milestone read
@@ -964,11 +963,10 @@ impl Escrow {
             None => return false, // Contract not found, not overdue
         };
 
-        let milestone_key = Symbol::new(&env, "milestones");
         let milestones: Vec<Milestone> = match env
             .storage()
             .persistent()
-            .get(&(DataKey::Contract(contract_id), milestone_key))
+            .get(&DataKey::Milestones(contract_id))
         {
             Some(m) => m,
             None => return false, // No milestones, not overdue
@@ -1312,11 +1310,10 @@ impl Escrow {
 
     /// Retrieves all milestones for a contract.
     pub fn get_milestones(env: Env, contract_id: u32) -> Vec<Milestone> {
-        let milestone_key = Symbol::new(&env, "milestones");
         let milestones = env
             .storage()
             .persistent()
-            .get(&(DataKey::Contract(contract_id), milestone_key))
+            .get(&DataKey::Milestones(contract_id))
             .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
         ttl::extend_milestone_ttl(&env, contract_id);
         milestones
@@ -1347,11 +1344,10 @@ impl Escrow {
     /// Extends the milestones vector TTL on a successful read, consistent with
     /// `get_milestones`. Auth-free and otherwise non-mutating.
     pub fn get_milestone(env: Env, contract_id: u32, milestone_index: u32) -> Option<Milestone> {
-        let milestone_key = Symbol::new(&env, "milestones");
         let milestones: Vec<Milestone> = env
             .storage()
             .persistent()
-            .get(&(DataKey::Contract(contract_id), milestone_key))
+            .get(&DataKey::Milestones(contract_id))
             .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
         ttl::extend_milestone_ttl(&env, contract_id);
         milestones.get(milestone_index)
@@ -1885,11 +1881,10 @@ impl Escrow {
             env.panic_with_error(Error::EvidenceTooLong);
         }
 
-        let milestone_key = Symbol::new(&env, "milestones");
         let mut milestones: Vec<Milestone> = env
             .storage()
             .persistent()
-            .get(&(DataKey::Contract(contract_id), milestone_key.clone()))
+            .get(&DataKey::Milestones(contract_id))
             .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
 
         ttl::extend_milestone_ttl(&env, contract_id);
@@ -1945,11 +1940,10 @@ impl Escrow {
     /// Extends the milestones vector's persistent TTL on read,
     /// consistent with `get_milestones`.
     pub fn get_work_evidence(env: Env, contract_id: u32, milestone_index: u32) -> Option<String> {
-        let milestone_key = Symbol::new(&env, "milestones");
         let milestones: Vec<Milestone> = env
             .storage()
             .persistent()
-            .get(&(DataKey::Contract(contract_id), milestone_key))
+            .get(&DataKey::Milestones(contract_id))
             .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
 
         ttl::extend_milestone_ttl(&env, contract_id);

@@ -40,7 +40,7 @@
 //! participant index keys, pending approvals, and pending migrations.
 //!
 use crate::{DataKey, Error, Milestone};
-use soroban_sdk::{Env, IntoVal, Symbol, TryFromVal, Val, Vec};
+use soroban_sdk::{Env, IntoVal, TryFromVal, Val, Vec};
 
 pub const LEDGERS_PER_DAY: u32 = 17_280;
 
@@ -149,11 +149,8 @@ pub fn store_milestones(env: &Env, contract_id: u32, milestones: &Vec<Milestone>
     extend_milestone_ttl(env, contract_id);
 }
 
-pub(crate) fn milestone_storage_key(env: &Env, contract_id: u32) -> (DataKey, Symbol) {
-    (
-        DataKey::Contract(contract_id),
-        Symbol::new(env, "milestones"),
-    )
+pub(crate) fn milestone_storage_key(_env: &Env, contract_id: u32) -> DataKey {
+    DataKey::Milestones(contract_id)
 }
 
 /// Extend TTL of the NextContractId counter.

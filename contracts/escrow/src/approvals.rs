@@ -254,9 +254,8 @@ mod tests {
                 }],
             );
             let _ = release_auth;
-            let milestone_key = Symbol::new(env, "milestones");
             env.storage().persistent().set(
-                &(DataKey::Contract(contract_id), milestone_key),
+                &DataKey::Milestones(contract_id),
                 &milestones,
             );
         });
@@ -303,9 +302,8 @@ mod tests {
                     deadline: None,
                 }],
             );
-            let milestone_key = Symbol::new(&env, "milestones");
             env.storage().persistent().set(
-                &(DataKey::Contract(contract_id), milestone_key),
+                &DataKey::Milestones(contract_id),
                 &milestones,
             );
 
@@ -360,9 +358,8 @@ mod tests {
                     deadline: None,
                 }],
             );
-            let milestone_key = Symbol::new(&env, "milestones");
             env.storage().persistent().set(
-                &(DataKey::Contract(contract_id), milestone_key),
+                &DataKey::Milestones(contract_id),
                 &milestones,
             );
 
@@ -424,9 +421,8 @@ mod tests {
                     deadline: None,
                 }],
             );
-            let milestone_key = Symbol::new(&env, "milestones");
             env.storage().persistent().set(
-                &(DataKey::Contract(contract_id), milestone_key),
+                &DataKey::Milestones(contract_id),
                 &milestones,
             );
 

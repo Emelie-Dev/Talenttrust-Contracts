@@ -150,10 +150,9 @@ impl Escrow {
                 deadline: None,
             });
         }
-        let milestone_key = Symbol::new(&env, "milestones");
         env.storage()
             .persistent()
-            .set(&(DataKey::Contract(id), milestone_key), &milestone_vec);
+            .set(&DataKey::Milestones(id), &milestone_vec);
 
         // Advance the counter. `next_contract_id` already checked `id < u32::MAX`;
         // the `checked_add` here is a defense-in-depth guard.

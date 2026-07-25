@@ -388,10 +388,9 @@ mod approval_ttl_integration {
                     deadline: None,
                 }],
             );
-            let milestone_key = Symbol::new(&env, "milestones");
             env.storage()
                 .persistent()
-                .set(&(DataKey::Contract(1), milestone_key), &milestones);
+                .set(&DataKey::Milestones(1), &milestones);
         });
 
         (
@@ -505,10 +504,9 @@ mod approval_ttl_integration {
                     deadline: None,
                 }],
             );
-            let milestone_key = Symbol::new(&env, "milestones");
             env.storage()
                 .persistent()
-                .set(&(DataKey::Contract(1), milestone_key), &milestones);
+                .set(&DataKey::Milestones(1), &milestones);
         });
 
         env.as_contract(&escrow_id, || {

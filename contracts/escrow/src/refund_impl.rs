@@ -97,11 +97,10 @@ pub fn refund_unreleased_milestones(
     }
 
     // Load milestones
-    let milestone_key = Symbol::new(env, "milestones");
     let mut milestones: Vec<Milestone> = env
         .storage()
         .persistent()
-        .get(&(DataKey::Contract(contract_id), milestone_key.clone()))
+        .get(&DataKey::Milestones(contract_id))
         .unwrap();
 
     // Validate all milestones and calculate total refund amount
@@ -128,7 +127,7 @@ pub fn refund_unreleased_milestones(
     // Persist changes
     env.storage()
         .persistent()
-        .set(&(DataKey::Contract(contract_id), milestone_key), &milestones);
+        .set(&DataKey::Milestones(contract_id), &milestones);
     env.storage()
         .persistent()
         .set(&DataKey::Contract(contract_id), &contract);

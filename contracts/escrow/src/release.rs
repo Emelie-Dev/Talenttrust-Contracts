@@ -64,11 +64,10 @@ impl Escrow {
             }
         }
 
-        let milestone_key = Symbol::new(&env, "milestones");
         let mut milestones: Vec<Milestone> = env
             .storage()
             .persistent()
-            .get(&(DataKey::Contract(contract_id), milestone_key.clone()))
+            .get(&DataKey::Milestones(contract_id))
             .unwrap();
 
         ttl::extend_milestone_ttl(&env, contract_id);
@@ -128,7 +127,7 @@ impl Escrow {
         }
 
         env.storage().persistent().set(
-            &(DataKey::Contract(contract_id), milestone_key),
+            &DataKey::Milestones(contract_id),
             &milestones,
         );
         env.storage()

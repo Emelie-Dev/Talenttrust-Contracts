@@ -51,11 +51,10 @@ pub fn validate_deposit(
         env.panic_with_error(Error::InvalidState);
     }
 
-    let milestone_key = Symbol::new(env, "milestones");
     let milestones: Vec<Milestone> = env
         .storage()
         .persistent()
-        .get(&(DataKey::Contract(contract_id), milestone_key))
+        .get(&DataKey::Milestones(contract_id))
         .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
 
     /// Calculate the total amount from milestones with checked arithmetic.
