@@ -81,6 +81,8 @@ pub use ttl::{ADMIN_ROTATION_MIN_DELAY_LEDGERS, PENDING_MIGRATION_TTL_LEDGERS};
 // re-exported here; `dispute.rs` uses them via `crate::DisputeResolution`.
 pub use types::{
     Contract, ContractBounds, ContractStatus, ContractSummary, DataKey, DepositMode,
+    DisputeRecord, DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone,
+    MilestoneApprovals, MilestoneSummary, PendingAdminProposal, ReadinessChecklist,
     DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone, MilestoneApprovals,
     MilestoneSummary, PendingAdminProposal, ReadinessChecklist, ReleaseAuthorization, Reputation,
     SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION,
@@ -2258,6 +2260,11 @@ impl Escrow {
 
         ttl::extend_contract_ttl(&env, contract_id);
 
+        // Persist the dispute record for the O(1) read view (issue #795).
+        // Done after the contract write and TTL bump so the read view can
+        // rely on storage being fully consistent before the event fires.
+        dispute::write_dispute_record(&env, contract_id, caller.clone());
+
         env.events().publish(
             (symbol_short!("dispute"), symbol_short!("opened")),
             (contract_id, caller),
@@ -2367,12 +2374,57 @@ impl Escrow {
 
         ttl::extend_contract_ttl(&env, contract_id);
 
+        // Update the persisted dispute record with the resolution side
+        // (issue #795). Reading-then-writing here is safe because
+        // `raise_dispute` always writes the record before any resolve can run,
+        // and `Self::require_not_finalized` rejects resolves after a final
+        // record is written.
+        dispute::update_dispute_record(&env, contract_id, arbiter.clone(), resolution.clone());
+
         env.events().publish(
             (symbol_short!("dispute"), symbol_short!("resolved")),
             (contract_id, resolution.code()),
         );
 
         true
+    }
+
+    /// Return the persisted [`DisputeRecord`] for `contract_id`, if any.
+    ///
+    /// This is the O(1) read-only view introduced by issue #795. It reuses the
+    /// stored [`DisputeRecord`](crate::DisputeRecord) rather than reconstructing
+    /// dispute state from [`crate::ContractStatus`], so callers see the full
+    /// lifecycle exactly as it was written by `raise_dispute` and
+    /// `resolve_dispute`.
+    ///
+    /// # Returns
+    /// - `Some(record)` carrying `raiser`, `raised_at_*`, and (if resolved)
+    ///   the `resolver`, `resolution`, and `resolved_at_*` fields.
+    /// - `None` for both unknown contracts and contracts that have never
+    ///   been disputed — neither case panics, matching the "sensible default"
+    ///   contract for the indexer surface.
+    ///
+    /// # Side effects
+    /// Extends the contract's persistent TTL on a successful read so
+    /// off-chain indexers can poll dispute state without re-raising it. The
+    /// entrypoint does not write any new record.
+    pub fn get_dispute_record(env: Env, contract_id: u32) -> Option<DisputeRecord> {
+        dispute::read_dispute_record(&env, contract_id)
+    }
+
+    /// Cheap, non-mutating existence probe mirroring [`Self::get_dispute_record`].
+    ///
+    /// Returns `true` exactly when a [`DisputeRecord`] for `contract_id` is
+    /// currently live in persistent storage. Returns `false` for unknown
+    /// contracts and contracts that have never been disputed — both
+    /// indistinguishable from the caller's perspective.
+    ///
+    /// # Security
+    /// No TTL extension: this probe cannot be abused to keep dispute records
+    /// alive. Callers that need to inspect the full record and want to bump
+    /// TTL should use [`Self::get_dispute_record`] instead.
+    pub fn has_dispute(env: Env, contract_id: u32) -> bool {
+        dispute::has_dispute_record(&env, contract_id)
     }
 }
 
