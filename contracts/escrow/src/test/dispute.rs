@@ -25,10 +25,13 @@
 #![cfg(test)]
 
 use crate::{
-    Contract, ContractStatus, DisputeResolution, DisputeSplit, Error, Escrow, EscrowClient,
-    ReleaseAuthorization,
+    Contract, ContractStatus, DataKey, DisputeResolution, DisputeSplit, Error, Escrow,
+    EscrowClient, ReleaseAuthorization,
 };
-use soroban_sdk::{testutils::Address as _, vec, Address, Env};
+use soroban_sdk::{
+    testutils::{Address as _, Events},
+    vec, Address, Env, Symbol, TryFromVal,
+};
 
 use crate::dispute::{final_status_after_resolution, resolution_payouts};
 
@@ -608,6 +611,63 @@ fn resolve_dispute_by_arbiter_succeeds() {
     let contract = client.get_contract(&contract_id);
     assert_eq!(contract.status, ContractStatus::Refunded);
     assert_eq!(contract.refunded_amount, 100);
+}
+
+/// Resolving a dispute emits one dedicated arbiter event carrying the decision
+/// and both payout amounts. Its `arbiter` topic is distinct from `dispute`.
+#[test]
+fn resolve_dispute_emits_dedicated_arbiter_event() {
+    let env = make_env();
+    let escrow_addr = env.register(Escrow, ());
+    let client = EscrowClient::new(&env, &escrow_addr);
+    client.initialize(&Address::generate(&env));
+    let client_addr = Address::generate(&env);
+    let freelancer_addr = Address::generate(&env);
+    let arbiter_addr = Address::generate(&env);
+    let contract_id = 1;
+    env.as_contract(&escrow_addr, || {
+        env.storage().persistent().set(
+            &DataKey::Contract(contract_id),
+            &Contract {
+                client: client_addr,
+                freelancer: freelancer_addr,
+                arbiter: Some(arbiter_addr.clone()),
+                status: ContractStatus::Disputed,
+                total_deposited: 100,
+                funded_amount: 100,
+                released_amount: 0,
+                refunded_amount: 0,
+                release_authorization: ReleaseAuthorization::ClientOnly,
+                reputation_issued: false,
+            },
+        );
+    });
+
+    let event_count_before = env.events().all().len();
+    assert!(client.resolve_dispute(&contract_id, &arbiter_addr, &DisputeResolution::FullRefund,));
+
+    // Capture the event immediately after the mutating call, so the assertion
+    // cannot accidentally match an event emitted by an earlier operation.
+    let events = env.events().all();
+    assert_eq!(events.len(), event_count_before + 2);
+    let event = events.get(events.len() - 1).unwrap();
+
+    assert_eq!(
+        Symbol::try_from_val(&env, &event.1.get(0).unwrap()).unwrap(),
+        soroban_sdk::symbol_short!("arbiter")
+    );
+    assert_eq!(
+        u32::try_from_val(&env, &event.1.get(1).unwrap()).unwrap(),
+        contract_id
+    );
+    assert_ne!(
+        Symbol::try_from_val(&env, &event.1.get(0).unwrap()).unwrap(),
+        soroban_sdk::symbol_short!("dispute")
+    );
+    assert_eq!(
+        <(Address, u32, i128, i128)>::try_from_val(&env, &event.2).unwrap(),
+        (arbiter_addr, DisputeResolution::FullRefund.code(), 100, 0)
+    );
 }
 
 /// A non-arbiter address cannot resolve a dispute.
