@@ -166,7 +166,7 @@ proptest! {
         let result = resolution_payouts(&contract, &DisputeResolution::PartialRefund);
         if available.checked_mul(30).is_none() {
             prop_assert!(result.is_err());
-            return;
+            return Ok(());
         }
         let (client, freelancer) = result.unwrap();
         let expected_freelancer = (available * 30) / 100;
@@ -490,36 +490,36 @@ proptest! {
                 break;
             }
 
-            let _ = match op {
+            match op {
                 DisputeOp::Deposit(amount) => {
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         escrow.deposit_funds(&contract_id, &client_addr, amount);
-                    }))
+                    }));
                 }
                 DisputeOp::Approve(idx) if *idx < ms_count => {
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         escrow.approve_milestone_release(&contract_id, &client_addr, idx);
-                    }))
+                    }));
                 }
                 DisputeOp::Release(idx) if *idx < ms_count => {
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         escrow.release_milestone(&contract_id, &client_addr, idx);
-                    }))
+                    }));
                 }
                 DisputeOp::Refund(idx) if *idx < ms_count => {
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         let v: SorobanVec<u32> = {
                             let mut tmp = SorobanVec::new(&env);
                             tmp.push_back(*idx);
                             tmp
                         };
                         escrow.refund_unreleased_milestones(&contract_id, &v);
-                    }))
+                    }));
                 }
                 DisputeOp::RaiseDispute => {
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         escrow.raise_dispute(&contract_id, &client_addr);
-                    }))
+                    }));
                 }
                 DisputeOp::ResolveDispute(res) => {
                     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -528,10 +528,9 @@ proptest! {
                     if r.is_ok() {
                         resolved = true;
                     }
-                    r
                 }
-                _ => Ok(()),
-            };
+                _ => {}
+            }
 
             // Verify accounting invariant after every operation.
             let contract: Contract = match std::panic::catch_unwind(
@@ -614,7 +613,7 @@ proptest! {
         ).is_ok();
 
         if !deposit_ok {
-            return;
+            return Ok(());
         }
 
         let raise_ok = std::panic::catch_unwind(
@@ -683,7 +682,7 @@ proptest! {
         ).is_ok();
 
         if !deposit_ok {
-            return;
+            return Ok(());
         }
 
         let raise_ok = std::panic::catch_unwind(
@@ -752,7 +751,7 @@ proptest! {
         ).is_ok();
 
         if !deposit_ok {
-            return;
+            return Ok(());
         }
 
         let raise_ok = std::panic::catch_unwind(
@@ -823,7 +822,7 @@ proptest! {
         ).is_ok();
 
         if !deposit_ok {
-            return;
+            return Ok(());
         }
 
         let client_portion = (total * 4) / 10;
@@ -939,7 +938,7 @@ proptest! {
         ).is_ok();
 
         if !deposit_ok {
-            return;
+            return Ok(());
         }
 
         let raise_ok = std::panic::catch_unwind(
