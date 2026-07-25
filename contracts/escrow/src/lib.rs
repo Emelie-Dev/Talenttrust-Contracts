@@ -1724,6 +1724,7 @@ impl Escrow {
         comment: String,
     ) -> bool {
         Self::require_not_paused(&env);
+        Self::validate_contract_id_bounds(&env, contract_id);
         let mut contract: Contract = env
             .storage()
             .persistent()
@@ -1782,8 +1783,8 @@ impl Escrow {
         let rep_key = DataKey::Reputation(contract.freelancer.clone());
         let mut rep: types::Reputation =
             env.storage().persistent().get(&rep_key).unwrap_or_default();
-        rep.completed_contracts += 1;
-        rep.total_rating += rating as i128;
+        rep.completed_contracts = rep.completed_contracts.checked_add(1).unwrap_or_else(|| env.panic_with_error(Error::ArithmeticOverflow));
+        rep.total_rating = rep.total_rating.checked_add(rating as i128).unwrap_or_else(|| env.panic_with_error(Error::ArithmeticOverflow));
         rep.last_rating = rating as i128;
         env.storage().persistent().set(&rep_key, &rep);
 
@@ -1801,6 +1802,7 @@ impl Escrow {
     /// Returns the written feedback provided by the client when reputation was issued.
     /// Returns `None` if reputation has not been issued for this contract.
     pub fn get_reputation_comment(env: Env, contract_id: u32) -> Option<String> {
+        Self::validate_contract_id_bounds(&env, contract_id);
         let comment_key = DataKey::ReputationComment(contract_id);
         let comment: Option<String> = env.storage().persistent().get(&comment_key);
         if comment.is_some() {
@@ -1899,6 +1901,7 @@ impl Escrow {
         /// are always in scope before any state mutation can occur.
         Self::require_initialized(&env);
         Self::require_not_paused(&env);
+        Self::validate_contract_id_bounds(&env, contract_id);
         caller.require_auth();
 
         let contract: Contract = env
@@ -1983,6 +1986,7 @@ impl Escrow {
     /// Extends the milestones vector's persistent TTL on read,
     /// consistent with `get_milestones`.
     pub fn get_work_evidence(env: Env, contract_id: u32, milestone_index: u32) -> Option<String> {
+        Self::validate_contract_id_bounds(&env, contract_id);
         let milestone_key = Symbol::new(&env, "milestones");
         let milestones: Vec<Milestone> = env
             .storage()
@@ -2224,6 +2228,7 @@ impl Escrow {
         /// are always in scope before any state mutation can occur.
         Self::require_initialized(&env);
         Self::require_not_paused(&env);
+        Self::validate_contract_id_bounds(&env, contract_id);
         caller.require_auth();
 
         let mut contract: Contract = env
@@ -2321,6 +2326,7 @@ impl Escrow {
         /// are always in scope before any state mutation can occur.
         Self::require_initialized(&env);
         Self::require_not_paused(&env);
+        Self::validate_contract_id_bounds(&env, contract_id);
         arbiter.require_auth();
 
         let mut contract: Contract = env
