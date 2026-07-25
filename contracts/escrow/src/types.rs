@@ -31,6 +31,20 @@ pub struct MilestoneEntry {
     pub amount: i128,
 }
 
+/// Lightweight contract entry returned by the paginated contracts view.
+///
+/// Carries only the fields needed for a UI listing: the contract `id`, a
+/// numeric `status` code (the `ContractStatus` discriminant), and the
+/// escrow's `funded_amount` / `released_amount` in stroops.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ContractEntry {
+    pub id: u32,
+    pub status: u32,
+    pub funded_amount: i128,
+    pub released_amount: i128,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ContractSummary {

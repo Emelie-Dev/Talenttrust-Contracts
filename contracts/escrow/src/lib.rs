@@ -81,10 +81,11 @@ pub use ttl::{ADMIN_ROTATION_MIN_DELAY_LEDGERS, PENDING_MIGRATION_TTL_LEDGERS};
 // `DisputeResolution` and `DisputeSplit` are defined once in `types.rs` and
 // re-exported here; `dispute.rs` uses them via `crate::DisputeResolution`.
 pub use types::{
-    Contract, ContractBounds, ContractStatus, ContractSummary, DataKey, DepositMode,
-    DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone, MilestoneApprovals,
-    MilestoneEntry, MilestoneSummary, PendingAdminProposal, ReadinessChecklist,
-    ReleaseAuthorization, Reputation, SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION,
+    Contract, ContractBounds, ContractEntry, ContractStatus, ContractSummary, DataKey,
+    DepositMode, DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone,
+    MilestoneApprovals, MilestoneEntry, MilestoneSummary, PendingAdminProposal,
+    ReadinessChecklist, ReleaseAuthorization, Reputation, SplitAmounts,
+    CONTRACT_SUMMARY_SCHEMA_VERSION,
 };
 
 /// Default maximum number of milestones allowed per contract.
@@ -107,6 +108,14 @@ pub const MAX_MAX_MILESTONES: u32 = 100;
 
 /// Absolute minimum for the max escrow stroops setting (0.01 XLM).
 pub const MIN_MAX_ESCROW_STROOPS: i128 = 1_000_000;
+
+/// Shared upper bound on the number of entries any paginated read view
+/// (e.g. [`Escrow::get_milestones_page`], [`Escrow::get_contracts_page`])
+/// returns in a single call, regardless of the caller-supplied `limit`.
+///
+/// This keeps per-call host resource usage predictable for indexers and
+/// UIs, independent of how large the underlying collection grows.
+pub const PAGE_CEILING: u32 = 50;
 
 pub const MAINNET_PROTOCOL_VERSION: u32 = 1u32;
 pub const MAINNET_MAX_TOTAL_ESCROW_PER_CONTRACT_STROOPS: i128 = 1_000_000_000_000_000i128;
@@ -1369,6 +1378,90 @@ impl Escrow {
             .persistent()
             .get(&DataKey::NextContractId)
             .unwrap_or(1)
+    }
+
+    /// Returns a bounded, paginated view over created escrow contracts with
+    /// compact per-entry fields.
+    ///
+    /// This is the contract-level counterpart to
+    /// [`get_milestones_page`](Self::get_milestones_page), for indexers and
+    /// UIs that need to enumerate contracts without walking the allocated ID
+    /// range one `get_contract` call at a time. Each returned
+    /// [`ContractEntry`] carries the contract `id`, a compact `status` code,
+    /// and the `funded_amount` / `released_amount` in stroops.
+    ///
+    /// Contract IDs are allocated contiguously starting at `1` and are never
+    /// removed from storage (cancellation, finalization, and disputes all
+    /// change a contract's `status` in place), so the allocated range
+    /// `[1, get_next_contract_id() - 1]` has no gaps.
+    ///
+    /// # Pagination contract
+    ///
+    /// - `start` is the zero-based offset into the sequence of created
+    ///   contracts, ordered by ID (`start = 0` is contract ID `1`,
+    ///   `start = 1` is contract ID `2`, and so on). An out-of-range `start`
+    ///   produces an empty page (never a panic).
+    /// - `limit` is clamped to `[0, PAGE_CEILING]` before use. The caller
+    ///   never receives more than `PAGE_CEILING` entries per call.
+    /// - Returns an empty `Vec` when no contracts have been created yet or
+    ///   `start` is beyond the last created contract.
+    ///
+    /// # Status codes
+    ///
+    /// The `status` field is the [`ContractStatus`] discriminant: `0`
+    /// Created, `1` Accepted, `2` Funded, `3` Completed, `4` Disputed, `5`
+    /// Cancelled, `6` Refunded, `7` PartiallyFunded.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `start` - Zero-based offset of the first contract in the page
+    /// * `limit` - Maximum entries to return (clamped to `PAGE_CEILING`)
+    ///
+    /// # Returns
+    /// A [`Vec<ContractEntry>`] containing at most `min(limit, PAGE_CEILING)`
+    /// entries. Empty when no contracts exist or `start` is beyond the last
+    /// created contract.
+    ///
+    /// # Side effects
+    /// Extends each returned contract's TTL, consistent with `get_contract`.
+    /// Auth-free and otherwise non-mutating.
+    pub fn get_contracts_page(env: Env, start: u32, limit: u32) -> Vec<ContractEntry> {
+        let capped_limit = core::cmp::min(limit, PAGE_CEILING);
+
+        let next_id: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::NextContractId)
+            .unwrap_or(1);
+        // IDs are allocated contiguously starting at 1, so the number of
+        // contracts ever created is `next_id - 1`.
+        let total_allocated = next_id.saturating_sub(1);
+
+        if total_allocated == 0 || start >= total_allocated {
+            return Vec::new(&env);
+        }
+
+        let mut result = Vec::new(&env);
+        let mut count: u32 = 0;
+        let mut offset = start;
+        while offset < total_allocated && count < capped_limit {
+            let contract_id = offset + 1;
+            let contract: Contract = env
+                .storage()
+                .persistent()
+                .get(&DataKey::Contract(contract_id))
+                .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
+            ttl::extend_contract_ttl(&env, contract_id);
+            result.push_back(ContractEntry {
+                id: contract_id,
+                status: contract.status as u32,
+                funded_amount: contract.funded_amount,
+                released_amount: contract.released_amount,
+            });
+            offset += 1;
+            count += 1;
+        }
+        result
     }
 
     /// Returns a structured summary of the contract and its milestones.
