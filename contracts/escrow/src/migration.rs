@@ -20,7 +20,7 @@ impl Escrow {
         env.storage()
             .persistent()
             .get::<_, Contract>(&DataKey::Contract(contract_id))
-            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound))
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound))
     }
 
     pub(crate) fn require_migration_allowed(env: &Env, status: ContractStatus) {
@@ -31,7 +31,7 @@ impl Escrow {
                 | ContractStatus::Refunded
                 | ContractStatus::Disputed
         ) {
-            env.panic_with_error(Error::InvalidStatusTransition);
+            env.panic_with_error(EscrowError::InvalidStatusTransition);
         }
     }
 

@@ -159,7 +159,7 @@ impl Escrow {
         // the `checked_add` here is a defense-in-depth guard.
         let next_id = id
             .checked_add(1)
-            .unwrap_or_else(|| env.panic_with_error(Error::ContractIdOverflow));
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractIdOverflow));
         env.storage()
             .persistent()
             .set(&DataKey::NextContractId, &next_id);
@@ -191,7 +191,7 @@ pub(crate) fn next_contract_id(env: &Env) -> u32 {
         .get::<_, Contract>(&DataKey::Contract(id))
         .is_some()
     {
-        env.panic_with_error(Error::ContractIdCollision);
+        env.panic_with_error(EscrowError::ContractIdCollision);
     }
 
     id

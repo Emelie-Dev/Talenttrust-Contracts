@@ -30,7 +30,7 @@ impl Escrow {
         env.storage()
             .persistent()
             .get::<_, Contract>(&DataKey::Contract(contract_id))
-            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound))
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound))
     }
 
     pub(crate) fn is_finalized(env: &Env, contract_id: u32) -> bool {
@@ -41,7 +41,7 @@ impl Escrow {
 
     pub(crate) fn require_not_finalized(env: &Env, contract_id: u32) {
         if Self::is_finalized(env, contract_id) {
-            env.panic_with_error(Error::AlreadyFinalized);
+            env.panic_with_error(EscrowError::AlreadyFinalized);
         }
     }
 
@@ -58,7 +58,7 @@ impl Escrow {
             .get::<_, bool>(&DataKey::Paused)
             .unwrap_or(false)
         {
-            env.panic_with_error(Error::ContractPaused);
+            env.panic_with_error(EscrowError::ContractPaused);
         }
         if env
             .storage()
@@ -66,7 +66,7 @@ impl Escrow {
             .get::<_, bool>(&DataKey::Emergency)
             .unwrap_or(false)
         {
-            env.panic_with_error(Error::EmergencyActive);
+            env.panic_with_error(EscrowError::EmergencyActive);
         }
     }
 
@@ -76,7 +76,7 @@ impl Escrow {
             .storage()
             .persistent()
             .get(&(DataKey::Contract(contract_id), milestone_key))
-            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
 
         let mut total_amount: i128 = 0;
         let mut released_milestone_count: u32 = 0;
@@ -86,12 +86,12 @@ impl Escrow {
             let idx = index as u32;
             total_amount = total_amount
                 .checked_add(ms.amount)
-                .unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
+                .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
 
             if ms.released {
                 released_milestone_count = released_milestone_count
                     .checked_add(1)
-                    .unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
+                    .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
             }
 
             milestone_summaries.push_back(MilestoneSummary {

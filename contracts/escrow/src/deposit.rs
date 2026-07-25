@@ -24,14 +24,14 @@ pub fn validate_deposit(
     amount: i128,
 ) -> ValidatedDeposit {
     if amount <= 0 {
-        env.panic_with_error(Error::AmountMustBePositive);
+        env.panic_with_error(EscrowError::AmountMustBePositive);
     }
 
     let contract: Contract = env
         .storage()
         .persistent()
         .get(&DataKey::Contract(contract_id))
-        .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
+        .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
 
     Escrow::require_party(env, &contract, caller);
 
@@ -47,7 +47,7 @@ pub fn validate_deposit(
     if contract.status != ContractStatus::Created
         && contract.status != ContractStatus::PartiallyFunded
     {
-        env.panic_with_error(Error::InvalidState);
+        env.panic_with_error(EscrowError::InvalidState);
     }
 
     let milestone_key = Symbol::new(env, "milestones");
@@ -55,7 +55,7 @@ pub fn validate_deposit(
         .storage()
         .persistent()
         .get(&(DataKey::Contract(contract_id), milestone_key))
-        .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
+        .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
 
     /// Calculate the total amount from milestones with checked arithmetic.
     /// This prevents overflow panics that would brick the contract if a malformed
@@ -66,14 +66,14 @@ pub fn validate_deposit(
     let new_funded_amount = contract
         .funded_amount
         .checked_add(amount)
-        .unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
+        .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
     let new_total_deposited = contract
         .total_deposited
         .checked_add(amount)
-        .unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
+        .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
 
     if new_funded_amount > total_amount {
-        env.panic_with_error(Error::InvalidDepositAmount);
+        env.panic_with_error(EscrowError::InvalidDepositAmount);
     }
 
     ValidatedDeposit {
