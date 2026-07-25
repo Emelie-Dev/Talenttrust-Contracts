@@ -126,9 +126,18 @@ impl Escrow {
         true
     }
 
-    let key = Escrow::pending_migration_key(contract_id);
-    let pending: PendingClientMigration =
-        read_if_live(&env, &key).unwrap_or_else(|| env.panic_with_error(EscrowError::InvalidState));
+    /// Cancel a pending client migration proposal.
+    pub(crate) fn cancel_client_migration_impl(
+        env: &Env,
+        contract_id: u32,
+        current_client: Address,
+    ) -> bool {
+        current_client.require_auth();
+
+        let contract = Self::load_contract(&env, contract_id);
+        if current_client != contract.client {
+            env.panic_with_error(EscrowError::UnauthorizedRole);
+        }
 
         let key = Self::pending_migration_key(contract_id);
         // Ensure a pending migration exists, otherwise panic with InvalidState
@@ -145,6 +154,7 @@ impl Escrow {
         );
         true
     }
+
     /// Return true if a live pending client migration exists.
     pub(crate) fn has_pending_client_migration_impl(env: &Env, contract_id: u32) -> bool {
         Self::pending_migration_exists(env, contract_id)
