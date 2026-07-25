@@ -252,4 +252,71 @@ impl Escrow {
     pub fn get_governed_parameters(env: Env) -> Option<GovernedParameters> {
         env.storage().persistent().get(&DataKey::GovernedParameters)
     }
+
+    /// Set the admin-configurable per-contract storage limit (in bytes).
+    ///
+    /// Admin-gated: the stored admin (under [`DataKey::Admin`]) must authorize the
+    /// call and the contract must be initialized.
+    ///
+    /// The `new_limit` must be within the range `[MIN_STORAGE_LIMIT,
+    /// MAX_STORAGE_LIMIT]` (1 – 1 000 000 bytes inclusive).  Values outside this
+    /// range are rejected with [`Error::StorageLimitOutOfRange`].  The default
+    /// value — applied whenever no admin has overridden the limit — is
+    /// `DEFAULT_STORAGE_LIMIT` (64 KB = 65 536 bytes), which preserves the
+    /// behaviour that existed before this entrypoint was introduced.
+    ///
+    /// # Errors
+    /// * [`Error::NotInitialized`] — `initialize` has not been called.
+    /// * [`Error::UnauthorizedRole`] — `admin` is not the stored admin.
+    /// * [`Error::StorageLimitOutOfRange`] — `new_limit < MIN_STORAGE_LIMIT` or
+    ///   `new_limit > MAX_STORAGE_LIMIT`.
+    ///
+    /// # Events
+    /// `(Symbol("storage_limit"),)` → `(old_limit, new_limit, admin, timestamp)`
+    pub fn set_storage_limit(env: Env, admin: Address, new_limit: u32) -> bool {
+        Self::require_initialized(&env);
+
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| env.panic_with_error(Error::NotInitialized));
+
+        if admin != stored_admin {
+            env.panic_with_error(Error::UnauthorizedRole);
+        }
+        admin.require_auth();
+
+        if new_limit < crate::MIN_STORAGE_LIMIT || new_limit > crate::MAX_STORAGE_LIMIT {
+            env.panic_with_error(Error::StorageLimitOutOfRange);
+        }
+
+        let old_limit: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::StorageLimit)
+            .unwrap_or(crate::DEFAULT_STORAGE_LIMIT);
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::StorageLimit, &new_limit);
+
+        env.events().publish(
+            (Symbol::new(&env, "storage_limit"),),
+            (old_limit, new_limit, admin, env.ledger().timestamp()),
+        );
+
+        true
+    }
+
+    /// Return the current per-contract storage limit in bytes.
+    ///
+    /// Returns [`DEFAULT_STORAGE_LIMIT`] when no admin has overridden the value.
+    /// Read-only and auth-free.
+    pub fn get_storage_limit(env: Env) -> u32 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::StorageLimit)
+            .unwrap_or(crate::DEFAULT_STORAGE_LIMIT)
+    }
 }

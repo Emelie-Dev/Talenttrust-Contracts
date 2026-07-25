@@ -91,6 +91,17 @@ pub const MAX_MILESTONES: u32 = 10;
 pub const MAX_SINGLE_AMOUNT_STROOPS: i128 = crate::amount_validation::MAX_SINGLE_AMOUNT_STROOPS;
 pub const MAX_TOTAL_ESCROW_STROOPS: i128 = MAX_SINGLE_AMOUNT_STROOPS;
 
+// ── Admin-configurable storage limit constants ─────────────────────────────
+/// Minimum value accepted by [`Escrow::set_storage_limit`] (1 byte).
+pub const MIN_STORAGE_LIMIT: u32 = 1;
+/// Maximum value accepted by [`Escrow::set_storage_limit`] (1 000 000 bytes).
+pub const MAX_STORAGE_LIMIT: u32 = 1_000_000;
+/// Default storage limit (65 536 bytes = 64 KiB) when no admin override is set.
+///
+/// Preserves pre-#901 behaviour for deployments that have not called
+/// [`Escrow::set_storage_limit`].
+pub const DEFAULT_STORAGE_LIMIT: u32 = 65_536;
+
 #[contract]
 pub struct Escrow;
 

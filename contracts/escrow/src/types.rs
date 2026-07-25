@@ -86,6 +86,8 @@ pub enum DataKey {
     AccumulatedProtocolFees,
     GovernedParameters,
     ReadinessChecklist,
+    /// Admin-configurable upper bound on single-contract storage size (bytes).
+    StorageLimit,
     // Finalization
     Finalization(u32),
     // Settlement token
@@ -193,6 +195,11 @@ pub enum Error {
     SettlementTokenNotConfigured = 52,
     /// The milestone deadline has not yet passed.
     MilestoneNotOverdue = 53,
+    /// The requested storage limit falls outside the permitted range.
+    ///
+    /// The storage limit must be between [`MIN_STORAGE_LIMIT`] (1) and
+    /// [`MAX_STORAGE_LIMIT`] (the compile-time hard cap) inclusive.
+    StorageLimitOutOfRange = 54,
 }
 
 /// Contract lifecycle states
