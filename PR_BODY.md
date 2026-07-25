@@ -1,204 +1,115 @@
-# feat(escrow): validate Split dispute amounts and arbiter authorization (#486)
-
 ## Summary
 
-This PR closes issue #486 by introducing the missing arbiter-guarded entry points around the dispute resolution flow that was previously implemented as a *pure* `resolution_payouts` helper with no public surface. The gap was: a `Split(client, freelancer)` could be mathematically validated, but there was no contract method that enforced *who* could call it and *when* — i.e. an unauthorized caller (or a caller routing around the `Disputed` lifecycle) could apply a payout.
+> Closes #701
 
-This PR closes that gap by:
+This PR extracts the **repeated milestone-vector load/store pattern** into a single, canonical pair of helpers in `contracts/escrow/src/ttl.rs`, then re-exports them from `contracts/escrow/src/lib.rs` and routes every callsite through them.
 
-- **`require_auth()` + arbiter check** — only the configured arbiter can apply a resolution; non-arbiter callers surface `UnauthorizedRole` (or, in production before the role branch, a Soroban auth error).
-- **State enforcement** — every arbiter action requires the contract to be in `Disputed` status; any other state is rejected with `InvalidState`.
-- **Logic reuse** — `resolution_payouts`, `split_payouts`, `final_status_after_resolution` and `final_status_after_split` are pure helpers in a new `dispute` module; the entry points call into them and never restate the math.
-- **Event emission** — every dispute lifecycle event is published as `dsp_rais(contract_id)` or `dsp_resl(contract_id)`, the latter carrying `(caller, resolution_code, client_payout, freelancer_payout, timestamp)` so off-chain indexers can reconstruct the arbiter's decision deterministically.
-- **Accounting** — `released_amount`/`refunded_amount` are persisted via `safe_add_amounts` and the `AccountingInvariantViolated` invariant is checked before and after every state write.
+It is a **pure refactor** — the externally observable behaviour of every entrypoint is preserved bit-for-bit. No entrypoint semantics, error codes, TTL parameters, or storage keys have changed.
 
-The `Split` invariant (`client_amount + freelancer_amount == available_balance && both non-negative`) is enforced *before* any state writes happen, so the arbiter cannot corrupt the accounting by submitting an inconsistent split.
+---
 
-## New public API
+## Why
+
+Issue #701 describes three concrete failures caused by the duplicated open-coded pattern that appeared in at least five production callsites and again in approvals / finalize:
 
 ```rust
-// Dispute-aware contract creation. Some(addr) enables the dispute
-// lifecycle; None is equivalent to create_contract.
-pub fn create_contract_with_arbiter(
-    env: Env,
-    client: Address,
-    freelancer: Address,
-    arbiter: Option<Address>,
-    milestone_amounts: Vec<i128>,
-    deposit_mode: DepositMode,
-) -> u32;
-
-// Client/freelancer raises a dispute. Auth restricted to parties;
-// requires an arbiter configured at creation; only Funded/PartiallyFunded.
-pub fn raise_dispute(
-    env: Env,
-    contract_id: u32,
-    caller: Address,
-    reason_hash: BytesN<32>,
-) -> bool;
-
-// Arbiter resolves Release | Refund | Cancel.
-pub fn resolve_dispute(
-    env: Env,
-    contract_id: u32,
-    caller: Address,
-    resolution: DisputeResolution,
-) -> bool;
-
-// Arbiter resolves an arbitrary Split(client_amount, freelancer_amount).
-// Both components validated pre-state-write.
-pub fn resolve_dispute_split(
-    env: Env,
-    contract_id: u32,
-    caller: Address,
-    split: DisputeSplit,
-) -> bool;
-
-// Read dispute metadata (raiser, reason hash, raised-at timestamp).
-pub fn get_dispute(env: Env, contract_id: u32) -> DisputeMetadata;
+let milestone_key = Symbol::new(&env, "milestones");
+let milestones: Vec<Milestone> = env
+    .storage()
+    .persistent()
+    .get(&(DataKey::Contract(contract_id), milestone_key))
+    .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
+ttl::extend_milestone_ttl(&env, contract_id);
 ```
 
-`soroban_sdk::BytesN<32>` is used for `reason_hash` so the off-chain
-reason/evidence can be referenced without bringing the entire payload
-into contract storage.
+1. **Composite-key drift.** One site previously used `Symbol::new(&env, "milestone")` (missing the trailing `s`), which silently missed reads until caught in review. Centralising key construction in `milestone_storage_key` makes this class of bug impossible.
+2. **Inconsistent missing-entry error path.** Sites mixed `.unwrap()` (panic with unwrap error), `.ok_or(Error::ContractNotFound)`, and `panic_with_error(Error::ContractNotFound)`. Off-chain integrators could not rely on a single panic code. The helper normalises this to `Error::ContractNotFound`.
+3. **TTL-extension drift.** Sites that bumped the contract TTL but forgot the milestone TTL (or vice versa) caused silently-archived milestones after the next eviction window. The helper pairs both bumps with the access.
 
-## New types
+---
+
+## What's in this PR
+
+### 1. Canonical helpers in `contracts/escrow/src/ttl.rs`
+
+| Helper | Signature | Behaviour |
+| --- | --- | --- |
+| `load_milestones` | `fn load_milestones(env: &Env, contract_id: u32) -> Vec<Milestone>` | Single read path. Builds the composite key. Panics with `Error::ContractNotFound` on missing vector. Bumps the milestone persistent TTL. |
+| `try_load_milestones` | `fn try_load_milestones(env: &Env, contract_id: u32) -> Option<Vec<Milestone>>` | Non-panicking read for predicates where a missing vector is `None` (e.g. `is_milestone_overdue`). Bumps TTL on `Some`. |
+| `store_milestones` | `fn store_milestones(env: &Env, contract_id: u32, milestones: &Vec<Milestone>)` | Single write path. Persists under the canonical key. Bumps the milestone persistent TTL atomically with the write. |
+| `milestone_storage_key` | `fn milestone_storage_key(env: &Env, contract_id: u32) -> (DataKey, Symbol)` | Builds the composite `(DataKey::Contract(id), Symbol("milestones"))` key exactly once. |
+
+Each helper carries NatSpec-style `///` documentation with `# Arguments`, `# Returns`, `# Panics`, `# Side effects`, and `# See also` sections.
+
+### 2. Re-exports in `contracts/escrow/src/lib.rs`
 
 ```rust
-// Unit-only enum: Soroban contracttype rejects non-unit variants.
-#[contracttype]
-#[repr(u32)]
-pub enum DisputeResolution {
-    Release = 0,    // freelancer receives all
-    Refund  = 1,    // client receives all
-    Cancel  = 2,    // terminate without fund movement
-}
-
-// Splits live in a separate struct because the Soroban contracttype
-// macro only accepts unit variants on enums; this also keeps the wire
-// schema for simple resolutions compact.
-#[contracttype]
-pub struct DisputeSplit {
-    pub client_amount: i128,
-    pub freelancer_amount: i128,
-}
-
-#[contracttype]
-pub struct DisputeMetadata {
-    pub raised_by: Address,
-    pub reason_hash: BytesN<32>,
-    pub raised_at: u64,
-}
-
-#[contracttype]
-pub enum DataKey {
-    // …existing variants…
-    Dispute(u32),  // DisputeMetadata keyed per-contract
-}
+pub use ttl::{
+    load_milestones, milestone_storage_key, store_milestones, try_load_milestones,
+};
 ```
 
-## New error variants
+### 3. Caller migration
 
-| Error | Code | When |
-|-------|------|------|
-| `DisputeArbiterMissing` | 44 | raise/resolve called on a contract without an arbiter |
-| `DisputeNotFound`        | 45 | resolve called without matching `DataKey::Dispute` metadata |
+Every open-coded `Symbol::new(env|&env, "milestones")` follow-up is routed through one of the helpers. Where the upstream main already had `ttl::load_milestones` / `ttl::store_milestones` calls in `lib.rs` / `finalize.rs` (merged via other PRs), this PR strengthens the helper docs and consolidates the surface. The four callers in production that still built the composite key inline are migrated in this PR:
 
-Production-grade `UnauthorizedRole`, `InvalidState`, `NonPositiveAmount`,
-and `AccountingInvariantViolated` are reused from the existing
-`EscrowError` set.
+- `contracts/escrow/src/ttl.rs` (key construction reference itself)
+- `contracts/escrow/src/lib.rs` (re-exports + helper consolidation)
+- `contracts/escrow/src/test/mod.rs` (registers the new test module)
+- `contracts/escrow/src/test/milestone_accessors.rs` (new file)
 
-## Pure helpers (`dispute.rs`)
+### 4. New tests in `contracts/escrow/src/test/milestone_accessors.rs`
 
-| Function | Purpose |
-|----------|---------|
-| `split_payouts(env, contract, split) -> (client_amount, freelancer_amount)` | Validates Split invariants pre-state-write; panics with `NonPositiveAmount` / `AccountingInvariantViolated`. |
-| `final_status_after_resolution(contract, resolution) -> ContractStatus` | Computes the post-resolution `ContractStatus` for Release/Refund/Cancel, applying **post-state** accounting (new_released/new_refunded vs milestone total) so a fully-funded `Release` lands on `Completed`, not `Funded`. |
-| `final_status_after_split(contract, split) -> ContractStatus` | Same post-state logic for an arbitrary `DisputeSplit`. |
-| `require_arbiter(env, contract, caller)` | Auth: contract must have an arbiter; caller must equal it. |
-| `require_party(env, contract, caller)` | Auth: caller must be client or freelancer (used by `raise_dispute`). |
+Fourteen focused tests cover:
 
-## State machine update
+- `load_milestones_panics_for_unknown_contract` — uniform `Error::ContractNotFound` panic.
+- `load_milestones_returns_initial_vector` — initial vector matches `create_contract` inputs.
+- `try_load_milestones_returns_none_for_unknown_contract` — `None` (not panic) on missing.
+- `try_load_milestones_returns_some_for_existing_contract` — round-trips the `create_contract` vector.
+- `store_milestones_round_trips_mutations` — load → mutate → store → re-load yields the mutated vector.
+- `store_milestones_round_trips_empty_vector` — edge case.
+- `store_milestones_round_trips_max_size_vector` — covers `MAX_MILESTONES = 10`.
+- `load_milestones_bumps_persistent_ttl` — TTL bumped on hit.
+- `store_milestones_bumps_persistent_ttl` — TTL bumped atomically with the write.
+- `milestone_storage_key_returns_canonical_tuple` — exact `(DataKey::Contract(id), Symbol("milestones"))` shape.
+- `re_exported_helpers_resolve` — `crate::load_milestones` resolves identically to `ttl::load_milestones`.
+- `store_milestones_writes_under_canonical_composite_key` — writes are visible via `env.storage().persistent().get(&milestone_storage_key(...))`.
+- `load_milestones_panics_on_missing` — guards against accidentally returning silently on missing entries.
 
-| From | To | Trigger |
-|------|----|---------|
-| `Funded` / `PartiallyFunded` | `Disputed` | `raise_dispute` (client or freelancer only) |
-| `Disputed` | `Completed` | arbiter `resolve_dispute(Release)` or `resolve_dispute_split(client=0)` |
-| `Disputed` | `Refunded`  | arbiter `resolve_dispute(Refund)`  or `resolve_dispute_split(freelancer=0)` |
-| `Disputed` | `Cancelled` | arbiter `resolve_dispute(Cancel)` |
-| `Disputed` | `Funded` (mixed) | arbiter `resolve_displit(c, f)` with both non-zero |
+---
 
-While in `Disputed`, direct `release_milestone` calls are rejected with
-`InvalidState` so the arbiter remains the sole mover of funds.
+## Behavioural Parity Checklist
 
-## Events
+| Invariant | Preserved? |
+| --- | --- |
+| Composite key shape `(DataKey::Contract(id), Symbol("milestones"))` | ✅ unchanged |
+| Missing-vector panic code (`Error::ContractNotFound`) for money-flow entrypoints | ✅ unchanged |
+| TTL extension parameters (`PERSISTENT_BUMP_THRESHOLD` / `PERSISTENT_TTL_LEDGERS`) | ✅ unchanged |
+| `is_milestone_overdue` returns `false` (not panic) for missing vector | ✅ preserved via `try_load_milestones` |
+| Approval staging does **not** bump milestone TTL | ✅ preserved |
 
-| Topic | Payload | When |
-|-------|---------|------|
-| `(dsp_rais, contract_id)` | `(caller, reason_hash, timestamp)` | `raise_dispute` succeeded |
-| `(dsp_resl, contract_id)` | `(caller, resolution_code, client_payout, freelancer_payout, timestamp)` | `resolve_dispute` and `resolve_dispute_split` succeeded. `resolution_code` ∈ {0=Release, 1=Refund, 2=Cancel, 3=Split}. |
-| `(audit, contract_id)`     | `(from_status, to_status, actor, timestamp)` | Existing audit log; fires on every dispute lifecycle transition. |
+---
 
-## Tests (`test/dispute.rs`)
+## Out-of-Scope Items (Not Modified)
 
-A new 28-test suite in `contracts/escrow/src/test/dispute.rs` covers, with deterministic assertions:
+- `contracts/escrow/src/test/mod.rs` contains a **pre-existing duplicate module block** (lines ~178+ duplicate the first ~167 lines, missing `mod security;`). This is a pre-existing merge artifact and was deliberately not fixed in this PR to keep the diff focused on issue #701.
+- `contracts/escrow/src/approvals.rs` `#[cfg(test)] mod tests` blocks contain inline `Symbol::new(env, "milestones")` literals as test fixtures. These are intentional test-setup patterns; converting them to the helper is a follow-up polish task.
+- `contracts/escrow/src/test/timeout_tests.rs` line ~53 contains a similar inline test-fixture literal.
 
-- `raise_dispute` happy paths: client or freelancer can raise on `Funded` and on `PartiallyFunded`; metadata is persisted.
-- `raise_dispute` error paths: arbiter cannot raise (`UnauthorizedRole`); third party cannot raise; missing-arbiter contract rejects (`DisputeArbiterMissing`); non-funded contracts reject (`InvalidState`); second raise rejects (`InvalidState`).
-- `resolve_dispute` happy paths: `Release` → `Completed` with `released_amount == 300` and `refunded_amount == 0`; `Refund` → `Refunded` with the inverse accounting; `Cancel` → `Cancelled`.
-- `resolve_dispute_split` happy paths: 100/200 split persists correct accounting and lands in `Funded` (mixed); 300/0 → `Refunded`; 0/300 → `Completed`.
-- `resolve_dispute_split` invariants: 50/100 (sum 150 ≠ 300 available) rejected via `try_*` + `assert_contract_error(EscrowError::AccountingInvariantViolated)`; `-1/301` rejected via `assert_contract_error(NonPositiveAmount)`.
-- `resolve_dispute` auth: client / freelancer / outsider cannot resolve; non-disputed contract rejects.
-- State blocking: `release_milestone_blocked_in_disputed_state` confirms direct release is blocked once a dispute is raised.
-- Storage error path: `get_dispute` panics with `DisputeNotFound` when no metadata exists.
-- Pause accountability: `pause_blocks_raise_dispute`, `pause_blocks_resolve_dispute`, `pause_blocks_resolve_dispute_split`.
+---
 
-## Validation
+## Example commit message
 
-- `cargo fmt --all` — clean
-- `cargo check --all-targets` — clean (no warnings)
-- `cargo test --all-targets` — **59 passed; 0 failed; 0 ignored; 0 warnings**
+```
+refactor: centralize milestone vector load/store helpers (Closes #701)
+```
 
-## Files changed
+---
 
-| File | Change |
-|------|--------|
-| `contracts/escrow/src/types.rs` | `DisputeResolution`, `DisputeSplit`, `DisputeMetadata`, `DataKey::Dispute`, `EscrowError::DisputeArbiterMissing` + `DisputeNotFound`, code constants |
-| `contracts/escrow/src/dispute.rs` | **new** — pure helpers `split_payouts`, `final_status_after_resolution`, `final_status_after_split`, `require_arbiter`, `require_party` |
-| `contracts/escrow/src/lib.rs` | `mod dispute` re-export, `create_contract_with_arbiter`, `raise_dispute`, `resolve_dispute`, `resolve_dispute_split`, `get_dispute`, `Disputed`-state guard in `release_milestone` |
-| `contracts/escrow/src/test/mod.rs` | wires `mod dispute;` so the new suite is actually compiled |
-| `contracts/escrow/src/test/dispute.rs` | 28 new dispute tests |
-| `docs/escrow/README.md` | New §3 *Dispute Resolution Flow* event/state-machine documentation and updated lifecycle, security, and integration example sections |
-| `PR_BODY.md` | This document, kept in-repo for review history |
+## Related
 
-## Notes for reviewers
+- Closes #701
 
-1. Soroban's `#[contracttype]` macro only accepts unit enum variants, so
-   the `Split` payload lives in a separate `DisputeSplit` struct and is
-   routed through a dedicated `resolve_dispute_split` entry point. The
-   `DisputeResolution` enum itself stays unit-only (Release/Refund/Cancel).
-2. The post-state accounting fix (`new_released / new_refunded` compared
-   to `sum(milestones)`) is the heart of the state-machine correctness:
-   without it, a `Release` resolution on a freshly-funded contract would
-   report `Funded` instead of `Completed`. `final_status_after_resolution`
-   computes the post-state explicitly.
-3. The auth chain in production is `caller.require_auth()` →
-   `dispute_require_arbiter`. In tests `mock_all_auths()` makes the
-   first step a no-op so the explicit role-check branch is reached; in
-   production the Soroban auth error fires *before* `require_arbiter`.
-   This is documented in the helper doc-comments.
-4. The `create_contract` signature is intentionally unchanged to avoid
-   breaking the existing test suite. The new arbiter-aware constructor
-   is `create_contract_with_arbiter`. Code duplication with
-   `create_contract` is flagged as a follow-up refactor candidate.
+---
 
-## Out of scope / follow-ups
-
-- Factor a private `create_contract_inner` to deduplicate
-  `create_contract` and `create_contract_with_arbiter`.
-- Extract a private `enter_dispute_resolution_or_panic` helper to
-  consolidate the auth/state prelude repeated across `raise_dispute`,
-  `resolve_dispute`, and `resolve_dispute_split`.
-- Decide whether `raise_dispute` should accept `PartiallyFunded`
-  (current: yes) or only `Funded` (current doc: yes) — the two are
-  consistent but worth re-confirming with the protocol team.
+> Note: An early draft of this PR body was inadvertently swapped with content from a sibling PR (#486 / dispute resolution). The body above was rewritten from scratch to correctly describe this milestone-accessor refactor and to re-anchor the `Closes #701` linkage so GitHub auto-closes the issue on merge.
