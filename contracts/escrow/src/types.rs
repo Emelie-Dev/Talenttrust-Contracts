@@ -141,10 +141,9 @@ pub enum DataKey {
     AccumulatedProtocolFees,
     GovernedParameters,
     ReadinessChecklist,
-    // Finalization
-    Finalization(u32),
-    // Settlement token
-    SettlementToken,
+    // Configurable limits
+    MaxMilestones,
+    MaxEscrowStroops,
 }
 
 /// Canonical contract error type for all entrypoint-facing errors.
@@ -250,8 +249,6 @@ pub enum Error {
     MilestoneNotOverdue = 53,
     /// The contract ID is out of valid bounds.
     InvalidContractId = 54,
-    /// Arithmetic overflow occurred during reputation calculation.
-    ArithmeticOverflow = 55,
 }
 
 /// Contract lifecycle states
