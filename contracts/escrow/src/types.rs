@@ -31,6 +31,16 @@ pub struct MilestoneEntry {
     pub amount: i128,
 }
 
+/// Lightweight contract entry returned by the paginated contracts view.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ContractEntry {
+    pub id: u32,
+    pub client: Address,
+    pub freelancer: Address,
+    pub status: ContractStatus,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ContractSummary {
