@@ -8,6 +8,7 @@ use soroban_sdk::{
     vec, Address, Env, Symbol, TryFromVal,
 };
 
+use super::has_event_with_topic;
 use crate::{ContractStatus, Error, Escrow, EscrowClient, ReleaseAuthorization};
 
 fn register_client(env: &Env) -> EscrowClient<'_> {
@@ -216,13 +217,5 @@ fn cancel_emits_cancelled_event() {
 
     assert!(client.cancel_contract(&contract_id, &client_addr));
 
-    let cancelled_topic = symbol_short!("cancelled");
-    let events = env.events().all();
-    assert!(events.iter().any(|event| {
-        event.1.len() > 0
-            && Symbol::try_from_val(&env, &event.1.get(0).unwrap())
-                .ok()
-                .as_ref()
-                == Some(&cancelled_topic)
-    }));
+    assert!(has_event_with_topic(&env, &symbol_short!("cancelled")));
 }

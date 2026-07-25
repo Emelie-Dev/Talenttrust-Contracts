@@ -30,8 +30,8 @@ use soroban_sdk::{
 };
 
 use super::{
-    assert_contract_error, register_client, total_milestone_amount, MILESTONE_ONE, MILESTONE_THREE,
-    MILESTONE_TWO,
+    assert_contract_error, has_event_with_topic, register_client, total_milestone_amount,
+    MILESTONE_ONE, MILESTONE_THREE, MILESTONE_TWO,
 };
 use crate::{ContractStatus, EscrowError, ReleaseAuthorization};
 
@@ -247,14 +247,7 @@ fn bind_settlement_token_rejects_uninit() {
 /// Returns `true` when at least one published event carries
 /// `settlement_token_bound` as its first topic.
 fn has_settlement_token_bound_event(env: &Env) -> bool {
-    let topic = Symbol::new(env, "settlement_token_bound");
-    env.events().all().iter().any(|event| {
-        event.1.len() > 0
-            && Symbol::try_from_val(env, &event.1.get(0).unwrap())
-                .ok()
-                .as_ref()
-                == Some(&topic)
-    })
+    has_event_with_topic(env, &Symbol::new(env, "settlement_token_bound"))
 }
 
 #[test]

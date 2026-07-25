@@ -1,12 +1,10 @@
-use soroban_sdk::testutils::Ledger as _;
-use super::register_client;
-use soroban_sdk::testutils::{Address as _, Events};
-use soroban_sdk::{Address, Env, Symbol, TryFromVal};
+use super::{has_event_with_topic, has_event_with_topics, register_client};
+use soroban_sdk::testutils::Address as _;
+use soroban_sdk::{Address, Env, Symbol};
 
 #[test]
 fn admin_transfer_propose_and_accept_happy_path() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -28,7 +26,6 @@ fn admin_transfer_propose_and_accept_happy_path() {
 #[test]
 fn propose_self_as_admin_rejected() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -45,7 +42,6 @@ fn propose_self_as_admin_rejected() {
 #[test]
 fn propose_overwrites_pending_admin() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -71,7 +67,6 @@ fn propose_overwrites_pending_admin() {
 #[test]
 fn cancel_proposal_clears_pending_admin() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -92,7 +87,6 @@ fn cancel_proposal_clears_pending_admin() {
 #[test]
 fn cancel_without_proposal_fails() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -106,7 +100,6 @@ fn cancel_without_proposal_fails() {
 #[test]
 fn accept_after_cancel_fails() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -124,7 +117,6 @@ fn accept_after_cancel_fails() {
 #[test]
 fn propose_not_initialized_fails() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -136,7 +128,6 @@ fn propose_not_initialized_fails() {
 #[test]
 fn accept_not_initialized_fails() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -147,7 +138,6 @@ fn accept_not_initialized_fails() {
 #[test]
 fn cancel_not_initialized_fails() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -158,7 +148,6 @@ fn cancel_not_initialized_fails() {
 #[test]
 fn propose_then_cancel_then_new_propose_then_accept() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -194,7 +183,6 @@ fn propose_then_cancel_then_new_propose_then_accept() {
 #[test]
 fn cancel_emits_event() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -205,27 +193,17 @@ fn cancel_emits_event() {
     client.propose_governance_admin(&proposed);
     client.cancel_governance_admin_proposal();
 
-    let events = env.events().all();
     let admin_topic = soroban_sdk::symbol_short!("admin");
     let cancelled_topic = soroban_sdk::Symbol::new(&env, "cancelled");
-    let found_cancelled = events.iter().any(|event| {
-        event.1.len() >= 2
-            && Symbol::try_from_val(&env, &event.1.get(0).unwrap())
-                .ok()
-                .as_ref()
-                == Some(&admin_topic)
-            && Symbol::try_from_val(&env, &event.1.get(1).unwrap())
-                .ok()
-                .as_ref()
-                == Some(&cancelled_topic)
-    });
-    assert!(found_cancelled, "cancel event should be emitted");
+    assert!(
+        has_event_with_topics(&env, &[admin_topic, cancelled_topic]),
+        "cancel event should be emitted"
+    );
 }
 
 #[test]
 fn propose_emits_event() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -235,19 +213,10 @@ fn propose_emits_event() {
 
     client.propose_governance_admin(&proposed);
 
-    let events = env.events().all();
     let admin_topic = soroban_sdk::symbol_short!("admin");
     let proposed_topic = soroban_sdk::Symbol::new(&env, "proposed");
-    let found_proposed = events.iter().any(|event| {
-        event.1.len() >= 2
-            && Symbol::try_from_val(&env, &event.1.get(0).unwrap())
-                .ok()
-                .as_ref()
-                == Some(&admin_topic)
-            && Symbol::try_from_val(&env, &event.1.get(1).unwrap())
-                .ok()
-                .as_ref()
-                == Some(&proposed_topic)
-    });
-    assert!(found_proposed, "propose event should be emitted");
+    assert!(
+        has_event_with_topics(&env, &[admin_topic, proposed_topic]),
+        "propose event should be emitted"
+    );
 }
