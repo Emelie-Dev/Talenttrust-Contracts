@@ -1,3 +1,14 @@
+//! Temporary milestone approval storage and release authorization checks.
+//!
+//! This module owns the temporary
+//! `DataKey::MilestoneApprovals(contract_id, milestone_index)` records used by
+//! `approve_milestone_release` and `release_milestone`. It reads the escrow
+//! contract and milestone vector to validate state and role authorization, but
+//! it does not move funds or mutate milestone accounting.
+//!
+//! Approval records live in Soroban temporary storage and expire according to
+//! `PENDING_APPROVAL_TTL_LEDGERS`. Missing or expired approvals fail closed.
+
 use crate::ttl::{PENDING_APPROVAL_BUMP_THRESHOLD, PENDING_APPROVAL_TTL_LEDGERS};
 use crate::types::{
     Contract, ContractStatus, DataKey, Error, Milestone, MilestoneApprovals, ReleaseAuthorization,
@@ -217,7 +228,7 @@ pub fn clear_approvals(env: &Env, contract_id: u32, milestone_index: u32) {
 mod tests {
     use super::*;
     use crate::Escrow;
-    use soroban_sdk::{testutils::Address as _, Env};
+    use soroban_sdk::{testutils::Address as _, Env, Symbol, Vec};
 
     fn setup_contract_in_storage(
         env: &Env,
@@ -237,8 +248,9 @@ mod tests {
                     funded_amount: 0,
                     released: false,
                     refunded: false,
-                    refunded_amount: 0,
                     work_evidence: None,
+                    refunded_amount: 0,
+                    deadline: None,
                 }],
             );
             let _ = release_auth;
@@ -270,6 +282,7 @@ mod tests {
             released_amount: 0,
             refunded_amount: 0,
             release_authorization: ReleaseAuthorization::ClientOnly,
+            reputation_issued: false,
         };
 
         let contract_id = 1u32;
@@ -287,6 +300,7 @@ mod tests {
                     refunded: false,
                     work_evidence: None,
                     refunded_amount: 0,
+                    deadline: None,
                 }],
             );
             let milestone_key = Symbol::new(&env, "milestones");
@@ -325,6 +339,7 @@ mod tests {
             released_amount: 0,
             refunded_amount: 0,
             release_authorization: ReleaseAuthorization::MultiSig,
+            reputation_issued: false,
         };
 
         let contract_id = 1u32;
@@ -342,6 +357,7 @@ mod tests {
                     refunded: false,
                     work_evidence: None,
                     refunded_amount: 0,
+                    deadline: None,
                 }],
             );
             let milestone_key = Symbol::new(&env, "milestones");
@@ -387,6 +403,7 @@ mod tests {
             released_amount: 0,
             refunded_amount: 0,
             release_authorization: ReleaseAuthorization::ClientOnly,
+            reputation_issued: false,
         };
 
         let contract_id = 1u32;
@@ -404,6 +421,7 @@ mod tests {
                     refunded: false,
                     work_evidence: None,
                     refunded_amount: 0,
+                    deadline: None,
                 }],
             );
             let milestone_key = Symbol::new(&env, "milestones");

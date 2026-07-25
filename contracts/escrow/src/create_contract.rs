@@ -38,30 +38,49 @@ pub fn create_contract_impl(
         env.panic_with_error(Error::InvalidParticipants);
     }
 
-    match release_authorization {
-        ReleaseAuthorization::ArbiterOnly | ReleaseAuthorization::ClientAndArbiter
-            if arbiter.is_none() =>
-        {
-            env.panic_with_error(Error::MissingArbiter);
+        // Validate arbiter is distinct from both client and freelancer.
+        if let Some(ref arb) = arbiter {
+            if arb == &client || arb == &freelancer {
+                env.panic_with_error(EscrowError::InvalidArbiter);
+            }
         }
-        _ => {}
-    }
 
-    if let Some(ref arb) = arbiter {
-        if arb == &client || arb == &freelancer {
-            env.panic_with_error(Error::InvalidArbiter);
+        // Validate at least one milestone is specified.
+        if milestones.is_empty() {
+            env.panic_with_error(EscrowError::EmptyMilestones);
         }
-    }
 
-    if milestones.is_empty() {
-        env.panic_with_error(Error::EmptyMilestones);
-    }
-
-    for amount in milestones.iter() {
-        if amount <= 0 {
-            env.panic_with_error(Error::InvalidMilestoneAmount);
+        // Enforce maximum number of milestones.
+        if milestones.len() > MAX_MILESTONES {
+            env.panic_with_error(EscrowError::TooManyMilestones);
         }
-    }
+
+        // Retrieve governed parameters for total escrow cap; allow any total if unset.
+        let max_total = env
+            .storage()
+            .persistent()
+            .get::<_, GovernedParameters>(&DataKey::GovernedParameters)
+            .map(|params| params.max_escrow_total_stroops)
+            .unwrap_or(i128::MAX);
+
+        // Validate milestone amounts and enforce the total cap via the canonical helper.
+        let mut native_milestones = [0_i128; MAX_MILESTONES as usize];
+        let len = milestones.len() as usize;
+        for i in 0..len {
+            native_milestones[i] = milestones.get(i as u32).unwrap();
+        }
+        match amount_validation::validate_milestone_amounts(&native_milestones[..len], max_total) {
+            Ok(_) => (),
+            Err(err) => match err {
+                EscrowError::InvalidMilestoneAmount => {
+                    env.panic_with_error(EscrowError::InvalidMilestoneAmount)
+                }
+                EscrowError::TotalCapExceeded => {
+                    env.panic_with_error(EscrowError::TotalCapExceeded)
+                }
+                _ => env.panic_with_error(EscrowError::InvalidMilestoneAmount),
+            },
+        }
 
     // Validate deadline count matches milestone count
     if let Some(ref deadlines_vec) = deadlines {
@@ -96,9 +115,7 @@ pub fn create_contract_impl(
         milestone_vec.push_back(Milestone {
             amount,
             funded_amount: 0,
-            released: false,
-            refunded: false,
-            work_evidence: None,
+            released_amount: 0,
             refunded_amount: 0,
             deadline,
         });
@@ -112,15 +129,20 @@ pub fn create_contract_impl(
         .persistent()
         .set(&DataKey::NextContractId, &(id + 1));
 
-    env.events().publish(
-        (symbol_short!("created"), id),
-        (client, freelancer_addr, env.ledger().timestamp()),
-    );
+        // Emit creation event for indexers and off-chain subscribers.
+        env.events().publish(
+            (symbol_short!("created"), id),
+            (client, freelancer_addr, env.ledger().timestamp()),
+        );
 
-    id
+        id
+    }
 }
 
-/// Returns the next contract id after verifying the slot is unused.
+/// Returns the next available contract ID and asserts it is not already occupied.
+///
+/// # Errors
+/// * `ContractIdCollision` - If the allocated id slot is already occupied
 pub(crate) fn next_contract_id(env: &Env) -> u32 {
     let id: u32 = env
         .storage()

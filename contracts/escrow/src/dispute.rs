@@ -1,4 +1,12 @@
-use soroban_sdk::{contractimpl, contracttype, Address, Env};
+//! Dispute payout arithmetic and final-status helpers.
+//!
+//! This module is intentionally storage-free. It computes how the currently
+//! available escrow balance should be split for a `DisputeResolution` and tells
+//! the root dispute entrypoint whether the contract should end as `Completed`
+//! or `Refunded`. The root entrypoints own authentication, token transfer, event
+//! publication, and writes to `DataKey::Contract(contract_id)`.
+
+use soroban_sdk::{contractimpl, symbol_short, Address, Env};
 
 use crate::{
     safe_add_amounts, Contract, ContractStatus, DataKey, Escrow, EscrowArgs, EscrowClient,
@@ -146,31 +154,20 @@ impl Escrow {
             .get(&DataKey::Contract(contract_id))
             .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
 
-        if caller != contract.client && caller != contract.freelancer {
-            env.panic_with_error(EscrowError::UnauthorizedRole);
-        }
+// ---------------------------------------------------------------------------
+// resolution_payouts: pure arithmetic for dispute payout calculations
+// ---------------------------------------------------------------------------
 
-        contract.status = ContractStatus::Disputed;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Contract(contract_id), &contract);
-
-        true
-    }
-}
-
-impl DisputeResolution {
-    pub fn code(&self) -> u32 {
-        match self {
-            Self::FullRefund => 0,
-            Self::PartialRefund => 1,
-            Self::FullPayout => 2,
-            Self::Split(_, _) => 3,
-        }
-    }
-}
-
-#[allow(dead_code)]
+/// Compute the payout split for a dispute resolution.
+///
+/// Returns `(client_payout, freelancer_payout)` where both values are non-negative
+/// and sum to the available balance. The available balance is computed as:
+/// `available = funded_amount - released_amount - refunded_amount`.
+///
+/// # Errors
+/// - `AccountingInvariantViolated` if available would be negative (corrupted state)
+/// - `PotentialOverflow` if intermediate calculations overflow
+/// - `InvalidDisputeSplit` for Split variant with negative legs or non-conserving sum
 pub fn resolution_payouts(
     contract: &Contract,
     resolution: &DisputeResolution,
@@ -187,6 +184,7 @@ pub fn resolution_payouts(
     match resolution {
         DisputeResolution::FullRefund => Ok((available, 0)),
         DisputeResolution::PartialRefund => {
+            // freelancer gets floor(available * 30 / 100), client gets remainder
             let freelancer_payout = available
                 .checked_mul(30)
                 .and_then(|value| value.checked_div(100))
@@ -194,21 +192,28 @@ pub fn resolution_payouts(
             Ok((available - freelancer_payout, freelancer_payout))
         }
         DisputeResolution::FullPayout => Ok((0, available)),
-        DisputeResolution::Split(client_amount, freelancer_amount) => {
-            if *client_amount < 0 || *freelancer_amount < 0 {
+        DisputeResolution::Split(split) => {
+            if split.client_amount < 0 || split.freelancer_amount < 0 {
                 return Err(Error::InvalidDisputeSplit);
             }
-            let total = safe_add_amounts(*client_amount, *freelancer_amount)
+            // Issue #572: Reject split resolution whose components are individually within but jointly exceed balance
+            if split.client_amount > available || split.freelancer_amount > available {
+                return Err(Error::InvalidDisputeSplit);
+            }
+            let total = safe_add_amounts(split.client_amount, split.freelancer_amount)
                 .ok_or(Error::PotentialOverflow)?;
-            if total != available {
+            if total > available || total != available {
                 return Err(Error::InvalidDisputeSplit);
             }
-            Ok((*client_amount, *freelancer_amount))
+            Ok((split.client_amount, split.freelancer_amount))
         }
     }
 }
 
-#[allow(dead_code)]
+/// Determine the final contract status after dispute resolution.
+///
+/// Returns `Refunded` only when the full deposit has been refunded.
+/// Otherwise returns `Completed`.
 pub fn final_status_after_resolution(contract: &Contract) -> ContractStatus {
     if contract.refunded_amount == contract.funded_amount {
         ContractStatus::Refunded
@@ -295,16 +300,5 @@ impl Escrow {
         contract.status = final_status_after_resolution(&contract);
         env.storage().persistent().set(&key, &contract);
 
-        env.events().publish(
-            (symbol_short!("dsp_res"), contract_id),
-            (
-                arbiter,
-                resolution.code(),
-                client_payout,
-                freelancer_payout,
-                env.ledger().timestamp(),
-            ),
-        );
-        true
-    }
-}
+// Dispute entrypoints are implemented in `contracts/escrow/src/lib.rs`.
+// This module retains dispute-related helpers only.

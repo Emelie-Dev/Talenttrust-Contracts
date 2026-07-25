@@ -12,6 +12,7 @@ issues so integrators can distinguish live API from roadmap.
 - `contracts/escrow/src/release_milestone.rs`: inlined in `lib.rs`; transfers tokens from escrow to freelancer net of protocol fee.
 - `contracts/escrow/src/refund.rs`: `refund_unreleased_milestones` lifecycle entrypoint.
 - `contracts/escrow/src/test/sac_custody.rs`: SAC custody tests for `bind_settlement_token`, `deposit_funds` (SAC path), and `release_milestone` (SAC path).
+- `contracts/escrow/src/test/cancel_contract.rs`: cancellation tests, including SAC client-refund and shared-escrow balance assertions.
 
 ## Implemented API Surface
 
@@ -21,7 +22,7 @@ Lifecycle and reputation:
 - `deposit_funds(contract_id, amount) -> bool`
 - `submit_work_evidence(contract_id, caller, milestone_index, evidence) -> bool`
 - `release_milestone(contract_id, milestone_index) -> bool`
-- `issue_reputation(contract_id, caller, freelancer, rating) -> bool`
+- `issue_reputation(contract_id, caller, rating, comment) -> bool`
 - `cancel_contract(contract_id, caller) -> bool`
 - `finalize_contract(contract_id, finalizer) -> bool`
 
@@ -39,7 +40,7 @@ Read-only queries:
 - `get_finalization_record(contract_id) -> Option<FinalizationRecord>`
 - `get_reputation(freelancer) -> Option<ReputationRecord>`
 - `get_average_rating(freelancer) -> Option<i128>` — scaled average (see [Average Rating](#average-rating))
-- `get_pending_reputation_credits(freelancer) -> u32`
+- `get_pending_reputation_credits(freelancer) -> i128`
 - `get_admin() -> Option<Address>`
 - `get_settlement_token() -> Option<Address>`
 - `is_paused() -> bool`
@@ -47,6 +48,7 @@ Read-only queries:
 - `get_mainnet_readiness_info() -> MainnetReadinessInfo`
 - `get_protocol_fee_bps() -> u32`
 - `get_accumulated_protocol_fees() -> i128`
+- `get_bounds() -> ContractBounds` *(returns the compile-time protocol bounds: max milestones, max single milestone amount, max total escrow amount, max fee bps; see [`ContractBounds`](../../contracts/escrow/src/types.rs))*
 
 ### Read-only getter semantics
 
@@ -94,6 +96,25 @@ Per-getter details:
 
 These properties are locked in by tests under
 `contracts/escrow/src/test/persistence.rs` (issue #475).
+
+### ContractBounds vs ContractSummary
+
+`get_bounds()` and `get_contract_summary()` both return structured read results
+but serve different purposes and must not be conflated:
+
+| Type | Returned by | Contains | Changes with |
+| --- | --- | --- | --- |
+| `ContractBounds` | `get_bounds()` | Protocol-wide compile-time limits (max milestones, max amount, max fee bps) | Binary update |
+| `ContractSummary` | `get_contract_summary()` | Per-contract state snapshot (participants, status, amounts, milestones) | Each mutating call |
+
+`ContractBounds` has no participant addresses, no accounting fields, and no
+milestones vector. Its `schema_version` tracks the limits ABI only.
+`ContractSummary` is the per-contract snapshot used by `get_contract_summary`
+and embedded in `FinalizationRecord`; its schema version tracks per-contract
+data.
+
+Indexers discovering limits should call `get_bounds()`. Indexers snapshotting
+contract state should call `get_contract_summary()`.
 
 Operational controls:
 
@@ -202,7 +223,8 @@ escrow.release_milestone(&contract_id, &client_addr, &0);
    `ReleaseAuthorization`, milestone state, balance) hold.
 2. The escrow reads the bound settlement token; if no token has been bound it
    panics with `SettlementTokenNotConfigured`.
-3. The escrow reads the protocol fee (set via `set_protocol_fee_bps`); the
+3. The escrow reads the protocol fee (set via `set_protocol_fee_bps`, capped at
+   `10_000` basis points / 100%); the
    payout to the freelancer is `milestone.amount - fee`, with `fee` retained
    inside the contract via `DataKey::AccumulatedProtocolFees`.
 4. `token::Client::transfer(escrow, freelancer, payout)` is invoked BEFORE
@@ -215,6 +237,69 @@ pending reputation credit is added for the freelancer.
 `PendingReputationCredits` is a non-negative counter that tracks completed
 contracts awaiting client-issued reputation for a freelancer. `issue_reputation`
 consumes one pending credit and records the rating.
+
+### Release Authorization Mode / Caller Matrix
+
+The `ReleaseAuthorization` field set at contract creation controls which
+parties may approve a milestone and which may trigger the on-chain release.
+The table below is the definitive cross-reference for all four modes.
+
+| Mode | Allowed Approvers | Approval Logic | Allowed Release Callers | Required Contract-Creation Arg |
+|---|---|---|---|---|
+| `ClientOnly` (0) | Client | `client_approved == true` | Client | Arbiter optional |
+| `ClientAndArbiter` (1) | Client **or** Arbiter | `client_approved \|\| arbiter_approved` | Client **or** Arbiter | Arbiter **required** |
+| `ArbiterOnly` (2) | Arbiter | `arbiter_approved == true` | Arbiter | Arbiter **required** |
+| `MultiSig` (3) | Client **and** Freelancer | `client_approved && freelancer_approved` | Client **or** Freelancer | Arbiter optional |
+
+**Key behavioral rules enforced by `release_milestone` and `approve_milestone_release`:**
+
+1. **Caller role check** — `release_milestone` first authenticates the caller
+   via `caller.require_auth()`, then checks the caller's role against the
+   mode. Callers whose role is not listed in "Allowed Release Callers" receive
+   `UnauthorizedRole` before any approval logic runs.
+
+2. **Approval presence** — after the role check passes, `check_approvals`
+   verifies that the required approvals are present in temporary storage. If
+   the approval record is absent or has expired, the call fails with
+   `InsufficientApprovals`. No partial state change occurs.
+
+3. **Approval scope** — `approve_milestone_release` enforces the same
+   role rules: a party whose role is not listed in "Allowed Approvers" is
+   rejected with `UnauthorizedRole` and no approval is recorded.
+
+4. **MultiSig AND vs OR** — `MultiSig` is the only mode with AND semantics:
+   *both* client and freelancer must have approved before *either* can
+   trigger the release. Attempting a release after only one of the two
+   approves yields `InsufficientApprovals`.
+
+5. **Approval expiry** — approvals are stored in Soroban temporary storage
+   with a TTL of `PENDING_APPROVAL_TTL_LEDGERS` (~7 days). Expired approvals
+   are treated as absent; `check_approvals` cannot distinguish expired from
+   never-recorded and returns `InsufficientApprovals` in both cases.
+
+6. **Approval clearing** — approvals are removed from temporary storage
+   immediately after a successful release. They cannot be reused for a
+   different milestone or a second attempt on the same milestone.
+
+7. **InvalidState guard** — `release_milestone` requires the contract to be
+   in the active funded state. Contracts in `Created`, `Completed`,
+   `Cancelled`, or `Refunded` status are rejected with `InvalidState` before
+   any role or approval logic runs.
+
+**Error code quick-reference:**
+
+| Condition | Error |
+|---|---|
+| Caller's role is not in "Allowed Release Callers" | `UnauthorizedRole` |
+| Required approvals missing or expired | `InsufficientApprovals` |
+| Contract not in active funded state | `InvalidState` |
+| Approval attempted by unauthorized party | `UnauthorizedRole` |
+| Same party approves twice | `AlreadyApproved` |
+| Milestone already released | `MilestoneAlreadyReleased` |
+| Milestone already refunded | `AlreadyRefunded` |
+
+Test coverage for every cell in the matrix above lives in
+`contracts/escrow/src/test/release_authorization.rs` (issue #710).
 
 ### 5. Issue Reputation
 
@@ -239,7 +324,7 @@ to the contract's accounting counters is paired with the matching SAC
 | Token binding (admin, single-use) | `bind_settlement_token(sac)` | `—` | `DataKey::SettlementToken = sac` |
 | Funding | `deposit_funds(id, client, amount)` | `transfer(client, escrow, amount)` | `contract.funded_amount += amount` |
 | Release | `release_milestone(id, caller, idx)` | `transfer(escrow, freelancer, milestone.amount - fee)` | `milestone.released = true`, `contract.released_amount += milestone.amount`, `DataKey::AccumulatedProtocolFees += fee` |
-| Refund (planned) | `refund_unreleased_milestones(id, indices)` | `transfer(escrow, client, sum)` | `milestone.refunded = true`, `contract.refunded_amount += sum` |
+| Refund | `refund_unreleased_milestones(id, indices)` | `transfer(escrow, client, sum)` | `milestone.refunded = true`, `contract.refunded_amount += sum` |
 
 The pause/emergency gate, fail-closed validation, and TTL bumps from the
 existing lifecycle are preserved unchanged on each path.
@@ -455,6 +540,38 @@ every operation order:
 - interleaved alternating operations at every step
 - cross-check that `get_refundable_balance` matches `get_contract` fields exactly
 - partial deposit with partial refund never goes negative
+
+## Dispute Resolution Payout Matrix
+
+When a dispute is raised on a funded or partially funded contract, the assigned arbiter
+chooses a resolution. The contract enforces conservation of the available balance:
+
+```
+available = funded_amount - released_amount - refunded_amount
+client_payout + freelancer_payout == available
+```
+
+### Resolution Variants
+
+| Variant | Client Payout | Freelancer Payout | Notes |
+|---|---|---|---|
+| `FullRefund` | `available` | `0` | All remaining funds to client. Status becomes `Refunded`. |
+| `FullPayout` | `0` | `available` | All remaining funds to freelancer. Status becomes `Completed`. |
+| `PartialRefund` | `available - floor(available * 30 / 100)` | `floor(available * 30 / 100)` | 70/30 split with floor rounding. Status becomes `Completed`. |
+| `Split(client_amount, freelancer_amount)` | `client_amount` | `freelancer_amount` | Custom split; both must be non-negative and sum to available. |
+
+### Security Invariants
+
+- **Conservation**: The payout values always sum to `available`. Negative splits are
+  rejected with `InvalidDisputeSplit`.
+- **Overflow protection**: All arithmetic uses checked operations; overflow returns
+  `PotentialOverflow`.
+- **Accounting integrity**: If `released + refunded > funded`, resolution fails with
+  `AccountingInvariantViolated`.
+- **Status determination**: `FinalRefund` sets status to `Refunded` only when the full
+  funded amount has been refunded; otherwise `Completed`.
+
+Test coverage is provided in `contracts/escrow/src/test/dispute.rs`.
 
 ## Planned Features
 

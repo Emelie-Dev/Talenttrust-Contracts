@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use soroban_sdk::{testutils::Address as _, Address, Env, vec};
-use crate::{Escrow, EscrowClient, DataKey, ReleaseAuthorization};
+use crate::{Escrow, EscrowClient, DataKey, Error, ReleaseAuthorization};
 
 #[test]
 fn test_default_fees_are_zero() {
@@ -53,6 +53,43 @@ fn test_get_protocol_fee_bps_after_configuration() {
 
     client.set_protocol_fee_bps(&1000u32);
     assert_eq!(client.get_protocol_fee_bps(), 1000);
+}
+
+/// Test that protocol fee updates accept 0 and 10_000 basis points.
+#[test]
+fn test_set_protocol_fee_bps_accepts_boundary_values() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let contract_id = env.register_contract(None, Escrow);
+    let client = EscrowClient::new(&env, &contract_id);
+
+    client.initialize(&admin);
+
+    assert!(client.set_protocol_fee_bps(&0u32));
+    assert_eq!(client.get_protocol_fee_bps(), 0);
+
+    assert!(client.set_protocol_fee_bps(&10_000u32));
+    assert_eq!(client.get_protocol_fee_bps(), 10_000);
+}
+
+/// Test that protocol fee updates reject values above 100%.
+#[test]
+fn test_set_protocol_fee_bps_rejects_values_above_100_percent() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let contract_id = env.register_contract(None, Escrow);
+    let client = EscrowClient::new(&env, &contract_id);
+
+    client.initialize(&admin);
+    assert!(client.set_protocol_fee_bps(&0u32));
+
+    let result = client.try_set_protocol_fee_bps(&10_001u32);
+    super::assert_contract_error(result, Error::InvalidProtocolParameters);
+    assert_eq!(client.get_protocol_fee_bps(), 0);
 }
 
 /// Test that `get_accumulated_protocol_fees` reflects fees accumulated after milestone releases.
