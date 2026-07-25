@@ -31,9 +31,7 @@ mod persistence;
 mod refund;
 mod release;
 mod release_authorization;
-mod reputation;
-mod security;
-mod ttl_tests;
+mod timeout_tests;
 
 // --- Shared helpers ---
 

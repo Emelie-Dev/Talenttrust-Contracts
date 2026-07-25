@@ -190,52 +190,7 @@ pub enum Error {
     EmptyComment = 29,
     /// The comment string exceeds the maximum length limit.
     CommentTooLong = 30,
-    /// The participant address is invalid.
-    InvalidParticipant = 31,
-    /// The deposit amount is invalid.
-    InvalidDepositAmount = 32,
-    /// The milestone configuration is invalid.
-    InvalidMilestone = 33,
-    /// The contract has already been initialized.
-    AlreadyInitialized = 34,
-    /// Insufficient accumulated fees available for extraction.
-    InsufficientAccumulatedFees = 35,
-    /// The contract has not been initialized.
-    NotInitialized = 36,
-    /// The contract is currently paused.
-    ContractPaused = 37,
-    /// Emergency mode is currently active.
-    EmergencyActive = 38,
-    /// Self-rating is not allowed.
-    SelfRating = 39,
-    /// The contract has not been completed.
-    NotCompleted = 40,
-    /// The requested contract status transition is invalid.
-    InvalidStatusTransition = 41,
-    /// An arbiter is required for this operation.
-    ArbiterRequired = 42,
-    /// The dispute split percentage is invalid.
-    InvalidDisputeSplit = 43,
-    /// The operation would violate the core accounting invariant.
-    AccountingInvariantViolated = 44,
-    /// Checked arithmetic operation resulted in an overflow.
-    PotentialOverflow = 45,
-    /// The contract has already been finalized.
-    AlreadyFinalized = 46,
-    /// The contract has already been cancelled.
-    AlreadyCancelled = 50,
-    /// The work evidence string exceeds the maximum length limit.
-    EvidenceTooLong = 47,
-    /// The governance admin rotation timelock has not elapsed.
-    TimelockNotElapsed = 48,
-    /// The provided protocol parameters are invalid.
-    InvalidProtocolParameters = 49,
-    /// The escrow cap would be exceeded by this operation.
-    EscrowCapExceeded = 51,
-    /// No settlement token has been bound for custody transfers.
-    SettlementTokenNotConfigured = 52,
-    /// The milestone deadline has not yet passed.
-    MilestoneNotOverdue = 53,
+    DeadlineNotPassed = 31,
 }
 
 /// Contract lifecycle states
@@ -277,9 +232,6 @@ pub struct Milestone {
     pub refunded: bool,
     pub work_evidence: Option<String>,
     pub refunded_amount: i128,
-    /// Optional Unix timestamp (seconds) after which the client may claim
-    /// a timeout refund for this milestone without arbiter involvement.
-    /// None means no deadline — the milestone never expires.
     pub deadline: Option<u64>,
 }
 

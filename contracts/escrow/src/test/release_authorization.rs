@@ -20,8 +20,7 @@
 
 use soroban_sdk::testutils::Ledger as _;
 use soroban_sdk::{
-    testutils::Address as _, testutils::Events, vec, Address, Env, FromVal, IntoVal, Symbol,
-    TryFromVal,
+    testutils::Address as _, testutils::Events, vec, Address, Env, IntoVal, Symbol, TryFromVal,
 };
 
 use super::{has_event_with_topic, register_client};
