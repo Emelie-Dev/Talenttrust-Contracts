@@ -193,6 +193,8 @@ pub enum Error {
     SettlementTokenNotConfigured = 52,
     /// The milestone deadline has not yet passed.
     MilestoneNotOverdue = 53,
+    /// The contract ID is out of valid bounds.
+    InvalidContractId = 54,
 }
 
 /// Contract lifecycle states

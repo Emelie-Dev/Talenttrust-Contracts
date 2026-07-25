@@ -1686,6 +1686,7 @@ impl Escrow {
         comment: String,
     ) -> bool {
         Self::require_not_paused(&env);
+        Self::validate_contract_id_bounds(&env, contract_id);
         let mut contract: Contract = env
             .storage()
             .persistent()
@@ -1763,6 +1764,7 @@ impl Escrow {
     /// Returns the written feedback provided by the client when reputation was issued.
     /// Returns `None` if reputation has not been issued for this contract.
     pub fn get_reputation_comment(env: Env, contract_id: u32) -> Option<String> {
+        Self::validate_contract_id_bounds(&env, contract_id);
         let comment_key = DataKey::ReputationComment(contract_id);
         let comment: Option<String> = env.storage().persistent().get(&comment_key);
         if comment.is_some() {
@@ -1861,6 +1863,7 @@ impl Escrow {
         /// are always in scope before any state mutation can occur.
         Self::require_initialized(&env);
         Self::require_not_paused(&env);
+        Self::validate_contract_id_bounds(&env, contract_id);
         caller.require_auth();
 
         let contract: Contract = env
@@ -1945,6 +1948,7 @@ impl Escrow {
     /// Extends the milestones vector's persistent TTL on read,
     /// consistent with `get_milestones`.
     pub fn get_work_evidence(env: Env, contract_id: u32, milestone_index: u32) -> Option<String> {
+        Self::validate_contract_id_bounds(&env, contract_id);
         let milestone_key = Symbol::new(&env, "milestones");
         let milestones: Vec<Milestone> = env
             .storage()
@@ -2186,6 +2190,7 @@ impl Escrow {
         /// are always in scope before any state mutation can occur.
         Self::require_initialized(&env);
         Self::require_not_paused(&env);
+        Self::validate_contract_id_bounds(&env, contract_id);
         caller.require_auth();
 
         let mut contract: Contract = env
@@ -2270,6 +2275,7 @@ impl Escrow {
         /// are always in scope before any state mutation can occur.
         Self::require_initialized(&env);
         Self::require_not_paused(&env);
+        Self::validate_contract_id_bounds(&env, contract_id);
         arbiter.require_auth();
 
         let mut contract: Contract = env
