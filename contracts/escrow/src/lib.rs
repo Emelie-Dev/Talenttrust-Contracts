@@ -516,11 +516,7 @@ impl Escrow {
         // Authenticate caller before any state-dependent logic
         caller.require_auth();
 
-        let mut contract: Contract = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Contract(contract_id))
-            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
+        let mut contract = Self::load_escrow_contract(&env, contract_id, EscrowError::ContractNotFound);
 
         // Extend TTL on contract read
         ttl::extend_contract_ttl(&env, contract_id);
@@ -862,11 +858,7 @@ impl Escrow {
             }
         }
 
-        let mut contract: Contract = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Contract(contract_id))
-            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
+        let mut contract = Self::load_escrow_contract(&env, contract_id, EscrowError::ContractNotFound);
 
         // Extend TTL on contract read
         ttl::extend_contract_ttl(&env, contract_id);
@@ -1108,11 +1100,7 @@ impl Escrow {
 
     /// Retrieves contract information.
     pub fn get_contract(env: Env, contract_id: u32) -> Contract {
-        let contract = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Contract(contract_id))
-            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
+        let contract = Self::load_escrow_contract(&env, contract_id, Error::ContractNotFound);
 
         // Extend TTL on contract read
         ttl::extend_contract_ttl(&env, contract_id);
@@ -1168,11 +1156,7 @@ impl Escrow {
     /// # Errors
     /// * `ContractNotFound` - If contract doesn't exist
     pub fn get_contract_summary(env: Env, contract_id: u32) -> ContractSummary {
-        let contract: Contract = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Contract(contract_id))
-            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
+        let contract = Self::load_escrow_contract(&env, contract_id, EscrowError::ContractNotFound);
 
         // Extend TTL on contract and milestones read
         ttl::extend_contract_and_milestones_ttl(&env, contract_id);
@@ -1267,11 +1251,7 @@ impl Escrow {
 
     /// Returns funded minus released minus refunded for `contract_id`.
     pub fn get_refundable_balance(env: Env, contract_id: u32) -> i128 {
-        let contract: Contract = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Contract(contract_id))
-            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
+        let contract = Self::load_escrow_contract(&env, contract_id, EscrowError::ContractNotFound);
         ttl::extend_contract_ttl(&env, contract_id);
         contract.funded_amount - contract.released_amount - contract.refunded_amount
     }
@@ -1500,11 +1480,7 @@ impl Escrow {
     /// * `InvalidStatusTransition` - If the contract is not `Created`/`Funded` or has already released funds.
     pub fn cancel_contract(env: Env, contract_id: u32, client: Address) -> bool {
         Self::require_not_paused(&env);
-        let mut contract: Contract = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Contract(contract_id))
-            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
+        let mut contract = Self::load_escrow_contract(&env, contract_id, EscrowError::ContractNotFound);
         ttl::extend_contract_ttl(&env, contract_id);
 
         Self::require_not_finalized(&env, contract_id);
@@ -1594,11 +1570,7 @@ impl Escrow {
         comment: String,
     ) -> bool {
         Self::require_not_paused(&env);
-        let mut contract: Contract = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Contract(contract_id))
-            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
+        let mut contract = Self::load_escrow_contract(&env, contract_id, Error::ContractNotFound);
         ttl::extend_contract_ttl(&env, contract_id);
 
         if caller != contract.client {
@@ -1777,11 +1749,7 @@ impl Escrow {
         Self::require_not_paused(&env);
         caller.require_auth();
 
-        let contract: Contract = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Contract(contract_id))
-            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
+        let contract = Self::load_escrow_contract(&env, contract_id, EscrowError::ContractNotFound);
 
         ttl::extend_contract_ttl(&env, contract_id);
         Self::require_not_finalized(&env, contract_id);
@@ -1878,6 +1846,17 @@ impl Escrow {
     // -----------------------------------------------------------------------
     // Internal helpers
     // -----------------------------------------------------------------------
+
+    /// Loads a contract from storage, panicking with the provided error if not found.
+    fn load_escrow_contract<E>(env: &Env, contract_id: u32, error: E) -> Contract
+    where
+        E: Into<soroban_sdk::Error>,
+    {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Contract(contract_id))
+            .unwrap_or_else(|| env.panic_with_error(error))
+    }
 
     // ── Finalization ─────────────────────────────────────────────────────────
 
@@ -2102,11 +2081,7 @@ impl Escrow {
         Self::require_not_paused(&env);
         caller.require_auth();
 
-        let mut contract: Contract = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Contract(contract_id))
-            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
+        let mut contract = Self::load_escrow_contract(&env, contract_id, Error::ContractNotFound);
 
         ttl::extend_contract_ttl(&env, contract_id);
         Self::require_not_finalized(&env, contract_id);
@@ -2186,11 +2161,7 @@ impl Escrow {
         Self::require_not_paused(&env);
         arbiter.require_auth();
 
-        let mut contract: Contract = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Contract(contract_id))
-            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
+        let mut contract = Self::load_escrow_contract(&env, contract_id, Error::ContractNotFound);
 
         ttl::extend_contract_ttl(&env, contract_id);
         Self::require_not_finalized(&env, contract_id);
