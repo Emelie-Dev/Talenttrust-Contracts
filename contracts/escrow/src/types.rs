@@ -225,6 +225,20 @@ pub struct Contract {
     pub reputation_issued: bool,
 }
 
+/// Bounded snapshot of the escrow instance's settlement configuration.
+///
+/// All fields are read directly from persistent storage so indexers can inspect
+/// settlement readiness and accrued fees without reconstructing state from
+/// events or contract activity.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq, Default)]
+pub struct SettlementState {
+    /// The bound Stellar Asset Contract used for settlement, if configured.
+    pub token: Option<Address>,
+    /// Protocol fees accrued in the settlement asset, in stroops.
+    pub accumulated_protocol_fees: i128,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Milestone {

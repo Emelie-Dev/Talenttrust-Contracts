@@ -83,7 +83,7 @@ pub use types::{
     Contract, ContractBounds, ContractStatus, ContractSummary, DataKey, DepositMode,
     DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone, MilestoneApprovals,
     MilestoneSummary, PendingAdminProposal, ReadinessChecklist, ReleaseAuthorization, Reputation,
-    SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION,
+    SettlementState, SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION,
 };
 
 // Maximum bounds constants - re-export from amount_validation for API visibility
@@ -353,6 +353,22 @@ impl Escrow {
     /// * `false` if no settlement token has been bound yet
     pub fn is_settlement_token_bound(env: Env) -> bool {
         Self::read_settlement_token(&env).is_some()
+    }
+
+    /// Returns the current bounded settlement state.
+    ///
+    /// This auth-free reader uses stored values only and does not extend TTL or
+    /// mutate storage. Before settlement is configured it returns the default,
+    /// with no token and zero accrued fees.
+    pub fn get_settlement_state(env: Env) -> SettlementState {
+        SettlementState {
+            token: Self::read_settlement_token(&env),
+            accumulated_protocol_fees: env
+                .storage()
+                .persistent()
+                .get(&DataKey::AccumulatedProtocolFees)
+                .unwrap_or(0),
+        }
     }
 
     // ── Initialization ───────────────────────────────────────────────────────
