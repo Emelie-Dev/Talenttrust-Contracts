@@ -16,6 +16,7 @@
 use super::{create_contract, default_milestones, register_client, total_milestone_amount};
 use crate::{ttl, Error, Milestone};
 use soroban_sdk::testutils::{storage::Persistent, Ledger};
+use soroban_sdk::Vec;
 
 fn setup_long_ttl_env() -> soroban_sdk::Env {
     let env = soroban_sdk::Env::default();
