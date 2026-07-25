@@ -81,9 +81,9 @@ pub use ttl::{ADMIN_ROTATION_MIN_DELAY_LEDGERS, PENDING_MIGRATION_TTL_LEDGERS};
 // `DisputeResolution` and `DisputeSplit` are defined once in `types.rs` and
 // re-exported here; `dispute.rs` uses them via `crate::DisputeResolution`.
 pub use types::{
-    Contract, ContractBounds, ContractStatus, ContractSummary, DataKey, DepositMode,
-    DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone, MilestoneApprovals,
-    MilestoneEntry, MilestoneSummary, PendingAdminProposal, ReadinessChecklist,
+    ArbiterApprovalKey, Contract, ContractBounds, ContractStatus, ContractSummary, DataKey,
+    DepositMode, DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone,
+    MilestoneApprovals, MilestoneEntry, MilestoneSummary, PendingAdminProposal, ReadinessChecklist,
     ReleaseAuthorization, Reputation, SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION,
 };
 
@@ -1618,7 +1618,7 @@ impl Escrow {
         if milestone_index >= MAX_MILESTONES {
             env.panic_with_error(Error::IndexOutOfBounds);
         }
-        let approval_key = DataKey::MilestoneApprovals(contract_id, milestone_index);
+        let approval_key = approvals::arbiter_approval_storage_key(contract_id, milestone_index);
         let approvals = env.storage().temporary().get(&approval_key);
         if approvals.is_some() {
             env.storage().temporary().extend_ttl(
@@ -1639,7 +1639,7 @@ impl Escrow {
         if milestone_index >= MAX_MILESTONES {
             env.panic_with_error(Error::IndexOutOfBounds);
         }
-        let approval_key = DataKey::MilestoneApprovals(contract_id, milestone_index);
+        let approval_key = approvals::arbiter_approval_storage_key(contract_id, milestone_index);
         if !env.storage().temporary().has(&approval_key) {
             return None;
         }

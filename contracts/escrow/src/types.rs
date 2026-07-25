@@ -108,6 +108,31 @@ pub enum DataKey {
     MaxEscrowStroops,
 }
 
+/// Typed key for milestone approval entries that include arbiter approval state.
+///
+/// This intentionally maps to the existing `DataKey::MilestoneApprovals`
+/// variant so persisted storage layout and ABI remain unchanged.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ArbiterApprovalKey {
+    pub contract_id: u32,
+    pub milestone_index: u32,
+}
+
+impl ArbiterApprovalKey {
+    pub const fn new(contract_id: u32, milestone_index: u32) -> Self {
+        Self {
+            contract_id,
+            milestone_index,
+        }
+    }
+}
+
+impl From<ArbiterApprovalKey> for DataKey {
+    fn from(key: ArbiterApprovalKey) -> Self {
+        DataKey::MilestoneApprovals(key.contract_id, key.milestone_index)
+    }
+}
+
 /// Canonical contract error type for all entrypoint-facing errors.
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]

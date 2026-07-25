@@ -11,9 +11,14 @@
 
 use crate::ttl::{PENDING_APPROVAL_BUMP_THRESHOLD, PENDING_APPROVAL_TTL_LEDGERS};
 use crate::types::{
-    Contract, ContractStatus, DataKey, Error, Milestone, MilestoneApprovals, ReleaseAuthorization,
+    ArbiterApprovalKey, Contract, ContractStatus, DataKey, Error, Milestone, MilestoneApprovals,
+    ReleaseAuthorization,
 };
 use soroban_sdk::{Address, Env, Vec};
+
+pub(crate) fn arbiter_approval_storage_key(contract_id: u32, milestone_index: u32) -> DataKey {
+    ArbiterApprovalKey::new(contract_id, milestone_index).into()
+}
 
 /// Approves a milestone for release by the caller.
 ///
@@ -117,7 +122,7 @@ pub fn approve_milestone(
     }
 
     // Load or create approval record
-    let approval_key = DataKey::MilestoneApprovals(contract_id, milestone_index);
+    let approval_key = arbiter_approval_storage_key(contract_id, milestone_index);
     let mut approvals: MilestoneApprovals =
         env.storage()
             .temporary()
@@ -183,7 +188,7 @@ pub fn check_approvals(
     contract_id: u32,
     milestone_index: u32,
 ) -> Result<bool, Error> {
-    let approval_key = DataKey::MilestoneApprovals(contract_id, milestone_index);
+    let approval_key = arbiter_approval_storage_key(contract_id, milestone_index);
 
     // Try to load approvals from temporary storage
     // If TTL has expired, this will return None
@@ -220,7 +225,7 @@ pub fn check_approvals(
 /// * `contract_id` - The contract ID
 /// * `milestone_index` - The milestone index
 pub fn clear_approvals(env: &Env, contract_id: u32, milestone_index: u32) {
-    let approval_key = DataKey::MilestoneApprovals(contract_id, milestone_index);
+    let approval_key = arbiter_approval_storage_key(contract_id, milestone_index);
     env.storage().temporary().remove(&approval_key);
 }
 
@@ -229,6 +234,54 @@ mod tests {
     use super::*;
     use crate::Escrow;
     use soroban_sdk::{testutils::Address as _, Env, Symbol, Vec};
+
+    #[test]
+    fn arbiter_approval_key_preserves_existing_data_key_layout() {
+        let typed_key = ArbiterApprovalKey::new(7, 2);
+
+        assert_eq!(
+            DataKey::from(typed_key),
+            DataKey::MilestoneApprovals(7, 2)
+        );
+        assert_eq!(
+            arbiter_approval_storage_key(7, 2),
+            DataKey::MilestoneApprovals(7, 2)
+        );
+    }
+
+    #[test]
+    fn arbiter_approval_storage_absent_key_returns_none() {
+        let env = Env::default();
+        let escrow_id = env.register(Escrow, ());
+
+        env.as_contract(&escrow_id, || {
+            let key = arbiter_approval_storage_key(99, 1);
+            let approvals: Option<MilestoneApprovals> = env.storage().temporary().get(&key);
+
+            assert!(approvals.is_none());
+            assert!(!env.storage().temporary().has(&key));
+        });
+    }
+
+    #[test]
+    fn arbiter_approval_storage_round_trips() {
+        let env = Env::default();
+        let escrow_id = env.register(Escrow, ());
+
+        env.as_contract(&escrow_id, || {
+            let key = arbiter_approval_storage_key(3, 0);
+            let expected = MilestoneApprovals {
+                client_approved: false,
+                freelancer_approved: false,
+                arbiter_approved: true,
+            };
+
+            env.storage().temporary().set(&key, &expected);
+            let actual: MilestoneApprovals = env.storage().temporary().get(&key).unwrap();
+
+            assert_eq!(actual, expected);
+        });
+    }
 
     fn setup_contract_in_storage(
         env: &Env,
