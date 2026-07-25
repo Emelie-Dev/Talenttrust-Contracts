@@ -13,6 +13,7 @@ use crate::ttl::{PENDING_APPROVAL_BUMP_THRESHOLD, PENDING_APPROVAL_TTL_LEDGERS};
 use crate::types::{
     Contract, ContractStatus, DataKey, Error, Milestone, MilestoneApprovals, ReleaseAuthorization,
 };
+use crate::authorization;
 use soroban_sdk::{Address, Env, Vec};
 
 /// Approves a milestone for release by the caller.
@@ -82,39 +83,10 @@ pub fn approve_milestone(
         return Err(Error::MilestoneAlreadyReleased);
     }
 
-    // Determine caller role and check authorization
-    let is_client = caller == &contract.client;
-    let is_freelancer = caller == &contract.freelancer;
-    let is_arbiter = contract.arbiter.as_ref() == Some(caller);
-
-    // Verify caller is a valid participant
-    if !is_client && !is_freelancer && !is_arbiter {
-        return Err(Error::UnauthorizedRole);
-    }
-
-    // Check authorization based on release mode
-    match contract.release_authorization {
-        ReleaseAuthorization::ClientOnly => {
-            if !is_client {
-                return Err(Error::UnauthorizedRole);
-            }
-        }
-        ReleaseAuthorization::ArbiterOnly => {
-            if !is_arbiter {
-                return Err(Error::UnauthorizedRole);
-            }
-        }
-        ReleaseAuthorization::ClientAndArbiter => {
-            if !is_client && !is_arbiter {
-                return Err(Error::UnauthorizedRole);
-            }
-        }
-        ReleaseAuthorization::MultiSig => {
-            if !is_client && !is_freelancer {
-                return Err(Error::UnauthorizedRole);
-            }
-        }
-    }
+    // Check authorization: caller must be authorized for this release mode
+    // This validates both that caller is a participant and is authorized
+    // for the contract's release authorization mode
+    authorization::require_release_authorization(&env, caller, &contract);
 
     // Load or create approval record
     let approval_key = DataKey::MilestoneApprovals(contract_id, milestone_index);
@@ -127,6 +99,11 @@ pub fn approve_milestone(
                 freelancer_approved: false,
                 arbiter_approved: false,
             });
+
+    // Determine caller role for approval tracking
+    let is_client = caller == &contract.client;
+    let is_freelancer = caller == &contract.freelancer;
+    let is_arbiter = contract.arbiter.as_ref() == Some(caller);
 
     // Check for duplicate approval and update
     if is_client {

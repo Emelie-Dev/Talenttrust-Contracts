@@ -53,6 +53,7 @@
 
 mod amount_validation;
 mod approvals;
+mod authorization;
 mod deposit;
 mod finalize;
 mod migration;
@@ -715,32 +716,7 @@ impl Escrow {
         }
 
         // Check caller is authorized for this release authorization mode
-        let is_client = caller == contract.client;
-        let is_freelancer = caller == contract.freelancer;
-        let is_arbiter = contract.arbiter.as_ref() == Some(&caller);
-
-        match contract.release_authorization {
-            ReleaseAuthorization::ClientOnly => {
-                if !is_client {
-                    env.panic_with_error(EscrowError::UnauthorizedRole);
-                }
-            }
-            ReleaseAuthorization::ArbiterOnly => {
-                if !is_arbiter {
-                    env.panic_with_error(EscrowError::UnauthorizedRole);
-                }
-            }
-            ReleaseAuthorization::ClientAndArbiter => {
-                if !is_client && !is_arbiter {
-                    env.panic_with_error(EscrowError::UnauthorizedRole);
-                }
-            }
-            ReleaseAuthorization::MultiSig => {
-                if !is_client && !is_freelancer {
-                    env.panic_with_error(EscrowError::UnauthorizedRole);
-                }
-            }
-        }
+        authorization::require_release_authorization(&env, &caller, &contract);
 
         let mut milestones: Vec<Milestone> = ttl::load_milestones(&env, contract_id);
 
