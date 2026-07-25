@@ -1,12 +1,14 @@
-use soroban_sdk::testutils::Ledger as _;
 use super::{complete_contract, create_contract, default_milestones, register_client, total_milestone_amount};
 use crate::{EscrowError, ReleaseAuthorization, types::DataKey};
-use soroban_sdk::{symbol_short, testutils::Address as _, Address, Env};
+use soroban_sdk::{
+    symbol_short,
+    testutils::{Address as _, Events as _},
+    Address, Env, Symbol, TryFromVal,
+};
 
 #[test]
 fn multiple_contracts_for_same_freelancer() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -37,7 +39,6 @@ fn multiple_contracts_for_same_freelancer() {
 #[test]
 fn scenario_reputation_invalid_rating_zero_fails() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -50,7 +51,6 @@ fn scenario_reputation_invalid_rating_zero_fails() {
 #[test]
 fn scenario_reputation_invalid_rating_six_fails() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -63,7 +63,6 @@ fn scenario_reputation_invalid_rating_six_fails() {
 #[test]
 fn deposit_funds_emits_structured_deposit_event() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (client_addr, _, contract_id) = create_contract(&env, &client);
@@ -71,13 +70,18 @@ fn deposit_funds_emits_structured_deposit_event() {
     assert!(client.deposit_funds(&contract_id, &client_addr, &total_milestone_amount()));
 
     let events = env.events().all();
-    assert!(events.iter().any(|event| event.0 == symbol_short!("deposit")));
+    assert!(events.iter().any(|event| {
+        event.1.len() == 2
+            && Symbol::try_from_val(&env, &event.1.get(0).unwrap())
+                .ok()
+                .as_ref()
+                == Some(&symbol_short!("deposit"))
+    }));
 }
 
 #[test]
 fn release_milestone_emits_protocol_fee_event_when_fees_active() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (client_addr, _, contract_id) = create_contract(&env, &client);
