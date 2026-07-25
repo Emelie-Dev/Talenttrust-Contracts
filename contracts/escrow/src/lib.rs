@@ -73,6 +73,7 @@ pub use amount_validation::safe_subtract_amounts;
 pub use amount_validation::validate_deposit_amount;
 pub use amount_validation::validate_milestone_amounts;
 pub use amount_validation::validate_single_amount;
+pub use amount_validation::MAX_SINGLE_AMOUNT_STROOPS;
 pub use dispute::final_status_after_resolution;
 pub use dispute::resolution_payouts;
 pub use migration::PendingClientMigration;
@@ -82,7 +83,7 @@ pub use ttl::{ADMIN_ROTATION_MIN_DELAY_LEDGERS, PENDING_MIGRATION_TTL_LEDGERS};
 // re-exported here; `dispute.rs` uses them via `crate::DisputeResolution`.
 pub use types::{
     Contract, ContractBounds, ContractStatus, ContractSummary, DataKey, DepositMode,
-    DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone, MilestoneApprovals,
+    DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone,
     MilestoneEntry, MilestoneSummary, PendingAdminProposal, ReadinessChecklist,
     ReleaseAuthorization, Reputation, SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION,
 };
@@ -104,6 +105,9 @@ pub const MIN_MAX_MILESTONES: u32 = 1;
 
 /// Absolute maximum for the max milestones setting.
 pub const MAX_MAX_MILESTONES: u32 = 100;
+
+/// Maximum entries per page returned by paginated views.
+pub const PAGE_CEILING: u32 = 100;
 
 /// Absolute minimum for the max escrow stroops setting (0.01 XLM).
 pub const MIN_MAX_ESCROW_STROOPS: i128 = 1_000_000;
@@ -244,6 +248,8 @@ pub enum EscrowError {
     EmptyComment = 42,
     /// Reputation feedback comment exceeded the 200-character maximum.
     CommentTooLong = 43,
+    /// Configured limit is out of allowed range.
+    LimitOutOfRange = 44,
 }
 
 impl Escrow {
@@ -546,6 +552,37 @@ impl Escrow {
     /// * `InvalidParticipants` - If client and freelancer are the same address
     /// * `EmptyMilestones` - If no milestones are provided
     /// * `InvalidMilestoneAmount` - If any milestone amount is <= 0
+    pub fn validate_contract_id_bounds(env: &Env, contract_id: u32) {
+        if contract_id == 0 {
+            env.panic_with_error(EscrowError::ContractNotFound);
+        }
+        let next_id: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::NextContractId)
+            .unwrap_or(1);
+        if contract_id >= next_id {
+            env.panic_with_error(EscrowError::ContractNotFound);
+        }
+    }
+
+    pub fn create_contract(
+        env: Env,
+        client: Address,
+        freelancer: Address,
+        arbiter: Option<Address>,
+        milestones: Vec<i128>,
+        release_authorization: ReleaseAuthorization,
+    ) -> u32 {
+        create_contract::execute_create_contract(
+            env,
+            client,
+            freelancer,
+            arbiter,
+            milestones,
+            release_authorization,
+        )
+    }
     /// Pull the settlement-token deposit from the client into the escrow contract address.
     ///
     /// Executes `SAC::transfer(from: client, to: escrow_address, amount)` and advances
@@ -1009,6 +1046,18 @@ impl Escrow {
                 env.ledger().timestamp(),
             ),
         );
+
+        if protocol_fee > 0 {
+            env.events().publish(
+                (symbol_short!("proto_fee"), contract_id),
+                (
+                    milestone_index,
+                    protocol_fee,
+                    new_accumulated_fees,
+                    env.ledger().timestamp(),
+                ),
+            );
+        }
 
         // `ctrct_cmp` — fired only when this release completes the contract.
         //
@@ -1803,18 +1852,120 @@ impl Escrow {
             .unwrap_or(false)
     }
 
+    pub fn set_protocol_fee_bps(env: Env, new_bps: u32) -> bool {
+        Self::set_protocol_fee_bps_impl(env, new_bps)
+    }
+
+    pub fn get_governance_admin(env: Env) -> Option<Address> {
+        Self::get_governance_admin_impl(env)
+    }
+
+    pub fn get_protocol_fee_bps(env: Env) -> u32 {
+        Self::get_protocol_fee_bps_impl(env)
+    }
+
+    pub fn propose_governance_admin(env: Env, proposed: Address) -> bool {
+        Self::propose_governance_admin_impl(&env, proposed)
+    }
+
+    pub fn accept_governance_admin(env: Env) -> bool {
+        Self::accept_governance_admin_impl(&env)
+    }
+
+    pub fn set_governed_params(
+        env: Env,
+        admin: Address,
+        protocol_fee_bps: u32,
+        max_escrow_total_stroops: i128,
+    ) -> bool {
+        Self::set_governed_params_impl(
+            env,
+            admin,
+            protocol_fee_bps,
+            max_escrow_total_stroops,
+        )
+    }
+
+    pub fn get_governed_parameters(env: Env) -> Option<GovernedParameters> {
+        Self::get_governed_parameters_impl(env)
+    }
+
     // ── Cancel contract ──────────────────────────────────────────────────────
 
-    pub fn get_mainnet_readiness_info(env: Env) -> MainnetReadinessInfo {
-        let checklist = Self::load_checklist(&env);
-        MainnetReadinessInfo {
-            initialized: checklist.initialized,
-            governed_params_set: checklist.governed_params_set,
-            emergency_controls_enabled: checklist.emergency_controls_enabled,
-            caps_set: MAINNET_MAX_TOTAL_ESCROW_PER_CONTRACT_STROOPS > 0,
-            protocol_version: MAINNET_PROTOCOL_VERSION,
-            max_escrow_total_stroops: MAINNET_MAX_TOTAL_ESCROW_PER_CONTRACT_STROOPS,
+    pub fn cancel_contract(env: Env, contract_id: u32, caller: Address) -> bool {
+        Self::require_not_paused(&env);
+        let mut contract: Contract = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Contract(contract_id))
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
+        ttl::extend_contract_ttl(&env, contract_id);
+
+        Self::require_not_finalized(&env, contract_id);
+
+        if caller != contract.client {
+            env.panic_with_error(EscrowError::UnauthorizedRole);
         }
+
+        if contract.status == ContractStatus::Cancelled {
+            env.panic_with_error(Error::AlreadyCancelled);
+        }
+
+        if contract.status != ContractStatus::Created && contract.status != ContractStatus::Funded {
+            env.panic_with_error(EscrowError::InvalidStatusTransition);
+        }
+
+        if contract.released_amount != 0 {
+            env.panic_with_error(EscrowError::InvalidStatusTransition);
+        }
+
+        caller.require_auth();
+
+        let refund_amount = crate::checked_available_balance(
+            contract.funded_amount,
+            contract.released_amount,
+            contract.refunded_amount,
+        )
+        .unwrap_or_else(|e| env.panic_with_error(e));
+
+        if refund_amount > 0 {
+            let token = Self::read_settlement_token(&env)
+                .unwrap_or_else(|| env.panic_with_error(EscrowError::NotInitialized));
+            token::Client::new(&env, &token).transfer(
+                &env.current_contract_address(),
+                &caller,
+                &refund_amount,
+            );
+        }
+
+        let old_status = contract.status;
+        contract.status = ContractStatus::Cancelled;
+        contract.refunded_amount = safe_add_amounts(contract.refunded_amount, refund_amount)
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Contract(contract_id), &contract);
+        ttl::extend_contract_ttl(&env, contract_id);
+
+        env.events().publish(
+            (symbol_short!("cancelled"), contract_id),
+            (caller, refund_amount, env.ledger().timestamp()),
+        );
+
+        env.events().publish(
+            (symbol_short!("ctrct_st"), contract_id),
+            (
+                old_status as u32,
+                ContractStatus::Cancelled as u32,
+                contract.funded_amount,
+                contract.released_amount,
+                contract.refunded_amount,
+                env.ledger().timestamp(),
+            ),
+        );
+
+        true
     }
 
     fn load_checklist(env: &Env) -> ReadinessChecklist {
@@ -1906,95 +2057,7 @@ impl Escrow {
 
     // ─── Contract lifecycle ───────────────────────────────────────────────────
 
-    /// Create a new escrow contract. Blocked when paused.
-    pub fn create_contract(
-        env: Env,
-        client: Address,
-        freelancer: Address,
-        milestone_amounts: Vec<i128>,
-    ) -> u32 {
-        Self::require_not_paused(&env);
-        let mut contract: Contract = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Contract(contract_id))
-            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
-        ttl::extend_contract_ttl(&env, contract_id);
 
-        Self::require_not_finalized(&env, contract_id);
-
-        if client != contract.client {
-            env.panic_with_error(EscrowError::UnauthorizedRole);
-        }
-
-        if contract.status == ContractStatus::Cancelled {
-            env.panic_with_error(Error::AlreadyCancelled);
-        }
-
-        if contract.status != ContractStatus::Created && contract.status != ContractStatus::Funded {
-            env.panic_with_error(EscrowError::InvalidStatusTransition);
-        }
-
-        if contract.released_amount != 0 {
-            env.panic_with_error(EscrowError::InvalidStatusTransition);
-        }
-
-        client.require_auth();
-
-        let refund_amount = crate::checked_available_balance(
-            contract.funded_amount,
-            contract.released_amount,
-            contract.refunded_amount,
-        )
-        .unwrap_or_else(|e| env.panic_with_error(e));
-        if refund_amount > 0 {
-            let token = Self::read_settlement_token(&env)
-                .unwrap_or_else(|| env.panic_with_error(EscrowError::NotInitialized));
-            token::Client::new(&env, &token).transfer(
-                &env.current_contract_address(),
-                &client,
-                &refund_amount,
-            );
-        }
-
-        let mut total: i128 = 0;
-        for i in 0..milestone_amounts.len() {
-            let amt = milestone_amounts.get(i).unwrap();
-            if amt <= 0 {
-                env.panic_with_error(EscrowError::InvalidMilestoneAmount);
-            }
-            total = safe_add_amounts(total, amt)
-                .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
-        }
-        let max_escrow = Self::effective_max_escrow_stroops(&env);
-        if total > max_escrow {
-            env.panic_with_error(EscrowError::InvalidMilestoneAmount);
-        }
-
-        env.storage()
-            .persistent()
-            .set(&DataKey::Contract(contract_id), &contract);
-        ttl::extend_contract_ttl(&env, contract_id);
-
-        env.events().publish(
-            (symbol_short!("cancelled"), contract_id),
-            (client, refund_amount, env.ledger().timestamp()),
-        );
-
-        env.events().publish(
-            (symbol_short!("ctrct_st"), contract_id),
-            (
-                old_status as u32,
-                ContractStatus::Cancelled as u32,
-                contract.funded_amount,
-                contract.released_amount,
-                contract.refunded_amount,
-                env.ledger().timestamp(),
-            ),
-        );
-
-        true
-    }
 
     // ── Dispute management ────────────────────────────────────────────────────
 

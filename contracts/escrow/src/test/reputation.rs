@@ -339,7 +339,7 @@ fn issue_reputation_rejects_invalid_contract_id_zero() {
     let freelancer_addr = Address::generate(&env);
 
     let result = client.try_issue_reputation(&0, &client_addr, &5, &valid_comment(&env));
-    super::assert_contract_error(result, EscrowError::InvalidContractId);
+    super::assert_contract_error(result, EscrowError::ContractNotFound);
 }
 
 #[test]
@@ -361,11 +361,11 @@ fn issue_reputation_rejects_invalid_contract_id_out_of_bounds() {
 
     // Try to use contract_id = 2 (which is next_contract_id)
     let result = client.try_issue_reputation(&2, &client_addr, &5, &valid_comment(&env));
-    super::assert_contract_error(result, EscrowError::InvalidContractId);
+    super::assert_contract_error(result, EscrowError::ContractNotFound);
 
     // Try to use contract_id = 100 (way out of bounds)
     let result = client.try_issue_reputation(&100, &client_addr, &5, &valid_comment(&env));
-    super::assert_contract_error(result, EscrowError::InvalidContractId);
+    super::assert_contract_error(result, EscrowError::ContractNotFound);
 }
 
 #[test]
@@ -375,7 +375,7 @@ fn get_reputation_comment_rejects_invalid_contract_id_zero() {
     let client = register_client(&env);
 
     let result = client.try_get_reputation_comment(&0);
-    super::assert_contract_error(result, EscrowError::InvalidContractId);
+    super::assert_contract_error(result, EscrowError::ContractNotFound);
 }
 
 #[test]
@@ -397,5 +397,5 @@ fn get_reputation_comment_rejects_invalid_contract_id_out_of_bounds() {
 
     // Try to use contract_id = 2 (which is next_contract_id)
     let result = client.try_get_reputation_comment(&2);
-    super::assert_contract_error(result, EscrowError::InvalidContractId);
+    super::assert_contract_error(result, EscrowError::ContractNotFound);
 }

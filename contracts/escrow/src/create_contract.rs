@@ -1,55 +1,22 @@
+pub use crate::Escrow;
 use crate::{
     amount_validation, ttl, Contract, ContractStatus, DataKey, EscrowError, GovernedParameters,
-    Milestone, ReleaseAuthorization, Error, MAX_MILESTONES, status_index,
+    Milestone, ReleaseAuthorization, Error, MAX_MILESTONES,
 };
 use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
 
-#[contractimpl]
-impl Escrow {
-    /// Creates a new escrow contract with the specified client, freelancer, and milestone amounts.
-    ///
-    /// This is the single canonical creation path. It enforces:
-    /// - Distinct client and freelancer addresses
-    /// - Arbiter presence when required by the release authorization mode
-    /// - Arbiter distinctness from client and freelancer
-    /// - At least one milestone with all amounts strictly positive
-    /// - The `MAX_MILESTONES` cap
-    /// - The governed total-escrow cap (falls back to `i128::MAX` when unset)
-    /// - No contract-id collision or overflow
-    ///
-    /// # Arguments
-    /// * `env` - The contract environment
-    /// * `client` - The address of the client funding the contract
-    /// * `freelancer` - The address of the freelancer performing the work
-    /// * `arbiter` - Optional arbiter address for dispute resolution
-    /// * `milestones` - Vector of milestone amounts (in stroops)
-    /// * `release_authorization` - Authorization mode for milestone releases
-    ///
-    /// # Returns
-    /// The unique contract ID assigned to the new escrow.
-    ///
-    /// # Errors
-    /// * `InvalidParticipant`   - If client and freelancer are the same address
-    /// * `EmptyMilestones`      - If no milestones are provided
-    /// * `InvalidMilestoneAmount` - If any milestone amount is <= 0
-    /// * `MissingArbiter`       - If arbiter is required but not provided
-    /// * `InvalidArbiter`       - If arbiter is same as client or freelancer
-    /// * `TooManyMilestones`    - If the number of milestones exceeds `MAX_MILESTONES`
-    /// * `TotalCapExceeded`     - If the sum of milestone amounts exceeds the governed cap
-    /// * `ContractIdOverflow`   - If the next id would exceed `u32::MAX`
-    /// * `ContractIdCollision`  - If the allocated id slot is already occupied
-    pub fn create_contract(
-        env: Env,
-        client: Address,
-        freelancer: Address,
-        arbiter: Option<Address>,
-        milestones: Vec<i128>,
-        release_authorization: ReleaseAuthorization,
-    ) -> u32 {
+pub fn execute_create_contract(
+    env: Env,
+    client: Address,
+    freelancer: Address,
+    arbiter: Option<Address>,
+    milestones: Vec<i128>,
+    release_authorization: ReleaseAuthorization,
+) -> u32 {
         // Reject state-changing calls while paused or in emergency mode so every
         // mutating entrypoint halts uniformly. Runs before auth. See
         // finalize.rs::require_not_paused.
-        Self::require_not_paused(&env);
+        crate::Escrow::require_not_paused(&env);
 
         client.require_auth();
 
@@ -136,23 +103,6 @@ impl Escrow {
         .persistent()
         .set(&DataKey::Contract(id), &contract);
 
-    let mut milestone_vec: Vec<Milestone> = Vec::new(&env);
-    for (i, amount) in milestones.iter().enumerate() {
-        let deadline = deadlines.as_ref().and_then(|d| d.get(i as u32));
-        milestone_vec.push_back(Milestone {
-            amount,
-            funded_amount: 0,
-            released: false,
-            refunded: false,
-            work_evidence: None,
-            refunded_amount: 0,
-            release_authorization,
-            reputation_issued: false,
-        };
-        env.storage()
-            .persistent()
-            .set(&DataKey::Contract(id), &contract);
-
         // Build and persist the milestone vector.
         let mut milestone_vec: Vec<Milestone> = Vec::new(&env);
         for amount in milestones.iter() {
@@ -185,11 +135,6 @@ impl Escrow {
         (symbol_short!("created"), id),
         (client, freelancer_addr, env.ledger().timestamp()),
     );
-
-    // Maintain participant and status indexes for paginated readers.
-    status_index::index_new_contract(&env, id, &ContractStatus::Created);
-    status_index::index_participant(&env, id, &contract.client, 0);
-    status_index::index_participant(&env, id, &contract.freelancer, 1);
 
     id
 }

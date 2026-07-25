@@ -84,5 +84,5 @@ fn release_milestone_emits_protocol_fee_event_when_fees_active() {
     assert!(client.release_milestone(&contract_id, &client_addr, &0));
 
     let events = env.events().all();
-    assert!(events.iter().any(|event| event.0 == symbol_short!("protocol_fee")));
+    assert!(events.iter().any(|event| event.0 == symbol_short!("proto_fee")));
 }
