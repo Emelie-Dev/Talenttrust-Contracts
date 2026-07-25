@@ -71,7 +71,7 @@ fn set_governed_params_sets_governed_params() {
         "governed_params_set must be true after set_governed_params()"
     );
 
-    let params = client.get_governed_parameters().unwrap();
+    let params = client.get_governed_parameters();
     assert_eq!(params.protocol_fee_bps, 1000);
     assert_eq!(params.max_escrow_total_stroops, 500_000_000_000_i128);
 }
@@ -255,6 +255,81 @@ fn finalized_record_carries_current_schema_version() {
         record.summary.schema_version, CONTRACT_SUMMARY_SCHEMA_VERSION,
         "finalized record must carry the current schema version"
     );
+}
+
+// ── 4.14 ────────────────────────────────────────────────────────────────────
+// Before set_governed_params, get_governed_parameters returns defaults.
+#[test]
+fn get_governed_parameters_returns_defaults_when_unset() {
+    let (env, contract_id) = setup();
+    let client = EscrowClient::new(&env, &contract_id);
+
+    // Without any initialization, get_governed_parameters must return
+    // concrete defaults instead of None.
+    let params = client.get_governed_parameters();
+    assert_eq!(
+        params.protocol_fee_bps, 0,
+        "default protocol_fee_bps should be 0"
+    );
+    assert_eq!(
+        params.max_escrow_total_stroops,
+        i128::MAX,
+        "default max_escrow_total_stroops should be i128::MAX"
+    );
+
+    // The companion flag must report that params have NOT been explicitly set.
+    assert!(
+        !client.is_governed_params_set(),
+        "is_governed_params_set should be false before set_governed_params"
+    );
+}
+
+// ── 4.15 ────────────────────────────────────────────────────────────────────
+// After set_governed_params, get_governed_parameters returns stored values
+// and is_governed_params_set flips to true, even when values match defaults.
+#[test]
+fn set_governed_params_updates_parameters_and_flag() {
+    let (env, contract_id) = setup();
+    let client = EscrowClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+
+    client.initialize(&admin);
+
+    // Before setting: defaults active, flag is false.
+    let before = client.get_governed_parameters();
+    assert_eq!(before.protocol_fee_bps, 0);
+    assert_eq!(before.max_escrow_total_stroops, i128::MAX);
+    assert!(!client.is_governed_params_set());
+
+    // Set governed params to match defaults explicitly.
+    assert!(client.set_governed_params(&admin, &0_u32, &i128::MAX));
+
+    // After setting: values unchanged, but flag is now true.
+    let after = client.get_governed_parameters();
+    assert_eq!(after.protocol_fee_bps, 0);
+    assert_eq!(after.max_escrow_total_stroops, i128::MAX);
+    assert!(
+        client.is_governed_params_set(),
+        "is_governed_params_set should be true after set_governed_params"
+    );
+}
+
+// ── 4.16 ────────────────────────────────────────────────────────────────────
+// Setting governed params to non-default values works correctly.
+#[test]
+fn set_governed_params_to_custom_values() {
+    let (env, contract_id) = setup();
+    let client = EscrowClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+
+    client.initialize(&admin);
+
+    assert!(client.set_governed_params(&admin, &250_u32, &1_000_000_000_000_i128));
+
+    let params = client.get_governed_parameters();
+    assert_eq!(params.protocol_fee_bps, 250);
+    assert_eq!(params.max_escrow_total_stroops, 1_000_000_000_000_i128);
+    assert!(client.is_governed_params_set());
 }
 
 /// Confirms that a fresh contract (no successful initialize) still reports

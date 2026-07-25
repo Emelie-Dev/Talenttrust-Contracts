@@ -1,6 +1,6 @@
 use crate::{
     amount_validation, ttl, Contract, ContractStatus, DataKey, Error, Escrow, EscrowArgs,
-    EscrowClient, EscrowError, GovernedParameters, Milestone, ReleaseAuthorization, MAX_MILESTONES,
+    EscrowClient, EscrowError, Milestone, ReleaseAuthorization, MAX_MILESTONES,
 };
 use soroban_sdk::{contractimpl, symbol_short, Address, Env, Symbol, Vec};
 
@@ -85,13 +85,9 @@ impl Escrow {
             env.panic_with_error(EscrowError::TooManyMilestones);
         }
 
-        // Retrieve governed parameters for total escrow cap; allow any total if unset.
-        let max_total = env
-            .storage()
-            .persistent()
-            .get::<_, GovernedParameters>(&DataKey::GovernedParameters)
-            .map(|params| params.max_escrow_total_stroops)
-            .unwrap_or(i128::MAX);
+        // Retrieve governed parameters for total escrow cap; returns defaults
+        // (i128::MAX) when `set_governed_params` has never been called.
+        let max_total = Self::get_governed_parameters(env.clone()).max_escrow_total_stroops;
 
         // Validate milestone amounts and enforce the total cap via the canonical helper.
         let mut native_milestones = [0_i128; MAX_MILESTONES as usize];
