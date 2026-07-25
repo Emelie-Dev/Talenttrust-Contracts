@@ -64,6 +64,7 @@ pub enum DataKey {
     Admin,
     Paused,
     Emergency,
+    StorageVersion,
     // Contract storage
     Contract(u32),
     NextContractId,
