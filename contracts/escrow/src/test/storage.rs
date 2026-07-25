@@ -1,10 +1,55 @@
 use super::{
     assert_contract_error, complete_contract, create_contract, default_milestones,
-    generated_participants, register_client, total_milestone_amount, MILESTONE_ONE, MILESTONE_THREE,
-    MILESTONE_TWO,
+    generated_participants, register_client, total_milestone_amount, MILESTONE_ONE,
+    MILESTONE_THREE, MILESTONE_TWO,
 };
-use crate::{ContractStatus, DataKey, EscrowError, ReadinessChecklist, ReleaseAuthorization};
+use crate::{
+    ContractStatus, DataKey, Error, Escrow, EscrowClient, EscrowError, ReadinessChecklist,
+    ReleaseAuthorization,
+};
 use soroban_sdk::{testutils::Address as _, Address, Env};
+
+fn setup_initialized_client(env: &Env, admin: &Address) -> EscrowClient<'_> {
+    env.mock_all_auths();
+    let id = env.register(Escrow, ());
+    let client = EscrowClient::new(env, &id);
+    assert!(client.initialize(admin));
+    client
+}
+
+fn assert_admin_allows_and_party_stranger_denied<
+    T: core::fmt::Debug,
+    InnerError: core::fmt::Debug,
+    ExpectedError: Into<soroban_sdk::Error> + core::fmt::Debug,
+>(
+    admin_client: &EscrowClient<'_>,
+    party_client: &EscrowClient<'_>,
+    stranger_client: &EscrowClient<'_>,
+    expected_error: ExpectedError,
+    admin_action: impl FnOnce(
+        &EscrowClient<'_>,
+    ) -> Result<
+        Result<T, InnerError>,
+        Result<soroban_sdk::Error, soroban_sdk::InvokeError>,
+    >,
+    party_action: impl FnOnce(
+        &EscrowClient<'_>,
+    ) -> Result<
+        Result<T, InnerError>,
+        Result<soroban_sdk::Error, soroban_sdk::InvokeError>,
+    >,
+    stranger_action: impl FnOnce(
+        &EscrowClient<'_>,
+    ) -> Result<
+        Result<T, InnerError>,
+        Result<soroban_sdk::Error, soroban_sdk::InvokeError>,
+    >,
+) {
+    let admin_result = admin_action(admin_client);
+    assert!(matches!(admin_result, Ok(Ok(_))), "admin should be allowed");
+    assert_contract_error(party_action(party_client), expected_error);
+    assert_contract_error(stranger_action(stranger_client), expected_error);
+}
 
 // ─── Initialized / Admin ──────────────────────────────────────────────────────
 
@@ -85,6 +130,99 @@ fn paused_written_by_pause_and_cleared_by_unpause() {
             .unwrap_or(false);
         assert!(!v);
     });
+}
+
+#[test]
+fn storage_auth_matrix_allows_admin_and_rejects_non_admin_roles() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let party = Address::generate(&env);
+    let stranger = Address::generate(&env);
+
+    let admin_client = setup_initialized_client(&env, &admin);
+    let party_client = setup_initialized_client(&env, &admin);
+    let stranger_client = setup_initialized_client(&env, &admin);
+
+    assert_admin_allows_and_party_stranger_denied(
+        &admin_client,
+        &party_client,
+        &stranger_client,
+        EscrowError::UnauthorizedRole,
+        |client| client.try_pause(),
+        |client| client.try_pause(),
+        |client| client.try_pause(),
+    );
+
+    let admin_client = setup_initialized_client(&env, &admin);
+    let party_client = setup_initialized_client(&env, &admin);
+    let stranger_client = setup_initialized_client(&env, &admin);
+
+    assert_admin_allows_and_party_stranger_denied(
+        &admin_client,
+        &party_client,
+        &stranger_client,
+        EscrowError::UnauthorizedRole,
+        |client| client.try_unpause(),
+        |client| client.try_unpause(),
+        |client| client.try_unpause(),
+    );
+
+    let admin_client = setup_initialized_client(&env, &admin);
+    let party_client = setup_initialized_client(&env, &admin);
+    let stranger_client = setup_initialized_client(&env, &admin);
+
+    assert_admin_allows_and_party_stranger_denied(
+        &admin_client,
+        &party_client,
+        &stranger_client,
+        EscrowError::UnauthorizedRole,
+        |client| client.try_activate_emergency_pause(),
+        |client| client.try_activate_emergency_pause(),
+        |client| client.try_activate_emergency_pause(),
+    );
+
+    let admin_client = setup_initialized_client(&env, &admin);
+    let party_client = setup_initialized_client(&env, &admin);
+    let stranger_client = setup_initialized_client(&env, &admin);
+
+    assert!(admin_client.activate_emergency_pause());
+    assert_contract_error(
+        party_client.try_resolve_emergency(),
+        EscrowError::UnauthorizedRole,
+    );
+    assert_contract_error(
+        stranger_client.try_resolve_emergency(),
+        EscrowError::UnauthorizedRole,
+    );
+
+    let admin_client = setup_initialized_client(&env, &admin);
+    let party_client = setup_initialized_client(&env, &admin);
+    let stranger_client = setup_initialized_client(&env, &admin);
+
+    let token = env.register_stellar_asset_contract(admin.clone());
+    assert!(admin_client.bind_settlement_token(&admin, &token));
+    assert_contract_error(
+        party_client.try_bind_settlement_token(&party, &token),
+        EscrowError::UnauthorizedRole,
+    );
+    assert_contract_error(
+        stranger_client.try_bind_settlement_token(&stranger, &token),
+        EscrowError::UnauthorizedRole,
+    );
+
+    let admin_client = setup_initialized_client(&env, &admin);
+    let party_client = setup_initialized_client(&env, &admin);
+    let stranger_client = setup_initialized_client(&env, &admin);
+
+    assert!(admin_client.set_governed_params(&admin, &0_u32, &1_000_000_i128));
+    assert_contract_error(
+        party_client.try_set_governed_params(&party, &0_u32, &1_000_000_i128),
+        Error::UnauthorizedRole,
+    );
+    assert_contract_error(
+        stranger_client.try_set_governed_params(&stranger, &0_u32, &1_000_000_i128),
+        Error::UnauthorizedRole,
+    );
 }
 
 #[test]
@@ -283,9 +421,18 @@ fn milestone_released_flag_set_in_vector_on_release() {
     client.release_milestone(&id, &client_addr, &0);
 
     let milestones = client.get_milestones(&id);
-    assert!(milestones.get(0).unwrap().released, "index 0 must be released");
-    assert!(!milestones.get(1).unwrap().released, "index 1 must not be released");
-    assert!(!milestones.get(2).unwrap().released, "index 2 must not be released");
+    assert!(
+        milestones.get(0).unwrap().released,
+        "index 0 must be released"
+    );
+    assert!(
+        !milestones.get(1).unwrap().released,
+        "index 1 must not be released"
+    );
+    assert!(
+        !milestones.get(2).unwrap().released,
+        "index 2 must not be released"
+    );
 }
 
 #[test]
