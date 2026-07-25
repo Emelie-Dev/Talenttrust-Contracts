@@ -45,21 +45,25 @@ fn total() -> i128 {
     800_i128
 }
 
-/// Register a fresh escrow contract and return an initialized client.
+/// Register a fresh escrow contract and return an initialized client with bound settlement token.
 fn new_client(env: &Env) -> EscrowClient<'_> {
     let id = env.register(Escrow, ());
     let client = EscrowClient::new(env, &id);
     let admin = Address::generate(env);
     client.initialize(&admin);
+    let token = env.register_stellar_asset_contract(admin.clone());
+    client.bind_settlement_token(&admin, &token);
     client
 }
 
-/// Register a fresh escrow contract and return both the client and admin address.
+/// Register a fresh escrow contract and return both the client and admin address with bound settlement token.
 fn new_client_with_admin(env: &Env) -> (EscrowClient<'_>, Address) {
     let id = env.register(Escrow, ());
     let client = EscrowClient::new(env, &id);
     let admin = Address::generate(env);
     client.initialize(&admin);
+    let token = env.register_stellar_asset_contract(admin.clone());
+    client.bind_settlement_token(&admin, &token);
     (client, admin)
 }
 
@@ -90,20 +94,7 @@ fn create(
     )
 }
 
-/// Inject `Funded` status and `funded_amount` directly into persistent storage
-/// so approval and release checks can run without a bound SAC token.
-fn inject_funded(env: &Env, escrow_addr: &Address, contract_id: u32) {
-    env.as_contract(escrow_addr, || {
-        let key = DataKey::Contract(contract_id);
-        let mut c: crate::Contract = env.storage().persistent().get(&key).unwrap();
-        c.status = ContractStatus::Funded;
-        c.funded_amount = total();
-        env.storage().persistent().set(&key, &c);
-    });
-}
-
-/// Create a contract and immediately inject `Funded` status via storage.
-/// No SAC token is required.
+/// Create a contract, mint settlement tokens to client, and deposit funds to mark it Funded.
 fn create_funded(
     env: &Env,
     client: &EscrowClient<'_>,
@@ -113,7 +104,10 @@ fn create_funded(
     auth: &ReleaseAuthorization,
 ) -> u32 {
     let id = create(env, client, client_addr, freelancer_addr, arbiter, auth);
-    inject_funded(env, &client.address, id);
+    let token = client.get_settlement_token().unwrap();
+    let sac = soroban_sdk::token::StellarAssetClient::new(env, &token);
+    sac.mint(client_addr, &total());
+    client.deposit_funds(&id, client_addr, &total());
     id
 }
 
@@ -139,7 +133,7 @@ fn inject_status(env: &Env, escrow_addr: &Address, contract_id: u32, status: Con
 #[test]
 fn approve_at_index_zero_accepted() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, _) = participants(&env);
 
@@ -159,7 +153,7 @@ fn approve_at_index_zero_accepted() {
 #[test]
 fn approve_at_last_valid_index_accepted() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, _) = participants(&env);
 
@@ -180,7 +174,7 @@ fn approve_at_last_valid_index_accepted() {
 #[test]
 fn approve_at_out_of_bounds_index_rejected() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, _) = participants(&env);
 
@@ -204,7 +198,7 @@ fn approve_at_out_of_bounds_index_rejected() {
 #[test]
 fn release_at_out_of_bounds_index_rejected() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, _) = participants(&env);
 
@@ -239,7 +233,7 @@ fn release_at_out_of_bounds_index_rejected() {
 #[test]
 fn client_only_zero_approvals_insufficient() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, _) = participants(&env);
 
@@ -260,7 +254,7 @@ fn client_only_zero_approvals_insufficient() {
 #[test]
 fn client_only_exactly_required_approval_accepted() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, _) = participants(&env);
 
@@ -284,7 +278,7 @@ fn client_only_exactly_required_approval_accepted() {
 #[test]
 fn arbiter_only_zero_approvals_insufficient() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, arbiter_addr) = participants(&env);
 
@@ -305,7 +299,7 @@ fn arbiter_only_zero_approvals_insufficient() {
 #[test]
 fn arbiter_only_exactly_required_approval_accepted() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, arbiter_addr) = participants(&env);
 
@@ -328,7 +322,7 @@ fn arbiter_only_exactly_required_approval_accepted() {
 #[test]
 fn client_and_arbiter_zero_approvals_insufficient() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, arbiter_addr) = participants(&env);
 
@@ -349,7 +343,7 @@ fn client_and_arbiter_zero_approvals_insufficient() {
 #[test]
 fn client_and_arbiter_client_alone_is_sufficient() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, arbiter_addr) = participants(&env);
 
@@ -370,7 +364,7 @@ fn client_and_arbiter_client_alone_is_sufficient() {
 #[test]
 fn client_and_arbiter_arbiter_alone_is_sufficient() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, arbiter_addr) = participants(&env);
 
@@ -393,7 +387,7 @@ fn client_and_arbiter_arbiter_alone_is_sufficient() {
 #[test]
 fn multisig_zero_approvals_insufficient() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, _) = participants(&env);
 
@@ -414,7 +408,7 @@ fn multisig_zero_approvals_insufficient() {
 #[test]
 fn multisig_one_short_client_only_insufficient() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, _) = participants(&env);
 
@@ -436,7 +430,7 @@ fn multisig_one_short_client_only_insufficient() {
 #[test]
 fn multisig_one_short_freelancer_only_insufficient() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, _) = participants(&env);
 
@@ -458,7 +452,7 @@ fn multisig_one_short_freelancer_only_insufficient() {
 #[test]
 fn multisig_both_approvals_exactly_required_accepted() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, _) = participants(&env);
 
@@ -487,7 +481,7 @@ fn multisig_both_approvals_exactly_required_accepted() {
 #[test]
 fn client_only_duplicate_approval_rejected() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, _) = participants(&env);
 
@@ -509,7 +503,7 @@ fn client_only_duplicate_approval_rejected() {
 #[test]
 fn multisig_client_duplicate_approval_rejected() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, _) = participants(&env);
 
@@ -531,7 +525,7 @@ fn multisig_client_duplicate_approval_rejected() {
 #[test]
 fn multisig_freelancer_duplicate_approval_rejected() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, _) = participants(&env);
 
@@ -553,7 +547,7 @@ fn multisig_freelancer_duplicate_approval_rejected() {
 #[test]
 fn arbiter_only_duplicate_approval_rejected() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, arbiter_addr) = participants(&env);
 
@@ -582,7 +576,7 @@ fn arbiter_only_duplicate_approval_rejected() {
 #[test]
 fn client_only_freelancer_cannot_approve() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, _) = participants(&env);
 
@@ -603,7 +597,7 @@ fn client_only_freelancer_cannot_approve() {
 #[test]
 fn client_only_arbiter_cannot_approve() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, arbiter_addr) = participants(&env);
 
@@ -624,7 +618,7 @@ fn client_only_arbiter_cannot_approve() {
 #[test]
 fn client_only_stranger_cannot_approve() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, _) = participants(&env);
     let stranger = Address::generate(&env);
@@ -646,7 +640,7 @@ fn client_only_stranger_cannot_approve() {
 #[test]
 fn arbiter_only_client_cannot_approve() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, arbiter_addr) = participants(&env);
 
@@ -667,7 +661,7 @@ fn arbiter_only_client_cannot_approve() {
 #[test]
 fn arbiter_only_freelancer_cannot_approve() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, arbiter_addr) = participants(&env);
 
@@ -688,7 +682,7 @@ fn arbiter_only_freelancer_cannot_approve() {
 #[test]
 fn client_and_arbiter_freelancer_cannot_approve() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, arbiter_addr) = participants(&env);
 
@@ -709,7 +703,7 @@ fn client_and_arbiter_freelancer_cannot_approve() {
 #[test]
 fn multisig_arbiter_cannot_approve() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, arbiter_addr) = participants(&env);
 
@@ -730,7 +724,7 @@ fn multisig_arbiter_cannot_approve() {
 #[test]
 fn stranger_cannot_approve_any_mode() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, arbiter_addr) = participants(&env);
     let stranger = Address::generate(&env);
@@ -804,7 +798,7 @@ fn stranger_cannot_approve_any_mode() {
 #[test]
 fn client_only_freelancer_cannot_release_with_valid_approval() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, _) = participants(&env);
 
@@ -826,7 +820,7 @@ fn client_only_freelancer_cannot_release_with_valid_approval() {
 #[test]
 fn arbiter_only_client_cannot_release_with_valid_approval() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, arbiter_addr) = participants(&env);
 
@@ -848,7 +842,7 @@ fn arbiter_only_client_cannot_release_with_valid_approval() {
 #[test]
 fn arbiter_only_freelancer_cannot_release_with_valid_approval() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, arbiter_addr) = participants(&env);
 
@@ -870,7 +864,7 @@ fn arbiter_only_freelancer_cannot_release_with_valid_approval() {
 #[test]
 fn client_and_arbiter_freelancer_cannot_release_with_valid_approval() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, arbiter_addr) = participants(&env);
 
@@ -892,7 +886,7 @@ fn client_and_arbiter_freelancer_cannot_release_with_valid_approval() {
 #[test]
 fn multisig_arbiter_cannot_release_with_both_approvals() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, arbiter_addr) = participants(&env);
 
@@ -923,7 +917,7 @@ fn multisig_arbiter_cannot_release_with_both_approvals() {
 #[test]
 fn arbiter_only_requires_arbiter_at_creation() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, _) = participants(&env);
 
@@ -944,7 +938,7 @@ fn arbiter_only_requires_arbiter_at_creation() {
 #[test]
 fn client_and_arbiter_requires_arbiter_at_creation() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, _) = participants(&env);
 
@@ -965,7 +959,7 @@ fn client_and_arbiter_requires_arbiter_at_creation() {
 #[test]
 fn client_only_does_not_require_arbiter() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, _) = participants(&env);
 
@@ -983,7 +977,7 @@ fn client_only_does_not_require_arbiter() {
 #[test]
 fn multisig_does_not_require_arbiter() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, _) = participants(&env);
 
@@ -1009,7 +1003,7 @@ fn multisig_does_not_require_arbiter() {
 #[test]
 fn approve_on_created_contract_fails_invalid_state() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, _) = participants(&env);
 
@@ -1031,7 +1025,7 @@ fn approve_on_created_contract_fails_invalid_state() {
 #[test]
 fn release_on_created_contract_fails_invalid_state() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, _) = participants(&env);
 
@@ -1052,7 +1046,7 @@ fn release_on_created_contract_fails_invalid_state() {
 #[test]
 fn release_on_completed_contract_fails_invalid_state() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, _) = participants(&env);
 
@@ -1074,7 +1068,7 @@ fn release_on_completed_contract_fails_invalid_state() {
 #[test]
 fn approve_on_completed_contract_fails_invalid_state() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, _) = participants(&env);
 
@@ -1096,7 +1090,7 @@ fn approve_on_completed_contract_fails_invalid_state() {
 #[test]
 fn release_on_cancelled_contract_fails_invalid_state() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, _) = participants(&env);
 
@@ -1118,7 +1112,7 @@ fn release_on_cancelled_contract_fails_invalid_state() {
 #[test]
 fn approve_on_cancelled_contract_fails_invalid_state() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, _) = participants(&env);
 
@@ -1148,7 +1142,7 @@ fn approve_on_cancelled_contract_fails_invalid_state() {
 #[test]
 fn arbiter_only_wrong_party_approval_does_not_unlock_release() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, arbiter_addr) = participants(&env);
 
@@ -1174,7 +1168,7 @@ fn arbiter_only_wrong_party_approval_does_not_unlock_release() {
 #[test]
 fn client_only_wrong_party_approval_does_not_unlock_release() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, arbiter_addr) = participants(&env);
 
@@ -1189,7 +1183,7 @@ fn client_only_wrong_party_approval_does_not_unlock_release() {
 
     // Arbiter tries to approve for ClientOnly mode — must be rejected.
     let approve_result = client.try_approve_milestone_release(&id, &arbiter_addr, &0);
-    assert_contract_error(approve_result, EscrowError::UnauthorizedRole);
+    assert_contract_error(approve_result, Error::UnauthorizedRole);
 
     // No valid approval stored, so client's release attempt also fails.
     let release_result = client.try_release_milestone(&id, &client_addr, &0);
@@ -1200,7 +1194,7 @@ fn client_only_wrong_party_approval_does_not_unlock_release() {
 #[test]
 fn multisig_single_party_approval_does_not_unlock_release() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, _) = participants(&env);
 
@@ -1238,7 +1232,7 @@ fn multisig_single_party_approval_does_not_unlock_release() {
 #[test]
 fn paused_contract_blocks_approve() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, _) = participants(&env);
 
@@ -1254,14 +1248,14 @@ fn paused_contract_blocks_approve() {
     client.pause();
 
     let result = client.try_approve_milestone_release(&id, &client_addr, &0);
-    assert_contract_error(result, EscrowError::ContractPaused);
+    assert_contract_error(result, Error::ContractPaused);
 }
 
 /// Paused contract: release_milestone is blocked with ContractPaused.
 #[test]
 fn paused_contract_blocks_release() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, _) = participants(&env);
 
@@ -1279,14 +1273,14 @@ fn paused_contract_blocks_release() {
     client.pause();
 
     let result = client.try_release_milestone(&id, &client_addr, &0);
-    assert_contract_error(result, EscrowError::ContractPaused);
+    assert_contract_error(result, Error::ContractPaused);
 }
 
 /// After unpause, approve and release succeed normally.
 #[test]
 fn unpause_restores_approve_and_release() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, _) = participants(&env);
 
@@ -1318,7 +1312,7 @@ fn unpause_restores_approve_and_release() {
 #[test]
 fn failed_release_unauthorized_leaves_state_unchanged() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, _) = participants(&env);
 
@@ -1345,7 +1339,7 @@ fn failed_release_unauthorized_leaves_state_unchanged() {
 #[test]
 fn failed_release_insufficient_approvals_leaves_state_unchanged() {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client = new_client(&env);
     let (client_addr, freelancer_addr, _) = participants(&env);
 
