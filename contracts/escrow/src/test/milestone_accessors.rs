@@ -15,8 +15,10 @@
 
 use super::{create_contract, default_milestones, register_client, total_milestone_amount};
 use crate::{ttl, Error, Milestone};
-use soroban_sdk::testutils::{storage::Persistent, Ledger};
-use soroban_sdk::Vec;
+use soroban_sdk::{
+    testutils::{storage::Persistent, Ledger},
+    Vec,
+};
 
 fn setup_long_ttl_env() -> soroban_sdk::Env {
     let env = soroban_sdk::Env::default();
@@ -110,7 +112,10 @@ fn store_milestones_round_trips_mutations() {
 
     let reloaded = crate::load_milestones(&env, contract_id);
     let first = reloaded.get(0).unwrap();
-    assert!(first.refunded, "milestone.refunded should be true after store");
+    assert!(
+        first.refunded,
+        "milestone.refunded should be true after store"
+    );
     assert_eq!(first.refunded_amount, first.amount);
     for i in 1..reloaded.len() {
         let m = reloaded.get(i).unwrap();
@@ -187,8 +192,9 @@ fn load_milestones_bumps_persistent_ttl() {
         env.storage().persistent().get_ttl(&key)
     });
     env.ledger().with_mut(|li| {
-        li.sequence_number =
-            li.sequence_number.saturating_add(initial_ttl.saturating_sub(bump_threshold) + 1);
+        li.sequence_number = li
+            .sequence_number
+            .saturating_add(initial_ttl.saturating_sub(bump_threshold) + 1);
     });
 
     let _loaded = crate::load_milestones(&env, contract_id);
@@ -224,8 +230,9 @@ fn store_milestones_bumps_persistent_ttl() {
         env.storage().persistent().get_ttl(&key)
     });
     env.ledger().with_mut(|li| {
-        li.sequence_number =
-            li.sequence_number.saturating_add(initial_ttl.saturating_sub(bump_threshold) + 1);
+        li.sequence_number = li
+            .sequence_number
+            .saturating_add(initial_ttl.saturating_sub(bump_threshold) + 1);
     });
 
     let milestones = crate::load_milestones(&env, contract_id);
