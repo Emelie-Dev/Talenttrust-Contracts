@@ -81,6 +81,7 @@ pub enum DataKey {
     PendingGovernanceAdmin,
     ProtocolParameters,
     ProtocolFeeBps,
+    EventsLimit,
     // Two-step admin transfer: pending admin stored here while proposal awaits acceptance
     PendingAdmin,
     AccumulatedProtocolFees,
@@ -193,6 +194,8 @@ pub enum Error {
     SettlementTokenNotConfigured = 52,
     /// The milestone deadline has not yet passed.
     MilestoneNotOverdue = 53,
+    /// The configured events limit is out of allowed range.
+    InvalidEventsLimit = 54,
 }
 
 /// Contract lifecycle states

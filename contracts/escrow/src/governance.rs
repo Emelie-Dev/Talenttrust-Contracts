@@ -66,6 +66,49 @@ impl Escrow {
             .unwrap_or(0)
     }
 
+    /// Set the maximum events limit for queries or indexing.
+    ///
+    /// Admin-gated: the stored admin (under [`DataKey::Admin`]) must authorize
+    /// the call and the contract must be initialized.
+    ///
+    /// `new_limit` must be within safe bounds (e.g., > 0 and <= 1000).
+    ///
+    /// # Events
+    /// `(Symbol("events_limit"),)` → `(old_limit, new_limit, admin, timestamp)`
+    pub fn set_events_limit(env: Env, new_limit: u32) -> bool {
+        Self::require_initialized(&env);
+        let admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| env.panic_with_error(Error::NotInitialized));
+        admin.require_auth();
+
+        if new_limit == 0 || new_limit > 1000 {
+            env.panic_with_error(Error::InvalidEventsLimit);
+        }
+
+        let old_limit: u32 = Self::get_events_limit(env.clone());
+        
+        env.storage()
+            .persistent()
+            .set(&DataKey::EventsLimit, &new_limit);
+
+        env.events().publish(
+            (Symbol::new(&env, "events_limit"),),
+            (old_limit, new_limit, admin, env.ledger().timestamp()),
+        );
+        true
+    }
+
+    /// Returns the current events limit. Default is 100.
+    pub fn get_events_limit(env: Env) -> u32 {
+        env.storage()
+            .persistent()
+            .get::<_, u32>(&DataKey::EventsLimit)
+            .unwrap_or(100) // Default preserves current behaviour
+    }
+
     // ── Two-step admin transfer ───────────────────────────────────────────────
 
     /// Propose a new governance admin. Stores the proposal with a timelock.
