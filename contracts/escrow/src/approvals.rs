@@ -117,7 +117,7 @@ pub fn approve_milestone(
     }
 
     // Load or create approval record
-    let approval_key = DataKey::MilestoneApprovals(contract_id, milestone_index);
+    let approval_key = crate::StorageKey::milestone_approvals(contract_id, milestone_index);
     let mut approvals: MilestoneApprovals =
         env.storage()
             .temporary()
@@ -183,7 +183,7 @@ pub fn check_approvals(
     contract_id: u32,
     milestone_index: u32,
 ) -> Result<bool, Error> {
-    let approval_key = DataKey::MilestoneApprovals(contract_id, milestone_index);
+    let approval_key = crate::StorageKey::milestone_approvals(contract_id, milestone_index);
 
     // Try to load approvals from temporary storage
     // If TTL has expired, this will return None
@@ -220,7 +220,7 @@ pub fn check_approvals(
 /// * `contract_id` - The contract ID
 /// * `milestone_index` - The milestone index
 pub fn clear_approvals(env: &Env, contract_id: u32, milestone_index: u32) {
-    let approval_key = DataKey::MilestoneApprovals(contract_id, milestone_index);
+    let approval_key = crate::StorageKey::milestone_approvals(contract_id, milestone_index);
     env.storage().temporary().remove(&approval_key);
 }
 

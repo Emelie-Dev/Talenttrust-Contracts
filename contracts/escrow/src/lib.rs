@@ -83,7 +83,8 @@ pub use types::{
     Contract, ContractBounds, ContractStatus, ContractSummary, DataKey, DepositMode,
     DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone, MilestoneApprovals,
     MilestoneEntry, MilestoneSummary, PendingAdminProposal, ReadinessChecklist,
-    ReleaseAuthorization, Reputation, SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION,
+    ReleaseAuthorization, Reputation, SplitAmounts, StorageKey,
+    CONTRACT_SUMMARY_SCHEMA_VERSION,
 };
 
 // Maximum bounds constants - re-export from amount_validation for API visibility
@@ -179,6 +180,17 @@ pub enum EscrowError {
 }
 
 impl Escrow {
+    pub(crate) fn validate_contract_id_bounds(env: &Env, contract_id: u32) {
+        let next_id: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::NextContractId)
+            .unwrap_or(1);
+        if contract_id == 0 || contract_id >= next_id {
+            env.panic_with_error(EscrowError::InvalidContractId);
+        }
+    }
+
     /// Get the settlement token address from the canonical `DataKey` binding.
     pub(crate) fn read_settlement_token(env: &Env) -> Option<Address> {
         env.storage().persistent().get(&DataKey::SettlementToken)
@@ -770,11 +782,10 @@ impl Escrow {
         approvals::check_approvals(&env, &contract, contract_id, milestone_index)
             .unwrap_or_else(|e| env.panic_with_error(e));
 
-        let milestone_key = Symbol::new(&env, "milestones");
         let mut milestones: Vec<Milestone> = env
             .storage()
             .persistent()
-            .get(&(DataKey::Contract(contract_id), milestone_key.clone()))
+            .get(&crate::StorageKey::contract_milestones(contract_id))
             .unwrap();
 
         // Extend TTL on milestone read
@@ -984,11 +995,10 @@ impl Escrow {
             None => return false, // Contract not found, not overdue
         };
 
-        let milestone_key = Symbol::new(&env, "milestones");
         let milestones: Vec<Milestone> = match env
             .storage()
             .persistent()
-            .get(&(DataKey::Contract(contract_id), milestone_key))
+            .get(&crate::StorageKey::contract_milestones(contract_id))
         {
             Some(m) => m,
             None => return false, // No milestones, not overdue
@@ -1345,11 +1355,10 @@ impl Escrow {
 
     /// Retrieves all milestones for a contract.
     pub fn get_milestones(env: Env, contract_id: u32) -> Vec<Milestone> {
-        let milestone_key = Symbol::new(&env, "milestones");
         let milestones = env
             .storage()
             .persistent()
-            .get(&(DataKey::Contract(contract_id), milestone_key))
+            .get(&crate::StorageKey::contract_milestones(contract_id))
             .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
         ttl::extend_milestone_ttl(&env, contract_id);
         milestones
@@ -1380,11 +1389,10 @@ impl Escrow {
     /// Extends the milestones vector TTL on a successful read, consistent with
     /// `get_milestones`. Auth-free and otherwise non-mutating.
     pub fn get_milestone(env: Env, contract_id: u32, milestone_index: u32) -> Option<Milestone> {
-        let milestone_key = Symbol::new(&env, "milestones");
         let milestones: Vec<Milestone> = env
             .storage()
             .persistent()
-            .get(&(DataKey::Contract(contract_id), milestone_key))
+            .get(&crate::StorageKey::contract_milestones(contract_id))
             .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
         ttl::extend_milestone_ttl(&env, contract_id);
         milestones.get(milestone_index)
@@ -1437,11 +1445,10 @@ impl Escrow {
     ) -> Vec<MilestoneEntry> {
         let capped_limit = core::cmp::min(limit, PAGE_CEILING);
 
-        let milestone_key = Symbol::new(&env, "milestones");
         let milestones: Vec<Milestone> = match env
             .storage()
             .persistent()
-            .get(&(DataKey::Contract(contract_id), milestone_key))
+            .get(&crate::StorageKey::contract_milestones(contract_id))
         {
             Some(m) => m,
             None => return Vec::new(&env),
@@ -1517,7 +1524,7 @@ impl Escrow {
         if milestone_index >= MAX_MILESTONES {
             env.panic_with_error(Error::IndexOutOfBounds);
         }
-        let approval_key = DataKey::MilestoneApprovals(contract_id, milestone_index);
+        let approval_key = crate::StorageKey::milestone_approvals(contract_id, milestone_index);
         let approvals = env.storage().temporary().get(&approval_key);
         if approvals.is_some() {
             env.storage().temporary().extend_ttl(
@@ -1538,7 +1545,7 @@ impl Escrow {
         if milestone_index >= MAX_MILESTONES {
             env.panic_with_error(Error::IndexOutOfBounds);
         }
-        let approval_key = DataKey::MilestoneApprovals(contract_id, milestone_index);
+        let approval_key = crate::StorageKey::milestone_approvals(contract_id, milestone_index);
         if !env.storage().temporary().has(&approval_key) {
             return None;
         }
@@ -2031,11 +2038,10 @@ impl Escrow {
             env.panic_with_error(Error::EvidenceTooLong);
         }
 
-        let milestone_key = Symbol::new(&env, "milestones");
         let mut milestones: Vec<Milestone> = env
             .storage()
             .persistent()
-            .get(&(DataKey::Contract(contract_id), milestone_key.clone()))
+            .get(&crate::StorageKey::contract_milestones(contract_id))
             .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
 
         ttl::extend_milestone_ttl(&env, contract_id);
@@ -2092,11 +2098,10 @@ impl Escrow {
     /// consistent with `get_milestones`.
     pub fn get_work_evidence(env: Env, contract_id: u32, milestone_index: u32) -> Option<String> {
         Self::validate_contract_id_bounds(&env, contract_id);
-        let milestone_key = Symbol::new(&env, "milestones");
         let milestones: Vec<Milestone> = env
             .storage()
             .persistent()
-            .get(&(DataKey::Contract(contract_id), milestone_key))
+            .get(&crate::StorageKey::contract_milestones(contract_id))
             .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
 
         ttl::extend_milestone_ttl(&env, contract_id);

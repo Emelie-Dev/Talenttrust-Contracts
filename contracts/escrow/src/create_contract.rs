@@ -2,7 +2,7 @@ use crate::{
     amount_validation, ttl, Contract, ContractStatus, DataKey, Error, Escrow, EscrowArgs,
     EscrowClient, EscrowError, GovernedParameters, Milestone, ReleaseAuthorization, MAX_MILESTONES,
 };
-use soroban_sdk::{contractimpl, symbol_short, Address, Env, Symbol, Vec};
+use soroban_sdk::{contractimpl, symbol_short, Address, Env, Vec};
 
 #[contractimpl]
 impl Escrow {
@@ -150,10 +150,9 @@ impl Escrow {
                 deadline: None,
             });
         }
-        let milestone_key = Symbol::new(&env, "milestones");
         env.storage()
             .persistent()
-            .set(&(DataKey::Contract(id), milestone_key), &milestone_vec);
+            .set(&crate::StorageKey::contract_milestones(id), &milestone_vec);
 
         // Advance the counter. `next_contract_id` already checked `id < u32::MAX`;
         // the `checked_add` here is a defense-in-depth guard.

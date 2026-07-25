@@ -73,6 +73,44 @@ pub struct ContractBounds {
 
 // ─── Storage keys ──────────────────────────────────────────────────────────────
 
+/// Typed storage key for contract-owned entries that previously used ad-hoc
+/// tuple keys such as `(DataKey::Contract(id), Symbol("milestones"))`.
+///
+/// The variants are intentionally narrow and match the storage shapes already
+/// used by the escrow contract so the public behavior stays unchanged while the
+/// call sites become clearer and more type-safe.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum StorageKey {
+    Contract(u32),
+    ContractMilestones(u32),
+    MilestoneApprovals(u32, u32),
+    Finalization(u32),
+    PendingClientMigration(u32),
+}
+
+impl StorageKey {
+    pub fn contract(contract_id: u32) -> Self {
+        Self::Contract(contract_id)
+    }
+
+    pub fn contract_milestones(contract_id: u32) -> Self {
+        Self::ContractMilestones(contract_id)
+    }
+
+    pub fn milestone_approvals(contract_id: u32, milestone_index: u32) -> Self {
+        Self::MilestoneApprovals(contract_id, milestone_index)
+    }
+
+    pub fn finalization(contract_id: u32) -> Self {
+        Self::Finalization(contract_id)
+    }
+
+    pub fn pending_client_migration(contract_id: u32) -> Self {
+        Self::PendingClientMigration(contract_id)
+    }
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DataKey {

@@ -3,7 +3,10 @@ use super::{
     generated_participants, register_client, total_milestone_amount, MILESTONE_ONE, MILESTONE_THREE,
     MILESTONE_TWO,
 };
-use crate::{ContractStatus, DataKey, EscrowError, ReadinessChecklist, ReleaseAuthorization};
+use crate::{
+    ContractStatus, DataKey, EscrowError, Milestone, ReadinessChecklist, ReleaseAuthorization,
+    StorageKey,
+};
 use soroban_sdk::{testutils::Address as _, Address, Env};
 
 // ─── Initialized / Admin ──────────────────────────────────────────────────────
@@ -84,6 +87,82 @@ fn paused_written_by_pause_and_cleared_by_unpause() {
             .get(&DataKey::Paused)
             .unwrap_or(false);
         assert!(!v);
+    });
+}
+
+#[test]
+fn typed_storage_key_round_trips_values_and_reports_absence() {
+    let env = Env::default();
+    let contract_id = env.register(Escrow, ());
+
+    let milestone_key = StorageKey::contract_milestones(7);
+    let milestones = soroban_sdk::Vec::from_array(
+        &env,
+        [Milestone {
+            amount: 100,
+            funded_amount: 0,
+            released: false,
+            refunded: false,
+            work_evidence: None,
+            refunded_amount: 0,
+            deadline: None,
+        }],
+    );
+
+    env.as_contract(&contract_id, || {
+        env.storage().persistent().set(&milestone_key, &milestones);
+
+        let stored: soroban_sdk::Vec<Milestone> = env
+            .storage()
+            .persistent()
+            .get(&milestone_key)
+            .unwrap();
+        assert_eq!(stored, milestones);
+
+        let missing_key = StorageKey::contract_milestones(999);
+        let missing: Option<soroban_sdk::Vec<Milestone>> = env
+            .storage()
+            .persistent()
+            .get(&missing_key);
+        assert!(missing.is_none());
+    });
+}
+
+#[test]
+fn typed_storage_key_round_trips_values_and_reports_absence() {
+    let env = Env::default();
+    let contract_id = env.register(Escrow, ());
+
+    let milestone_key = StorageKey::contract_milestones(7);
+    let milestones = soroban_sdk::Vec::from_array(
+        &env,
+        [Milestone {
+            amount: 100,
+            funded_amount: 0,
+            released: false,
+            refunded: false,
+            work_evidence: None,
+            refunded_amount: 0,
+            deadline: None,
+        }],
+    );
+
+    env.as_contract(&contract_id, || {
+        env.storage().persistent().set(&milestone_key, &milestones);
+
+        let stored: soroban_sdk::Vec<Milestone> = env
+            .storage()
+            .persistent()
+            .get(&milestone_key)
+            .unwrap();
+        assert_eq!(stored, milestones);
+
+        let missing_key = StorageKey::contract_milestones(999);
+        let missing: Option<soroban_sdk::Vec<Milestone>> = env
+            .storage()
+            .persistent()
+            .get(&missing_key);
+        assert!(missing.is_none());
     });
 }
 
