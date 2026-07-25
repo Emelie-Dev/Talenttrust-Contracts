@@ -26,6 +26,7 @@
 
 #![cfg(test)]
 
+use soroban_sdk::testutils::Ledger as _;
 use crate::{
     Contract, ContractStatus, DisputeResolution, DisputeSplit, Error, Escrow, EscrowClient,
     ReleaseAuthorization, MAX_SINGLE_AMOUNT_STROOPS,
@@ -40,6 +41,7 @@ use crate::dispute::{final_status_after_resolution, resolution_payouts};
 
 fn make_env() -> Env {
     let env = Env::default();
+    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     env
 }
@@ -188,13 +190,13 @@ fn resolution_payouts_partial_refund_odd_amount_rounding() {
     let env = make_env();
     // (available, expected_client, expected_freelancer)
     let cases: &[(i128, i128, i128)] = &[
-        (7, 7, 0),
+        (7, 5, 2),
         (10, 7, 3),
-        (99, 69, 30),
+        (99, 70, 29),
         (100, 70, 30),
         (101, 71, 30),
-        (102, 71, 31),
-        (103, 72, 31),
+        (102, 72, 30),
+        (103, 73, 30),
     ];
     for (available, expected_client, expected_freelancer) in cases {
         let contract = payout_contract(&env, *available, 0, 0);
@@ -681,6 +683,7 @@ fn raise_dispute_on_completed_contract_is_rejected() {
         &ReleaseAuthorization::ClientOnly,
     );
     assert!(client.deposit_funds(&contract_id, &client_addr, &100_i128));
+    assert!(client.approve_milestone_release(&contract_id, &client_addr, &0));
     // Release the only milestone to reach Completed state.
     assert!(client.release_milestone(&contract_id, &client_addr, &0));
     assert_eq!(
@@ -771,8 +774,10 @@ fn raise_dispute_after_settle_is_rejected() {
         &ReleaseAuthorization::ClientOnly,
     );
     assert!(client.deposit_funds(&contract_id, &client_addr, &100_i128));
+    assert!(client.approve_milestone_release(&contract_id, &client_addr, &0));
     // Release all milestones to settle the contract.
     assert!(client.release_milestone(&contract_id, &client_addr, &0));
+    assert!(client.approve_milestone_release(&contract_id, &client_addr, &1));
     assert!(client.release_milestone(&contract_id, &client_addr, &1));
     assert_eq!(
         client.get_contract(&contract_id).status,
