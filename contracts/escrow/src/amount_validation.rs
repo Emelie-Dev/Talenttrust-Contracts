@@ -212,6 +212,37 @@ pub fn safe_subtract_amounts(a: i128, b: i128) -> Option<i128> {
     a.checked_sub(b)
 }
 
+/// Computes the currently available (unreleased, unrefunded) balance for a
+/// contract using checked arithmetic.
+///
+/// `available = funded_amount - released_amount - refunded_amount`
+///
+/// This expression is duplicated across `lib.rs`, `finalize.rs`, and
+/// `dispute.rs` call sites that read contract accounting state; centralizing
+/// it here ensures every reader fails closed the same way instead of each
+/// site risking a silent wraparound (in a release build, where
+/// `overflow-checks` is off) or an inconsistent panic message.
+///
+/// # Errors
+/// `AccountingInvariantViolated` if either checked subtraction underflows, or
+/// if the result would be negative — both signal that `released_amount +
+/// refunded_amount` has already exceeded `funded_amount`, i.e. corrupted
+/// accounting state rather than an ordinary overflow.
+pub fn checked_available_balance(
+    funded_amount: i128,
+    released_amount: i128,
+    refunded_amount: i128,
+) -> Result<i128, crate::Error> {
+    let available = funded_amount
+        .checked_sub(released_amount)
+        .and_then(|value| value.checked_sub(refunded_amount))
+        .ok_or(crate::Error::AccountingInvariantViolated)?;
+    if available < 0 {
+        return Err(crate::Error::AccountingInvariantViolated);
+    }
+    Ok(available)
+}
+
 /// Safely accumulates amounts into a total with overflow protection.
 ///
 /// Iterates through amounts, validating each amount for positivity and bounds,
@@ -404,5 +435,38 @@ mod tests {
         assert_eq!(safe_subtract_amounts(300, 100), Some(200));
         assert_eq!(safe_subtract_amounts(0, 1), Some(-1));
         assert_eq!(safe_subtract_amounts(i128::MIN, 1), None);
+    }
+
+    #[test]
+    fn test_checked_available_balance_extremes() {
+        // Ordinary case.
+        assert_eq!(checked_available_balance(100, 20, 10), Ok(70));
+
+        // Subtraction near zero: released + refunded exactly consume funded.
+        assert_eq!(checked_available_balance(100, 60, 40), Ok(0));
+
+        // One stroop of headroom left.
+        assert_eq!(checked_available_balance(100, 60, 39), Ok(1));
+
+        // i128::MAX extremes: funded at the ceiling, nothing released/refunded yet.
+        assert_eq!(checked_available_balance(i128::MAX, 0, 0), Ok(i128::MAX));
+        assert_eq!(checked_available_balance(i128::MAX, i128::MAX, 0), Ok(0));
+
+        // Corrupted state: released + refunded exceed funded by one stroop.
+        assert_eq!(
+            checked_available_balance(100, 60, 41),
+            Err(crate::Error::AccountingInvariantViolated)
+        );
+
+        // Underflow at the i128::MIN boundary is reported the same way as an
+        // ordinary invariant violation, not a silent wraparound.
+        assert_eq!(
+            checked_available_balance(i128::MIN, 1, 0),
+            Err(crate::Error::AccountingInvariantViolated)
+        );
+        assert_eq!(
+            checked_available_balance(0, i128::MIN, 1),
+            Err(crate::Error::AccountingInvariantViolated)
+        );
     }
 }

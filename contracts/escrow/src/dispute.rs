@@ -31,14 +31,11 @@ pub fn resolution_payouts(
     contract: &Contract,
     resolution: &DisputeResolution,
 ) -> Result<(i128, i128), Error> {
-    let available = contract
-        .funded_amount
-        .checked_sub(contract.released_amount)
-        .and_then(|value| value.checked_sub(contract.refunded_amount))
-        .ok_or(Error::AccountingInvariantViolated)?;
-    if available < 0 {
-        return Err(Error::AccountingInvariantViolated);
-    }
+    let available = crate::checked_available_balance(
+        contract.funded_amount,
+        contract.released_amount,
+        contract.refunded_amount,
+    )?;
 
     match resolution {
         DisputeResolution::FullRefund => Ok((available, 0)),
