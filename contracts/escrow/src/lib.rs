@@ -83,7 +83,7 @@ pub use types::{
     Contract, ContractBounds, ContractStatus, ContractSummary, DataKey, DepositMode,
     DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone, MilestoneApprovals,
     MilestoneSummary, PendingAdminProposal, ReadinessChecklist, ReleaseAuthorization, Reputation,
-    SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION,
+    ReputationKey, SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION,
 };
 
 // Maximum bounds constants - re-export from amount_validation for API visibility
@@ -623,7 +623,7 @@ impl Escrow {
     /// completed contract and are consumed one at a time by `issue_reputation`.
     /// A `Refunded` contract never calls this helper and therefore earns no credit.
     fn grant_pending_reputation_credit(env: &Env, freelancer: &Address) {
-        let pending_key = DataKey::PendingReputationCredits(freelancer.clone());
+        let pending_key = DataKey::PendingReputationCredits(ReputationKey { user: freelancer.clone() });
         let pending: i128 = env.storage().persistent().get(&pending_key).unwrap_or(0);
         env.storage().persistent().set(&pending_key, &(pending + 1));
     }
@@ -1734,14 +1734,14 @@ impl Escrow {
             ttl::PERSISTENT_TTL_LEDGERS,
         );
 
-        let pending_key = DataKey::PendingReputationCredits(contract.freelancer.clone());
+        let pending_key = DataKey::PendingReputationCredits(ReputationKey { user: contract.freelancer.clone() });
         let pending: i128 = env.storage().persistent().get(&pending_key).unwrap_or(0);
         if pending <= 0 {
             env.panic_with_error(Error::InvalidState);
         }
         env.storage().persistent().set(&pending_key, &(pending - 1));
 
-        let rep_key = DataKey::Reputation(contract.freelancer.clone());
+        let rep_key = DataKey::Reputation(ReputationKey { user: contract.freelancer.clone() });
         let mut rep: types::Reputation =
             env.storage().persistent().get(&rep_key).unwrap_or_default();
         rep.completed_contracts += 1;
@@ -1778,7 +1778,7 @@ impl Escrow {
     pub fn get_reputation(env: Env, address: Address) -> Option<types::Reputation> {
         env.storage()
             .persistent()
-            .get(&DataKey::Reputation(address))
+            .get(&DataKey::Reputation(ReputationKey { user: address }))
     }
 
     /// Returns the freelancer's average rating scaled to basis points (×10 000),
@@ -1799,7 +1799,7 @@ impl Escrow {
         let rep: types::Reputation = env
             .storage()
             .persistent()
-            .get(&DataKey::Reputation(address))?;
+            .get(&DataKey::Reputation(ReputationKey { user: address }))?;
 
         if rep.completed_contracts == 0 {
             return None;
@@ -1818,7 +1818,7 @@ impl Escrow {
     pub fn get_pending_reputation_credits(env: Env, address: Address) -> i128 {
         env.storage()
             .persistent()
-            .get(&DataKey::PendingReputationCredits(address))
+            .get(&DataKey::PendingReputationCredits(ReputationKey { user: address }))
             .unwrap_or(0)
     }
 
