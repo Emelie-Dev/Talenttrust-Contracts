@@ -14,6 +14,17 @@ pub struct MilestoneSummary {
     pub refunded: bool,
 }
 
+/// Lightweight arbiter entry returned by the paginated arbiter enumeration view.
+///
+/// Each entry pairs a contract id with its assigned arbiter. Contracts without
+/// an arbiter are omitted from the page.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ArbiterEntry {
+    pub contract_id: u32,
+    pub arbiter: Address,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ContractSummary {

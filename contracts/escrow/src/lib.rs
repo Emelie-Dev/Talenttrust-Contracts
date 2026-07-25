@@ -80,7 +80,7 @@ pub use ttl::{ADMIN_ROTATION_MIN_DELAY_LEDGERS, PENDING_MIGRATION_TTL_LEDGERS};
 // `DisputeResolution` and `DisputeSplit` are defined once in `types.rs` and
 // re-exported here; `dispute.rs` uses them via `crate::DisputeResolution`.
 pub use types::{
-    Contract, ContractBounds, ContractStatus, ContractSummary, DataKey, DepositMode,
+    ArbiterEntry, Contract, ContractBounds, ContractStatus, ContractSummary, DataKey, DepositMode,
     DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone, MilestoneApprovals,
     MilestoneSummary, PendingAdminProposal, ReadinessChecklist, ReleaseAuthorization, Reputation,
     SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION,
@@ -90,6 +90,9 @@ pub use types::{
 pub const MAX_MILESTONES: u32 = 10;
 pub const MAX_SINGLE_AMOUNT_STROOPS: i128 = crate::amount_validation::MAX_SINGLE_AMOUNT_STROOPS;
 pub const MAX_TOTAL_ESCROW_STROOPS: i128 = MAX_SINGLE_AMOUNT_STROOPS;
+
+/// Upper bound on the `limit` parameter of paginated read views.
+pub const PAGE_CEILING: u32 = 50;
 
 #[contract]
 pub struct Escrow;
@@ -1244,6 +1247,74 @@ impl Escrow {
             .persistent()
             .get(&DataKey::NextContractId)
             .unwrap_or(1)
+    }
+
+    /// Returns a bounded, paginated view of arbiter records.
+    ///
+    /// Enumerates contracts that have an assigned arbiter and returns
+    /// [`ArbiterEntry`] values in ascending contract-id order. Contracts
+    /// without an arbiter are skipped and do not consume a page slot.
+    ///
+    /// # Pagination
+    ///
+    /// - `start` is the zero-based offset into the filtered arbiter-record
+    ///   sequence (not the raw contract-id space). An out-of-range `start`
+    ///   produces an empty page (never a panic).
+    /// - `limit` is clamped to `[0, PAGE_CEILING]` before use. The caller
+    ///   never receives more than `PAGE_CEILING` entries per call.
+    /// - Returns an empty `Vec` when no contracts exist or none have an
+    ///   arbiter assigned.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `start` - Zero-based index of the first arbiter record in the page
+    /// * `limit` - Maximum entries to return (clamped to `PAGE_CEILING`)
+    ///
+    /// # Returns
+    /// A [`Vec<ArbiterEntry>`] containing at most `min(limit, PAGE_CEILING)`
+    /// entries.
+    ///
+    /// # Side effects
+    /// Extends the contract TTL for each returned entry, consistent with
+    /// `get_contract`. Auth-free and otherwise non-mutating.
+    pub fn get_arbiters_page(env: Env, start: u32, limit: u32) -> Vec<ArbiterEntry> {
+        let capped_limit = core::cmp::min(limit, PAGE_CEILING);
+        if capped_limit == 0 {
+            return Vec::new(&env);
+        }
+
+        let next_id = Self::get_next_contract_id(env.clone());
+        if next_id <= 1 {
+            return Vec::new(&env);
+        }
+
+        let mut result = Vec::new(&env);
+        let mut matched: u32 = 0;
+        let mut collected: u32 = 0;
+        let mut id: u32 = 1;
+
+        while id < next_id && collected < capped_limit {
+            if let Some(contract) = env
+                .storage()
+                .persistent()
+                .get::<_, Contract>(&DataKey::Contract(id))
+            {
+                if let Some(arbiter) = contract.arbiter {
+                    if matched >= start {
+                        ttl::extend_contract_ttl(&env, id);
+                        result.push_back(ArbiterEntry {
+                            contract_id: id,
+                            arbiter,
+                        });
+                        collected += 1;
+                    }
+                    matched = matched.saturating_add(1);
+                }
+            }
+            id = id.saturating_add(1);
+        }
+
+        result
     }
 
     /// Returns a structured summary of the contract and its milestones.
