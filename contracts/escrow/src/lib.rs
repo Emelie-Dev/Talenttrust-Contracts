@@ -441,7 +441,10 @@ impl Escrow {
     fn grant_pending_reputation_credit(env: &Env, freelancer: &Address) {
         let pending_key = DataKey::PendingReputationCredits(freelancer.clone());
         let pending: i128 = env.storage().persistent().get(&pending_key).unwrap_or(0);
-        env.storage().persistent().set(&pending_key, &(pending + 1));
+        let new_pending = pending
+            .checked_add(1)
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
+        env.storage().persistent().set(&pending_key, &new_pending);
     }
 
     /// Releases a specific milestone, transferring the net payout to the freelancer.
@@ -629,6 +632,86 @@ impl Escrow {
             0
         };
 
+        /// `net_amount` — the amount actually transferred to the freelancer
+        /// after deducting the protocol fee.
+        let net_amount = gross_amount - protocol_fee;
+
+        // The available balance must cover the full gross milestone amount
+        // (net payout + fee) without dipping into already-accumulated fees or
+        // other milestones' funds.
+        let accumulated_fees: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::AccumulatedProtocolFees)
+            .unwrap_or(0);
+        let available_balance = contract.funded_amount
+            - contract.released_amount
+            - contract.refunded_amount
+            - accumulated_fees;
+        if available_balance < gross_amount {
+            env.panic_with_error(EscrowError::InsufficientFunds);
+        }
+
+        // Transfer the net amount (gross minus fee) to the freelancer.
+        // The fee portion remains in the contract's token balance and is
+        // tracked separately in AccumulatedProtocolFees.
+        let token = Self::read_settlement_token(&env)
+            .unwrap_or_else(|| env.panic_with_error(Error::SettlementTokenNotConfigured));
+        let token_client = token::Client::new(&env, &token);
+        token_client.transfer(
+            &env.current_contract_address(),
+            &contract.freelancer,
+            &net_amount,
+        );
+
+        // Accrue the fee into the protocol's accumulated balance.
+        if protocol_fee > 0 {
+            let new_accumulated_fees = accumulated_fees
+                .checked_add(protocol_fee)
+                .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
+            env.storage()
+                .persistent()
+                .set(&DataKey::AccumulatedProtocolFees, &new_accumulated_fees);
+        }
+
+        milestone.released = true;
+        // Record the funded amount on the milestone so it is self-describing.
+        milestone.funded_amount = gross_amount;
+        milestones.set(milestone_index, milestone.clone());
+        // released_amount tracks net amounts paid out to freelancers.
+        // accumulated_fees tracks protocol fees retained in the contract.
+        // Together: released_amount + refunded_amount + accumulated_fees <= funded_amount.
+        contract.released_amount = contract
+            .released_amount
+            .checked_add(net_amount)
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
+
+        // Accounting invariant: net released + refunded + all accumulated fees
+        // must never exceed the total funded amount.
+        let new_accumulated = accumulated_fees
+            .checked_add(protocol_fee)
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
+        let invariant_sum = contract
+            .released_amount
+            .checked_add(contract.refunded_amount)
+            .and_then(|s| s.checked_add(new_accumulated))
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
+        if invariant_sum > contract.funded_amount {
+            env.panic_with_error(EscrowError::AccountingInvariantViolated);
+        }
+
+        // Clear approvals after successful release
+        approvals::clear_approvals(&env, contract_id, milestone_index);
+
+        // Check if all milestones are released or refunded; if so, complete.
+        let all_released = milestones.iter().all(|m| m.released || m.refunded);
+        if all_released {
+            let old_status = contract.status.clone();
+            contract.status = ContractStatus::Completed;
+            Self::grant_pending_reputation_credit(&env, &contract.freelancer);
+        }
+
+        ttl::store_milestones(&env, contract_id, &milestones);
         env.storage()
             .persistent()
             .set(&DataKey::Contract(contract_id), &contract);
@@ -835,7 +918,9 @@ impl Escrow {
             }
             // If no deadline (None), allow refund anytime (backward compatibility)
 
-            total_refund_amount += milestone.amount;
+            total_refund_amount = total_refund_amount
+                .checked_add(milestone.amount)
+                .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
         }
 
         // Check if there's enough balance
@@ -1567,8 +1652,14 @@ impl Escrow {
         let rep_key = DataKey::Reputation(contract.freelancer.clone());
         let mut rep: types::Reputation =
             env.storage().persistent().get(&rep_key).unwrap_or_default();
-        rep.completed_contracts += 1;
-        rep.total_rating += rating as i128;
+        rep.completed_contracts = rep
+            .completed_contracts
+            .checked_add(1)
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
+        rep.total_rating = rep
+            .total_rating
+            .checked_add(rating as i128)
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
         rep.last_rating = rating as i128;
         env.storage().persistent().set(&rep_key, &rep);
 
@@ -2121,8 +2212,14 @@ impl Escrow {
                 .unwrap_or_else(|e| env.panic_with_error(e));
 
         // Update contract accounting
-        contract.refunded_amount += client_payout;
-        contract.released_amount += freelancer_payout;
+        contract.refunded_amount = contract
+            .refunded_amount
+            .checked_add(client_payout)
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
+        contract.released_amount = contract
+            .released_amount
+            .checked_add(freelancer_payout)
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
 
         // Set final status
         contract.status = dispute::final_status_after_resolution(&contract);
@@ -2148,3 +2245,5 @@ impl Escrow {
 /// Test fixtures and suites are compiled only for native test builds, never wasm.
 #[cfg(test)]
 mod test;
+#[cfg(test)]
+mod test_storage_arithmetic;

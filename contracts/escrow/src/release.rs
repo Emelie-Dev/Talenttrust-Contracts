@@ -1,5 +1,5 @@
 use crate::{
-    approvals, ttl, Contract, ContractStatus, DataKey, Error, Escrow, Milestone,
+    approvals, ttl, Contract, ContractStatus, DataKey, Error, Escrow, EscrowError, Milestone,
     ReleaseAuthorization,
 };
 use soroban_sdk::{Address, Env, Symbol, Vec};
@@ -99,7 +99,10 @@ impl Escrow {
         let _release_amount = milestone.amount;
         milestone.released = true;
         milestones.set(milestone_index, milestone.clone());
-        contract.released_amount += milestone.amount;
+        contract.released_amount = contract
+            .released_amount
+            .checked_add(milestone.amount)
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
 
         if is_initialized(&env) {
             let fee_bps = get_protocol_fee_bps(&env);
@@ -110,10 +113,12 @@ impl Escrow {
                     .persistent()
                     .get(&DataKey::AccumulatedProtocolFees)
                     .unwrap_or(0);
-                env.storage().persistent().set(
-                    &DataKey::AccumulatedProtocolFees,
-                    &(current_accumulated + fee),
-                );
+                let new_accumulated_fees = current_accumulated
+                    .checked_add(fee)
+                    .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
+                env.storage()
+                    .persistent()
+                    .set(&DataKey::AccumulatedProtocolFees, &new_accumulated_fees);
             }
         }
 
@@ -124,7 +129,10 @@ impl Escrow {
             contract.status = ContractStatus::Completed;
             let pending_key = DataKey::PendingReputationCredits(contract.freelancer.clone());
             let pending: i128 = env.storage().persistent().get(&pending_key).unwrap_or(0);
-            env.storage().persistent().set(&pending_key, &(pending + 1));
+            let new_pending = pending
+                .checked_add(1)
+                .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
+            env.storage().persistent().set(&pending_key, &new_pending);
         }
 
         env.storage().persistent().set(
