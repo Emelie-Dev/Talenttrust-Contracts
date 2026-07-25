@@ -23,6 +23,9 @@ pub enum DataKey {
     ProtocolFeeBps,
     AccumulatedProtocolFees,
     ReadinessChecklist,
+    // Configurable limits
+    MaxMilestones,
+    MaxEscrowStroops,
 }
 
 #[contracterror]
@@ -71,6 +74,8 @@ pub enum EscrowError {
     AmountExceedsMaximum = 38,
     InvalidStroopPrecision = 39,
     ExceedsContractMaximum = 40,
+    // Configurable limits
+    LimitOutOfRange = 41,
 }
 
 #[contracttype]

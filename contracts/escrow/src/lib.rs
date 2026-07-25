@@ -21,11 +21,26 @@ pub use ttl::{
 
 // ─── Bounds constants ─────────────────────────────────────────────────────────
 
-/// Maximum number of milestones allowed per contract.
-pub const MAX_MILESTONES: u32 = 10;
+/// Default maximum number of milestones allowed per contract.
+pub const DEFAULT_MAX_MILESTONES: u32 = 10;
 
-/// Hard cap on the total escrow value per contract, in stroops.
-pub const MAX_TOTAL_ESCROW_STROOPS: i128 = 10_000_000_000_000;
+/// Default hard cap on the total escrow value per contract, in stroops.
+pub const DEFAULT_MAX_TOTAL_ESCROW_STROOPS: i128 = 10_000_000_000_000;
+
+/// Backward-compatible alias for the default max milestones.
+pub const MAX_MILESTONES: u32 = DEFAULT_MAX_MILESTONES;
+
+/// Backward-compatible alias for the default max escrow stroops.
+pub const MAX_TOTAL_ESCROW_STROOPS: i128 = DEFAULT_MAX_TOTAL_ESCROW_STROOPS;
+
+/// Absolute minimum for the max milestones setting.
+pub const MIN_MAX_MILESTONES: u32 = 1;
+
+/// Absolute maximum for the max milestones setting.
+pub const MAX_MAX_MILESTONES: u32 = 100;
+
+/// Absolute minimum for the max escrow stroops setting (0.01 XLM).
+pub const MIN_MAX_ESCROW_STROOPS: i128 = 1_000_000;
 
 pub const MAINNET_PROTOCOL_VERSION: u32 = 1u32;
 pub const MAINNET_MAX_TOTAL_ESCROW_PER_CONTRACT_STROOPS: i128 = 1_000_000_000_000_000i128;
@@ -297,6 +312,86 @@ impl Escrow {
             .unwrap_or_default()
     }
 
+    // ─── Configurable limits ──────────────────────────────────────────────────
+
+    /// Returns the effective max milestones, falling back to the default.
+    fn effective_max_milestones(env: &Env) -> u32 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::MaxMilestones)
+            .unwrap_or(DEFAULT_MAX_MILESTONES)
+    }
+
+    /// Returns the effective max escrow stroops, falling back to the default.
+    fn effective_max_escrow_stroops(env: &Env) -> i128 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::MaxEscrowStroops)
+            .unwrap_or(DEFAULT_MAX_TOTAL_ESCROW_STROOPS)
+    }
+
+    /// Set the max milestones limit. Admin only. Rejects out-of-range values.
+    pub fn set_max_milestones(env: Env, max_milestones: u32) -> bool {
+        Self::require_initialized(&env);
+        let admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::NotInitialized));
+        admin.require_auth();
+
+        if max_milestones < MIN_MAX_MILESTONES || max_milestones > MAX_MAX_MILESTONES {
+            env.panic_with_error(EscrowError::LimitOutOfRange);
+        }
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::MaxMilestones, &max_milestones);
+
+        env.events().publish(
+            (symbol_short!("limits"), Symbol::new(&env, "max_milestones")),
+            (max_milestones, env.ledger().timestamp()),
+        );
+        true
+    }
+
+    /// Returns the current max milestones limit (or the default if not set).
+    pub fn get_max_milestones(env: Env) -> u32 {
+        Self::effective_max_milestones(&env)
+    }
+
+    /// Set the max escrow stroops limit. Admin only. Rejects out-of-range values.
+    pub fn set_max_escrow_stroops(env: Env, max_escrow_stroops: i128) -> bool {
+        Self::require_initialized(&env);
+        let admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::NotInitialized));
+        admin.require_auth();
+
+        if max_escrow_stroops < MIN_MAX_ESCROW_STROOPS
+            || max_escrow_stroops > MAINNET_MAX_TOTAL_ESCROW_PER_CONTRACT_STROOPS
+        {
+            env.panic_with_error(EscrowError::LimitOutOfRange);
+        }
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::MaxEscrowStroops, &max_escrow_stroops);
+
+        env.events().publish(
+            (symbol_short!("limits"), Symbol::new(&env, "max_escrow")),
+            (max_escrow_stroops, env.ledger().timestamp()),
+        );
+        true
+    }
+
+    /// Returns the current max escrow stroops limit (or the default if not set).
+    pub fn get_max_escrow_stroops(env: Env) -> i128 {
+        Self::effective_max_escrow_stroops(&env)
+    }
+
     // ─── Contract lifecycle ───────────────────────────────────────────────────
 
     /// Create a new escrow contract. Blocked when paused.
@@ -315,7 +410,8 @@ impl Escrow {
         if milestone_amounts.is_empty() {
             env.panic_with_error(EscrowError::EmptyMilestones);
         }
-        if milestone_amounts.len() > MAX_MILESTONES {
+        let max_milestones = Self::effective_max_milestones(&env);
+        if milestone_amounts.len() > max_milestones {
             env.panic_with_error(EscrowError::TooManyMilestones);
         }
 
@@ -328,7 +424,8 @@ impl Escrow {
             total = safe_add_amounts(total, amt)
                 .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
         }
-        if total > MAX_TOTAL_ESCROW_STROOPS {
+        let max_escrow = Self::effective_max_escrow_stroops(&env);
+        if total > max_escrow {
             env.panic_with_error(EscrowError::InvalidMilestoneAmount);
         }
 

@@ -8,6 +8,7 @@ use crate::{Escrow, EscrowClient, EscrowError};
 
 mod pause_controls;
 mod emergency_controls;
+mod configurable_limits;
 
 // ─── Shared constants ─────────────────────────────────────────────────────────
 
