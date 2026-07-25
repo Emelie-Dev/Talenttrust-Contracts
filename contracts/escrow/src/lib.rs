@@ -625,7 +625,11 @@ impl Escrow {
     fn grant_pending_reputation_credit(env: &Env, freelancer: &Address) {
         let pending_key = DataKey::PendingReputationCredits(freelancer.clone());
         let pending: i128 = env.storage().persistent().get(&pending_key).unwrap_or(0);
-        env.storage().persistent().set(&pending_key, &(pending + 1));
+        // FIX: use checked_add to prevent overflow on reputation credit counter.
+        let new_pending = pending
+            .checked_add(1)
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
+        env.storage().persistent().set(&pending_key, &new_pending);
     }
 
     /// Releases a specific milestone, transferring the net payout to the freelancer.
@@ -847,10 +851,13 @@ impl Escrow {
 
         // Accrue the fee into the protocol's accumulated balance.
         if protocol_fee > 0 {
-            env.storage().persistent().set(
-                &DataKey::AccumulatedProtocolFees,
-                &(accumulated_fees + protocol_fee),
-            );
+            // FIX: use checked_add to prevent overflow on accumulated fee storage.
+            let new_accumulated = accumulated_fees
+                .checked_add(protocol_fee)
+                .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
+            env.storage()
+                .persistent()
+                .set(&DataKey::AccumulatedProtocolFees, &new_accumulated);
         }
 
         milestone.released = true;
@@ -867,8 +874,15 @@ impl Escrow {
 
         // Accounting invariant: net released + refunded + all accumulated fees
         // must never exceed the total funded amount.
-        let new_accumulated = accumulated_fees + protocol_fee;
-        let invariant_sum = contract.released_amount + contract.refunded_amount + new_accumulated;
+        // FIX: use checked_add for all intermediate sums to prevent overflow.
+        let new_accumulated = accumulated_fees
+            .checked_add(protocol_fee)
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
+        let invariant_sum = contract
+            .released_amount
+            .checked_add(contract.refunded_amount)
+            .and_then(|v| v.checked_add(new_accumulated))
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
         if invariant_sum > contract.funded_amount {
             env.panic_with_error(EscrowError::AccountingInvariantViolated);
         }
@@ -2298,8 +2312,15 @@ impl Escrow {
                 .unwrap_or_else(|e| env.panic_with_error(e));
 
         // Update contract accounting
-        contract.refunded_amount += client_payout;
-        contract.released_amount += freelancer_payout;
+        // FIX: use checked_add to prevent overflow on refunded/released amount accumulation.
+        contract.refunded_amount = contract
+            .refunded_amount
+            .checked_add(client_payout)
+            .unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
+        contract.released_amount = contract
+            .released_amount
+            .checked_add(freelancer_payout)
+            .unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
 
         // Set final status
         contract.status = dispute::final_status_after_resolution(&contract);
