@@ -56,6 +56,7 @@ mod approvals;
 mod deposit;
 mod finalize;
 mod migration;
+mod reputation_migration;
 mod ttl;
 mod types;
 mod utils;
@@ -83,7 +84,7 @@ pub use types::{
     Contract, ContractBounds, ContractStatus, ContractSummary, DataKey, DepositMode,
     DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone, MilestoneApprovals,
     MilestoneSummary, PendingAdminProposal, ReadinessChecklist, ReleaseAuthorization, Reputation,
-    SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION,
+    SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION, REPUTATION_STORAGE_VERSION,
 };
 
 // Maximum bounds constants - re-export from amount_validation for API visibility
@@ -1776,9 +1777,7 @@ impl Escrow {
     }
 
     pub fn get_reputation(env: Env, address: Address) -> Option<types::Reputation> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Reputation(address))
+        reputation_migration::read_reputation_with_migration(&env, &address)
     }
 
     /// Returns the freelancer's average rating scaled to basis points (×10 000),
@@ -1820,6 +1819,40 @@ impl Escrow {
             .persistent()
             .get(&DataKey::PendingReputationCredits(address))
             .unwrap_or(0)
+    }
+
+    /// Migrate the reputation storage record for `address` to the current schema version.
+    ///
+    /// This entrypoint is idempotent: calling it on an already-current record is a
+    /// safe no-op and returns `false`. When a v1 (legacy) record is detected the
+    /// migration writes a [`DataKey::ReputationStorageVersion`] marker alongside the
+    /// existing data and returns `true`. All field values are preserved exactly.
+    ///
+    /// # When to call
+    ///
+    /// Existing records written before versioning was introduced are transparently
+    /// upgraded on every `get_reputation` read via the migration-on-read path, so
+    /// most callers never need to call this directly. This explicit entrypoint is
+    /// intended for operators who want to eagerly migrate a known address (e.g. as
+    /// part of a deployment runbook) and receive a clear success/no-op signal.
+    ///
+    /// # Arguments
+    ///
+    /// * `address` — The freelancer address whose reputation record should be migrated.
+    ///
+    /// # Returns
+    ///
+    /// `true` if a migration was performed; `false` if the record was already at
+    /// [`REPUTATION_STORAGE_VERSION`] or no record existed (no migration needed).
+    ///
+    /// # Security
+    ///
+    /// This is a permissionless read-equivalent: it does not transfer funds,
+    /// change authorizations, or mutate business state beyond writing the version
+    /// marker. Pause and emergency checks are intentionally omitted so operators
+    /// can still migrate records during an incident pause.
+    pub fn migrate_reputation_storage(env: Env, address: Address) -> bool {
+        reputation_migration::migrate_reputation_storage_impl(&env, &address)
     }
 
     // -----------------------------------------------------------------------

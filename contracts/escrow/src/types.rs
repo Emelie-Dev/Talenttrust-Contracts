@@ -5,6 +5,17 @@ use soroban_sdk::{contracterror, contracttype, Address, String, Vec};
 #[allow(dead_code)]
 pub const CONTRACT_SUMMARY_SCHEMA_VERSION: u32 = 1;
 
+/// Current reputation storage schema version.
+///
+/// Increment this constant whenever the [`Reputation`] struct gains or removes
+/// fields, so the migration path can detect and upgrade stale on-chain layouts.
+///
+/// | Version | Description |
+/// |---------|-------------|
+/// | 1 (absent) | Original three-field layout: `completed_contracts`, `total_rating`, `last_rating`. |
+/// | 2 (current) | Same fields plus explicit `schema_version` marker written to storage. |
+pub const REPUTATION_STORAGE_VERSION: u32 = 2;
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MilestoneSummary {
@@ -74,6 +85,10 @@ pub enum DataKey {
     PendingReputationCredits(Address),
     Reputation(Address),
     ReputationComment(u32),
+    /// Monotonically-increasing schema version for reputation storage.
+    /// Absent means v1 (original layout). Present value equals
+    /// [`REPUTATION_STORAGE_VERSION`].
+    ReputationStorageVersion(Address),
     // Client migration
     PendingClientMigration(u32),
     // Protocol / governance
