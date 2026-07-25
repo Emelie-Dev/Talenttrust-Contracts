@@ -51,7 +51,15 @@
 #![allow(clippy::single_match)]
 #![allow(clippy::useless_conversion)]
 
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, Symbol, Vec};
+mod amount_validation;
+mod approvals;
+mod deposit;
+mod finalize;
+mod migration;
+mod status_index;
+mod ttl;
+mod types;
+mod utils;
 
 use crate::utils::now_seconds;
 use soroban_sdk::{
@@ -980,15 +988,19 @@ impl Escrow {
             let old_status = contract.status.clone();
             contract.status = ContractStatus::Completed;
             Self::grant_pending_reputation_credit(&env, &contract.freelancer);
+            ttl::store_milestones(&env, contract_id, &milestones);
+            env.storage()
+                .persistent()
+                .set(&DataKey::Contract(contract_id), &contract);
+            ttl::extend_contract_ttl(&env, contract_id);
+            status_index::update_status_index(&env, contract_id, &old_status, &contract.status);
+        } else {
+            ttl::store_milestones(&env, contract_id, &milestones);
+            env.storage()
+                .persistent()
+                .set(&DataKey::Contract(contract_id), &contract);
+            ttl::extend_contract_ttl(&env, contract_id);
         }
-
-        ttl::store_milestones(&env, contract_id, &milestones);
-        env.storage()
-            .persistent()
-            .set(&DataKey::Contract(contract_id), &contract);
-
-        // Extend TTL on contract write (milestone TTL already extended by store_milestones)
-        ttl::extend_contract_ttl(&env, contract_id);
 
         // ── Events ──────────────────────────────────────────────────────────
         //
@@ -1229,6 +1241,7 @@ impl Escrow {
         // Check if all unreleased milestones are refunded
         let all_refunded_or_released = milestones.iter().all(|m| m.released || m.refunded);
         if all_refunded_or_released {
+            let old_status = contract.status.clone();
             let all_refunded = milestones.iter().all(|m| m.refunded);
             if all_refunded {
                 contract.status = ContractStatus::Refunded;
@@ -1237,15 +1250,19 @@ impl Escrow {
                 contract.status = ContractStatus::Completed;
                 Self::grant_pending_reputation_credit(&env, &contract.freelancer);
             }
+            ttl::store_milestones(&env, contract_id, &milestones);
+            env.storage()
+                .persistent()
+                .set(&DataKey::Contract(contract_id), &contract);
+            ttl::extend_contract_ttl(&env, contract_id);
+            status_index::update_status_index(&env, contract_id, &old_status, &contract.status);
+        } else {
+            ttl::store_milestones(&env, contract_id, &milestones);
+            env.storage()
+                .persistent()
+                .set(&DataKey::Contract(contract_id), &contract);
+            ttl::extend_contract_ttl(&env, contract_id);
         }
-
-        ttl::store_milestones(&env, contract_id, &milestones);
-        env.storage()
-            .persistent()
-            .set(&DataKey::Contract(contract_id), &contract);
-
-        // Extend TTL on contract write (milestone TTL already extended by store_milestones)
-        ttl::extend_contract_ttl(&env, contract_id);
 
         // Emit `refunded` event after all state mutations succeed.
         //
@@ -1741,12 +1758,15 @@ impl Escrow {
             .refunded_amount
             .checked_add(refund_amount)
             .unwrap_or_else(|| env.panic_with_error(EscrowError::InsufficientFunds));
+        let old_status = contract.status.clone();
         contract.status = ContractStatus::Cancelled;
 
         env.storage()
             .persistent()
             .set(&DataKey::Contract(contract_id), &contract);
         ttl::extend_contract_ttl(&env, contract_id);
+
+        status_index::update_status_index(&env, contract_id, &old_status, &contract.status);
 
         env.events().publish(
             (symbol_short!("cancelled"), contract_id),
@@ -2338,6 +2358,7 @@ impl Escrow {
             _ => env.panic_with_error(Error::InvalidState),
         }
 
+        let old_status = contract.status.clone();
         contract.status = ContractStatus::Disputed;
         env.storage()
             .persistent()
@@ -2345,10 +2366,7 @@ impl Escrow {
 
         ttl::extend_contract_ttl(&env, contract_id);
 
-        // Persist the dispute record for the O(1) read view (issue #795).
-        // Done after the contract write and TTL bump so the read view can
-        // rely on storage being fully consistent before the event fires.
-        dispute::write_dispute_record(&env, contract_id, caller.clone());
+        status_index::update_status_index(&env, contract_id, &old_status, &contract.status);
 
         env.events().publish(
             (symbol_short!("dispute"), symbol_short!("opened")),
@@ -2448,6 +2466,7 @@ impl Escrow {
         contract.released_amount += freelancer_payout;
 
         // Set final status
+        let old_status = contract.status.clone();
         contract.status = dispute::final_status_after_resolution(&contract);
         if contract.status == ContractStatus::Completed {
             Self::grant_pending_reputation_credit(&env, &contract.freelancer);
@@ -2459,12 +2478,7 @@ impl Escrow {
 
         ttl::extend_contract_ttl(&env, contract_id);
 
-        // Update the persisted dispute record with the resolution side
-        // (issue #795). Reading-then-writing here is safe because
-        // `raise_dispute` always writes the record before any resolve can run,
-        // and `Self::require_not_finalized` rejects resolves after a final
-        // record is written.
-        dispute::update_dispute_record(&env, contract_id, arbiter.clone(), resolution.clone());
+        status_index::update_status_index(&env, contract_id, &old_status, &contract.status);
 
         env.events().publish(
             (symbol_short!("dispute"), symbol_short!("resolved")),
@@ -2474,42 +2488,53 @@ impl Escrow {
         true
     }
 
-    /// Return the persisted [`DisputeRecord`] for `contract_id`, if any.
+    /// Returns a paginated list of contract IDs currently in `status`.
     ///
-    /// This is the O(1) read-only view introduced by issue #795. It reuses the
-    /// stored [`DisputeRecord`](crate::DisputeRecord) rather than reconstructing
-    /// dispute state from [`crate::ContractStatus`], so callers see the full
-    /// lifecycle exactly as it was written by `raise_dispute` and
-    /// `resolve_dispute`.
+    /// Backed by a maintained `DataKey::StatusIndex(status_code)` persistent vector
+    /// that is updated on every status transition. Operators can cheaply answer
+    /// "which escrows are currently Disputed or Funded" without scanning the full
+    /// ID space.
+    ///
+    /// # Arguments
+    /// * `env`    — The Soroban environment
+    /// * `status` — The lifecycle state to enumerate
+    /// * `start`  — Zero-based offset into the index (not a contract ID)
+    /// * `limit`  — Maximum IDs to return; capped at `MAX_PAGE_LIMIT` (50)
     ///
     /// # Returns
-    /// - `Some(record)` carrying `raiser`, `raised_at_*`, and (if resolved)
-    ///   the `resolver`, `resolution`, and `resolved_at_*` fields.
-    /// - `None` for both unknown contracts and contracts that have never
-    ///   been disputed — neither case panics, matching the "sensible default"
-    ///   contract for the indexer surface.
+    /// A `Vec<u32>` of contract IDs in insertion order. Empty when `start` is
+    /// out of range or the index has no entries for `status`.
     ///
-    /// # Side effects
-    /// Extends the contract's persistent TTL on a successful read so
-    /// off-chain indexers can poll dispute state without re-raising it. The
-    /// entrypoint does not write any new record.
-    pub fn get_dispute_record(env: Env, contract_id: u32) -> Option<DisputeRecord> {
-        dispute::read_dispute_record(&env, contract_id)
+    /// # Auth
+    /// Auth-free and read-only; extends the index TTL on read.
+    pub fn list_contracts_by_status(
+        env: Env,
+        status: ContractStatus,
+        start: u32,
+        limit: u32,
+    ) -> Vec<u32> {
+        status_index::list_by_status(&env, &status, start, limit)
     }
 
-    /// Cheap, non-mutating existence probe mirroring [`Self::get_dispute_record`].
+    /// Returns a paginated list of contract IDs for a participant.
     ///
-    /// Returns `true` exactly when a [`DisputeRecord`] for `contract_id` is
-    /// currently live in persistent storage. Returns `false` for unknown
-    /// contracts and contracts that have never been disputed — both
-    /// indistinguishable from the caller's perspective.
+    /// Backed by `DataKey::ParticipantContracts(address, role)` written once
+    /// at contract creation.
     ///
-    /// # Security
-    /// No TTL extension: this probe cannot be abused to keep dispute records
-    /// alive. Callers that need to inspect the full record and want to bump
-    /// TTL should use [`Self::get_dispute_record`] instead.
-    pub fn has_dispute(env: Env, contract_id: u32) -> bool {
-        dispute::has_dispute_record(&env, contract_id)
+    /// * `role` — `0` for client, `1` for freelancer
+    /// * `start` — Zero-based offset into the list
+    /// * `limit` — Maximum IDs to return; capped at `MAX_PAGE_LIMIT` (50)
+    ///
+    /// # Auth
+    /// Auth-free and read-only; extends the index TTL on read.
+    pub fn list_contracts_by_participant(
+        env: Env,
+        participant: Address,
+        role: u32,
+        start: u32,
+        limit: u32,
+    ) -> Vec<u32> {
+        status_index::list_by_participant(&env, &participant, role, start, limit)
     }
 }
 

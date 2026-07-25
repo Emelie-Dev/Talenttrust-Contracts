@@ -1,6 +1,7 @@
 use crate::{
-    amount_validation, ttl, Contract, ContractStatus, DataKey, Error, Escrow, EscrowArgs,
-    EscrowClient, EscrowError, GovernedParameters, Milestone, ReleaseAuthorization, MAX_MILESTONES,
+    amount_validation, status_index, ttl, Contract, ContractStatus, DataKey, Error, Escrow,
+    EscrowArgs, EscrowClient, EscrowError, GovernedParameters, Milestone, ReleaseAuthorization,
+    MAX_MILESTONES,
 };
 use soroban_sdk::{contractimpl, symbol_short, Address, Env, Symbol, Vec};
 
@@ -169,6 +170,11 @@ impl Escrow {
             (symbol_short!("created"), id),
             (client, freelancer_addr, env.ledger().timestamp()),
         );
+
+        // Maintain participant and status indexes for paginated readers.
+        status_index::index_new_contract(&env, id, &ContractStatus::Created);
+        status_index::index_participant(&env, id, &contract.client, 0);
+        status_index::index_participant(&env, id, &contract.freelancer, 1);
 
         id
     }

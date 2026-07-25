@@ -197,3 +197,10 @@ pub fn extend_participant_contract_index_ttl(env: &Env, key: &crate::DataKey) {
         .persistent()
         .extend_ttl(key, PERSISTENT_BUMP_THRESHOLD, PERSISTENT_TTL_LEDGERS);
 }
+
+/// Extend TTL for a status index entry.
+pub fn extend_status_index_ttl(env: &Env, key: &crate::DataKey) {
+    env.storage()
+        .persistent()
+        .extend_ttl(key, PERSISTENT_BUMP_THRESHOLD, PERSISTENT_TTL_LEDGERS);
+}

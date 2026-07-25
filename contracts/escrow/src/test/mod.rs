@@ -25,6 +25,7 @@ mod events_boundaries;
 mod input_sanitization_amounts;
 mod input_sanitization_identities;
 mod mainnet_readiness;
+mod participant_index_pagination;
 mod pause_controls;
 mod persistence;
 mod refund;
