@@ -109,18 +109,6 @@ prop_compose! {
     }
 }
 
-/// Generate a valid split that sums exactly to `available`.
-prop_compose! {
-    fn valid_splits(available: i128)(
-        client_amount in 0i128..=available,
-    ) -> DisputeSplit {
-        DisputeSplit {
-            client_amount,
-            freelancer_amount: available - client_amount,
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Properties: resolution_payouts (pure arithmetic)
 // ---------------------------------------------------------------------------
@@ -263,12 +251,12 @@ proptest! {
         prop_assert_eq!(result, Err(Error::InvalidDisputeSplit),
             "should reject under-allocated sum");
 
-        // Reject non-conserving sum (over)
+        // Reject non-conserving sum (over): sum = available + 1 > available
         let result = resolution_payouts(
             &contract,
             &DisputeResolution::Split(DisputeSplit {
-                client_amount: available / 2,
-                freelancer_amount: available / 2 + 1,
+                client_amount: 0,
+                freelancer_amount: available + 1,
             }),
         );
         prop_assert_eq!(result, Err(Error::InvalidDisputeSplit),
