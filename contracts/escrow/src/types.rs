@@ -103,117 +103,60 @@ pub enum DataKey {
     AccumulatedProtocolFees,
     GovernedParameters,
     ReadinessChecklist,
-    // Finalization
-    Finalization(u32),
-    // Settlement token
-    SettlementToken,
+    // Configurable limits
+    MaxMilestones,
+    MaxEscrowStroops,
 }
 
 /// Canonical contract error type for all entrypoint-facing errors.
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
-pub enum Error {
-    /// The specified milestone index is out of bounds.
-    IndexOutOfBounds = 3,
-    /// The milestone has already been released.
-    AlreadyReleased = 4,
-    /// The refund request is empty.
-    EmptyRefundRequest = 6,
-    /// Duplicate milestone indices specified in the refund request.
-    DuplicateMilestoneInRefund = 7,
-    /// The milestone has already been refunded.
-    AlreadyRefunded = 8,
-    /// Insufficient funds available to perform the operation.
-    InsufficientFunds = 9,
-    /// The requested contract was not found.
-    ContractNotFound = 10,
-    /// The caller is not authorized for this operation.
-    UnauthorizedRole = 11,
-    /// The contract requires an arbiter address but none was provided.
-    MissingArbiter = 12,
-    /// The provided arbiter address is invalid (e.g. same as client or freelancer).
-    InvalidArbiter = 13,
-    /// The client and freelancer addresses are identical or invalid.
-    InvalidParticipants = 14,
-    /// The amount must be strictly greater than zero.
-    AmountMustBePositive = 15,
-    /// The contract is in an invalid state for this operation.
-    InvalidState = 16,
-    /// The milestone has already been released.
-    MilestoneAlreadyReleased = 17,
-    /// The milestone has already been approved.
-    AlreadyApproved = 18,
-    /// The milestone has not received sufficient approvals to release.
-    InsufficientApprovals = 20,
-    /// The freelancer address does not match the stored freelancer.
-    FreelancerMismatch = 21,
-    /// The rating value is outside the allowed range (1 to 5).
-    InvalidRating = 22,
-    /// Reputation has already been issued for this contract.
-    ReputationAlreadyIssued = 23,
-    /// The milestone list cannot be empty.
-    EmptyMilestones = 25,
-    /// The milestone amount is invalid.
-    InvalidMilestoneAmount = 26,
-    /// A contract with the specified ID already exists.
-    ContractIdCollision = 27,
-    /// The contract ID has overflowed the maximum limit.
-    ContractIdOverflow = 28,
-    /// The comment string is empty.
-    EmptyComment = 29,
-    /// The comment string exceeds the maximum length limit.
-    CommentTooLong = 30,
-    /// The participant address is invalid.
-    InvalidParticipant = 31,
-    /// The deposit amount is invalid.
-    InvalidDepositAmount = 32,
-    /// The milestone configuration is invalid.
-    InvalidMilestone = 33,
-    /// The contract has already been initialized.
-    AlreadyInitialized = 34,
-    /// Insufficient accumulated fees available for extraction.
-    InsufficientAccumulatedFees = 35,
-    /// The contract has not been initialized.
-    NotInitialized = 36,
-    /// The contract is currently paused.
-    ContractPaused = 37,
-    /// Emergency mode is currently active.
-    EmergencyActive = 38,
-    /// Self-rating is not allowed.
-    SelfRating = 39,
-    /// The contract has not been completed.
-    NotCompleted = 40,
-    /// The requested contract status transition is invalid.
-    InvalidStatusTransition = 41,
-    /// An arbiter is required for this operation.
-    ArbiterRequired = 42,
-    /// The dispute split percentage is invalid.
-    InvalidDisputeSplit = 43,
-    /// The operation would violate the core accounting invariant.
-    AccountingInvariantViolated = 44,
-    /// Checked arithmetic operation resulted in an overflow.
-    PotentialOverflow = 45,
-    /// The contract has already been finalized.
-    AlreadyFinalized = 46,
-    /// The contract has already been cancelled.
-    AlreadyCancelled = 50,
-    /// The work evidence string exceeds the maximum length limit.
-    EvidenceTooLong = 47,
-    /// The governance admin rotation timelock has not elapsed.
-    TimelockNotElapsed = 48,
-    /// The provided protocol parameters are invalid.
-    InvalidProtocolParameters = 49,
-    /// The escrow cap would be exceeded by this operation.
-    EscrowCapExceeded = 51,
-    /// No settlement token has been bound for custody transfers.
-    SettlementTokenNotConfigured = 52,
-    /// The milestone deadline has not yet passed.
-    MilestoneNotOverdue = 53,
-    /// The contract ID is out of valid bounds.
-    InvalidContractId = 54,
-    /// Arithmetic overflow occurred during reputation calculation.
-    ArithmeticOverflow = 55,
+pub enum EscrowError {
+    InvalidParticipant = 1,
+    EmptyMilestones = 2,
+    InvalidMilestoneAmount = 3,
+    InvalidDepositAmount = 4,
+    InvalidMilestone = 5,
+    UnauthorizedRole = 6,
+    InvalidStatusTransition = 7,
+    AlreadyCancelled = 8,
+    ContractNotFound = 9,
+    MilestonesAlreadyReleased = 10,
+    TooManyMilestones = 11,
+    NotCompleted = 12,
+    InvalidRating = 13,
+    DuplicateRating = 14,
+    AlreadyFinalized = 15,
+    NotReadyForFinalization = 16,
+    AlreadyReleased = 17,
+    InsufficientFunds = 18,
+    SelfRating = 19,
+    CommentTooLong = 20,
+    EmptyComment = 21,
+    AmountMustBePositive = 22,
+    FundingExceedsRequired = 23,
+    InvalidState = 24,
+    InsufficientEscrowBalance = 25,
+    MilestoneNotFound = 26,
+    AlreadyApproved = 27,
+    ReputationAlreadyIssued = 28,
+    // Pause / emergency controls
+    ContractPaused = 29,
+    EmergencyActive = 30,
+    NotInitialized = 31,
+    AlreadyInitialized = 32,
+    // Additional errors referenced in tests
+    FreelancerMismatch = 33,
+    EmptyRefundRequest = 34,
+    DuplicateMilestoneInRefund = 35,
+    PotentialOverflow = 36,
+    NonPositiveAmount = 37,
+    AmountExceedsMaximum = 38,
+    InvalidStroopPrecision = 39,
+    ExceedsContractMaximum = 40,
+    // Configurable limits
+    LimitOutOfRange = 41,
 }
 
 /// Contract lifecycle states

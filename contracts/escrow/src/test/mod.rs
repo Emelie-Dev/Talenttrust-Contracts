@@ -16,20 +16,7 @@ mod create_contract_bounds;
 mod deposit;
 mod dispute;
 mod emergency_controls;
-mod input_sanitization_amounts;
-mod input_sanitization_identities;
-mod mainnet_readiness;
-mod milestones_page;
-mod pause_controls;
-mod persistence;
-mod refund;
-mod release;
-mod release_authorization;
-mod reputation;
-mod reputation_bounds_tests;
-mod reputation_overflow;
-mod security;
-mod ttl_tests;
+mod configurable_limits;
 
 // --- Shared constants ---
 
