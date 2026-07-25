@@ -1,321 +1,180 @@
-use soroban_sdk::testutils::{Address as _, Ledger, LedgerInfo};
-use soroban_sdk::{vec, Address, Env};
+//! Boundary tests for [`Escrow::is_milestone_overdue`] (issue #652).
+//!
+//! `is_milestone_overdue` is the timeout-refund precondition. It documents a
+//! precise contract:
+//!
+//! - returns `false` for an unknown contract id,
+//! - returns `false` for a contract with no stored milestones,
+//! - returns `false` for an out-of-bounds milestone index,
+//! - returns `false` for an already-released milestone,
+//! - returns `false` for a milestone with `deadline == None`, and
+//! - for a milestone with a deadline, returns `true` only when `now > deadline`
+//!   (strictly greater), so at exactly the deadline (`now == deadline`) it
+//!   returns `false`.
+//!
+//! These tests pin every documented branch and the strict-inequality boundary
+//! using `env.ledger()` time control. Milestone state (deadline / released) is
+//! constructed directly in storage so the tests are independent of any
+//! deadline-setter entrypoint.
+//!
+//! # Security
+//! Overdue detection must not be tripped early: at exactly the deadline the
+//! milestone is not yet overdue, preventing a one-second-early timeout refund.
 
-use crate::{ContractStatus, Error, Escrow, EscrowClient, ReleaseAuthorization};
+#![cfg(test)]
 
-/// Helper: setup an initialized env with a funded contract where milestone 1 has a deadline.
-fn setup_funded_with_deadline(
-    env: &Env,
-    deadline_ts: u64,
-) -> (EscrowClient, Address, Address, u32) {
-    env.mock_all_auths();
+use soroban_sdk::{
+    testutils::{Address as _, Ledger},
+    Address, Env, Symbol, Vec as SorobanVec,
+};
 
-    let contract_id = env.register(Escrow, ());
-    let client = EscrowClient::new(env, &contract_id);
-    let admin = Address::generate(env);
-    client.initialize(&admin);
+use super::{create_contract, register_client};
+use crate::{DataKey, Milestone};
 
-    let client_addr = Address::generate(env);
-    let freelancer_addr = Address::generate(env);
-    let milestones = vec![env, 200_0000000_i128, 400_0000000_i128, 600_0000000_i128];
-    let deadlines = vec![env, 0_u64, deadline_ts, 0_u64];
-
-    let id = client.create_contract(
-        &client_addr,
-        &freelancer_addr,
-        &None,
-        &milestones,
-        &ReleaseAuthorization::ClientOnly,
-        &Some(deadlines),
-    );
-
-    client.deposit_funds(&id, &client_addr, &super::total_milestone_amount());
-
-    (client, client_addr, freelancer_addr, id)
-}
-
-fn set_time(env: &Env, ts: u64) {
-    env.ledger().set(LedgerInfo {
-        timestamp: ts,
-        ..Default::default()
+/// Set the ledger timestamp to an absolute number of seconds.
+fn set_now(env: &Env, secs: u64) {
+    env.ledger().with_mut(|li| {
+        li.timestamp = secs;
     });
 }
 
-// ─────── deadline NOT passed ─────────────────────────────────────────────
-
-#[test]
-fn claim_timeout_refund_fails_before_deadline() {
-    let env = Env::default();
-    let deadline_ts = 2000;
-
-    set_time(&env, 1000);
-    let (client, _client_addr, _freelancer, id) = setup_funded_with_deadline(&env, deadline_ts);
-
-    let result = client.try_claim_timeout_refund(&id, &1_u32);
-    super::assert_contract_error(result, Error::DeadlineNotPassed);
+/// Overwrite milestone `index`'s `deadline` and `released` flag directly in
+/// persistent storage, bypassing any setter entrypoint. The new state is
+/// observable through `is_milestone_overdue`.
+fn set_milestone_deadline_and_released(
+    env: &Env,
+    contract_addr: &Address,
+    contract_id: u32,
+    index: u32,
+    deadline: Option<u64>,
+    released: bool,
+) {
+    env.as_contract(contract_addr, || {
+        let key = (DataKey::Contract(contract_id), Symbol::new(env, "milestones"));
+        let mut milestones: SorobanVec<Milestone> =
+            env.storage().persistent().get(&key).unwrap();
+        let mut m = milestones.get(index).unwrap();
+        m.deadline = deadline;
+        m.released = released;
+        milestones.set(index, m);
+        env.storage().persistent().set(&key, &milestones);
+    });
 }
 
-#[test]
-fn claim_timeout_refund_fails_at_exact_deadline() {
-    let env = Env::default();
-    let deadline_ts = 2000;
-
-    set_time(&env, deadline_ts);
-    let (client, _client_addr, _freelancer, id) = setup_funded_with_deadline(&env, deadline_ts);
-
-    let result = client.try_claim_timeout_refund(&id, &1_u32);
-    super::assert_contract_error(result, Error::DeadlineNotPassed);
-}
-
-// ─────── deadline passed ─────────────────────────────────────────────────
+// ── Deadline boundary: now < / == / > deadline ────────────────────────────────
 
 #[test]
-fn claim_timeout_refund_succeeds_after_deadline() {
+fn is_milestone_overdue_false_when_now_before_deadline() {
     let env = Env::default();
-    let deadline_ts = 2000;
-
-    set_time(&env, deadline_ts + 1);
-    let (client, _client_addr, _freelancer, id) = setup_funded_with_deadline(&env, deadline_ts);
-
-    let refunded = client.claim_timeout_refund(&id, &1_u32);
-    assert_eq!(refunded, 400_0000000);
-
-    let milestones = client.get_milestones(&id);
-    let ms = milestones.get(1).unwrap();
-    assert!(ms.refunded);
-    assert!(!ms.released);
-
-    let contract = client.get_contract(&id);
-    assert_eq!(contract.refunded_amount, 400_0000000);
-    assert_eq!(contract.status, ContractStatus::Funded);
-}
-
-#[test]
-fn claim_timeout_refund_completes_contract_when_all_milestones_dealt() {
-    let env = Env::default();
-    let deadline_ts = 2000;
-
-    set_time(&env, 500);
-    let (client, client_addr, _freelancer, id) = setup_funded_with_deadline(&env, deadline_ts);
-
-    // Release milestones 0 and 2 (no deadline)
-    client.approve_milestone_release(&id, &client_addr, &0);
-    client.release_milestone(&id, &client_addr, &0);
-    client.approve_milestone_release(&id, &client_addr, &2);
-    client.release_milestone(&id, &client_addr, &2);
-
-    // Now timeout-refund milestone 1 after deadline
-    set_time(&env, deadline_ts + 1);
-    let refunded = client.claim_timeout_refund(&id, &1_u32);
-    assert_eq!(refunded, 400_0000000);
-
-    let contract = client.get_contract(&id);
-    assert_eq!(contract.status, ContractStatus::Completed);
-}
-
-// ─────── no deadline on milestone ────────────────────────────────────────
-
-#[test]
-fn claim_timeout_refund_fails_when_no_deadline_set() {
-    let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
-    let contract_id = env.register(Escrow, ());
-    let client = EscrowClient::new(&env, &contract_id);
-    let admin = Address::generate(&env);
-    client.initialize(&admin);
+    let client = register_client(&env);
+    let (_client_addr, _, id) = create_contract(&env, &client);
 
-    let client_addr = Address::generate(&env);
-    let freelancer_addr = Address::generate(&env);
-    let milestones = vec![&env, 100_i128];
-    let id = client.create_contract(
-        &client_addr,
-        &freelancer_addr,
-        &None,
-        &milestones,
-        &ReleaseAuthorization::ClientOnly,
-        &None,
+    let deadline = 1_000u64;
+    set_milestone_deadline_and_released(&env, &client.address, id, 0, Some(deadline), false);
+
+    set_now(&env, deadline - 1);
+    assert!(
+        !client.is_milestone_overdue(&id, &0),
+        "now < deadline must not be overdue"
     );
-    client.deposit_funds(&id, &client_addr, &100_i128);
-
-    let result = client.try_claim_timeout_refund(&id, &0_u32);
-    super::assert_contract_error(result, Error::DeadlineNotPassed);
 }
 
-// ─────── already released ───────────────────────────────────────────────
-
 #[test]
-fn claim_timeout_refund_fails_when_already_released() {
-    let env = Env::default();
-    let deadline_ts = 2000;
-
-    set_time(&env, 500);
-    let (client, client_addr, _freelancer, id) = setup_funded_with_deadline(&env, deadline_ts);
-
-    client.approve_milestone_release(&id, &client_addr, &1);
-    client.release_milestone(&id, &client_addr, &1);
-
-    set_time(&env, deadline_ts + 1);
-    let result = client.try_claim_timeout_refund(&id, &1_u32);
-    super::assert_contract_error(result, Error::AlreadyReleased);
-}
-
-// ─────── already refunded ───────────────────────────────────────────────
-
-#[test]
-fn claim_timeout_refund_fails_when_already_refunded() {
-    let env = Env::default();
-    let deadline_ts = 2000;
-
-    set_time(&env, deadline_ts + 1);
-    let (client, _client_addr, _freelancer, id) = setup_funded_with_deadline(&env, deadline_ts);
-
-    let _ = client.claim_timeout_refund(&id, &1_u32);
-
-    let result = client.try_claim_timeout_refund(&id, &1_u32);
-    super::assert_contract_error(result, Error::AlreadyRefunded);
-}
-
-// ─────── invalid index ──────────────────────────────────────────────────
-
-#[test]
-fn claim_timeout_refund_fails_out_of_bounds() {
-    let env = Env::default();
-    let deadline_ts = 2000;
-
-    set_time(&env, deadline_ts + 1);
-    let (client, _client_addr, _freelancer, id) = setup_funded_with_deadline(&env, deadline_ts);
-
-    let result = client.try_claim_timeout_refund(&id, &99_u32);
-    super::assert_contract_error(result, Error::IndexOutOfBounds);
-}
-
-// ─────── unauthorized caller ────────────────────────────────────────────
-
-#[test]
-fn claim_timeout_refund_fails_when_freelancer_calls() {
-    let env = Env::default();
-    let deadline_ts = 2000;
-
-    set_time(&env, deadline_ts + 1);
-    let (client, _client_addr, freelancer_addr, id) = setup_funded_with_deadline(&env, deadline_ts);
-
-    // Disable mock auth — Soroban will reject any unsigned call
-    env.mock_all_auths();
-
-    // Freelancer tries to claim timeout refund
-    let env2 = env.clone();
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let client2 = EscrowClient::new(&env2, &client.address.clone());
-        client2.claim_timeout_refund(&id, &1_u32);
-    }));
-    assert!(result.is_err(), "freelancer call should panic");
-}
-
-// ─────── pause gate ─────────────────────────────────────────────────────
-
-#[test]
-fn claim_timeout_refund_fails_when_paused() {
-    let env = Env::default();
-    let deadline_ts = 2000;
-
-    set_time(&env, deadline_ts + 1);
-    let (client, _client_addr, _freelancer, id) = setup_funded_with_deadline(&env, deadline_ts);
-
-    client.pause();
-
-    let result = client.try_claim_timeout_refund(&id, &1_u32);
-    super::assert_contract_error(result, crate::EscrowError::ContractPaused);
-}
-
-// ─────── non-terminal state check ───────────────────────────────────────
-
-#[test]
-fn claim_timeout_refund_fails_in_completed_state() {
-    let env = Env::default();
-    let deadline_ts = 2000;
-
-    set_time(&env, 500);
-    let (client, client_addr, _freelancer, id) = setup_funded_with_deadline(&env, deadline_ts);
-
-    // Release all milestones
-    for i in 0..3_u32 {
-        client.approve_milestone_release(&id, &client_addr, &i);
-        client.release_milestone(&id, &client_addr, &i);
-    }
-
-    set_time(&env, deadline_ts + 1);
-    let result = client.try_claim_timeout_refund(&id, &1_u32);
-    super::assert_contract_error(result, Error::InvalidState);
-}
-
-// ─────── multiple deadlines ─────────────────────────────────────────────
-
-#[test]
-fn claim_timeout_refund_works_only_on_individual_milestones() {
+fn is_milestone_overdue_false_at_exact_deadline() {
     let env = Env::default();
     env.mock_all_auths();
+    let client = register_client(&env);
+    let (_client_addr, _, id) = create_contract(&env, &client);
 
-    let contract_id = env.register(Escrow, ());
-    let client = EscrowClient::new(&env, &contract_id);
-    let admin = Address::generate(&env);
-    client.initialize(&admin);
+    let deadline = 1_000u64;
+    set_milestone_deadline_and_released(&env, &client.address, id, 0, Some(deadline), false);
 
-    let client_addr = Address::generate(&env);
-    let freelancer_addr = Address::generate(&env);
-    let milestones = vec![&env, 100_i128, 200_i128];
-    let deadlines = vec![&env, 3000_u64, 4000_u64];
-
-    set_time(&env, 1000);
-    let id = client.create_contract(
-        &client_addr,
-        &freelancer_addr,
-        &None,
-        &milestones,
-        &ReleaseAuthorization::ClientOnly,
-        &Some(deadlines),
+    // Strict-inequality boundary: at exactly the deadline it is NOT overdue.
+    set_now(&env, deadline);
+    assert!(
+        !client.is_milestone_overdue(&id, &0),
+        "now == deadline must not be overdue (uses strict >)"
     );
-    client.deposit_funds(&id, &client_addr, &300_i128);
-
-    // Only first milestone deadline passed
-    set_time(&env, 3500);
-    let r0 = client.claim_timeout_refund(&id, &0_u32);
-    assert_eq!(r0, 100_i128);
-
-    // Second deadline not yet passed
-    let result = client.try_claim_timeout_refund(&id, &1_u32);
-    super::assert_contract_error(result, Error::DeadlineNotPassed);
-
-    // After second deadline passes
-    set_time(&env, 5000);
-    let r1 = client.claim_timeout_refund(&id, &1_u32);
-    assert_eq!(r1, 200_i128);
-
-    let contract = client.get_contract(&id);
-    assert_eq!(contract.status, ContractStatus::Refunded);
 }
 
-// ─────── event emission ─────────────────────────────────────────────────
+#[test]
+fn is_milestone_overdue_true_one_second_past_deadline() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+    let (_client_addr, _, id) = create_contract(&env, &client);
+
+    let deadline = 1_000u64;
+    set_milestone_deadline_and_released(&env, &client.address, id, 0, Some(deadline), false);
+
+    set_now(&env, deadline + 1);
+    assert!(
+        client.is_milestone_overdue(&id, &0),
+        "now > deadline must be overdue"
+    );
+}
+
+// ── Short-circuit branches ────────────────────────────────────────────────────
 
 #[test]
-fn claim_timeout_refund_emits_event() {
+fn is_milestone_overdue_false_for_unknown_contract() {
     let env = Env::default();
-    let deadline_ts = 2000;
+    env.mock_all_auths();
+    let client = register_client(&env);
 
-    set_time(&env, deadline_ts + 1);
-    let (client, _client_addr, _freelancer, id) = setup_funded_with_deadline(&env, deadline_ts);
+    // No contract id 42 was ever allocated.
+    assert!(
+        !client.is_milestone_overdue(&42u32, &0),
+        "unknown contract id must not be overdue"
+    );
+}
 
-    client.claim_timeout_refund(&id, &1_u32);
+#[test]
+fn is_milestone_overdue_false_for_out_of_bounds_index() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+    let (_client_addr, _, id) = create_contract(&env, &client);
 
-    let events = env.events().all();
-    let last = events.last().unwrap();
-    let (_contract_ids, topics, _data) = last;
+    let len = client.get_milestones(&id).len();
+    set_now(&env, 10_000);
+    // Index == len (one past the last) and far beyond must both be false.
+    assert!(!client.is_milestone_overdue(&id, &len));
+    assert!(!client.is_milestone_overdue(&id, &(len + 7)));
+}
 
-    assert_eq!(
-        topics,
-        (
-            soroban_sdk::symbol_short!("timeout"),
-            soroban_sdk::symbol_short!("refund")
-        )
+#[test]
+fn is_milestone_overdue_false_for_already_released_milestone() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+    let (_client_addr, _, id) = create_contract(&env, &client);
+
+    let deadline = 1_000u64;
+    // Deadline is in the past, but the milestone is already released.
+    set_milestone_deadline_and_released(&env, &client.address, id, 0, Some(deadline), true);
+
+    set_now(&env, deadline + 5_000);
+    assert!(
+        !client.is_milestone_overdue(&id, &0),
+        "released milestone is never overdue, even past its deadline"
+    );
+}
+
+#[test]
+fn is_milestone_overdue_false_when_deadline_is_none() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+    let (_client_addr, _, id) = create_contract(&env, &client);
+
+    // Contracts are created with deadline == None by default; assert explicitly.
+    set_milestone_deadline_and_released(&env, &client.address, id, 0, None, false);
+
+    set_now(&env, 1_000_000);
+    assert!(
+        !client.is_milestone_overdue(&id, &0),
+        "milestone with no deadline is never overdue"
     );
 }

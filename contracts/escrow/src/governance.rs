@@ -1,18 +1,34 @@
-use crate::{
-    DataKey, Escrow, EscrowArgs, EscrowClient, EscrowError, GovernedParameters, ReadinessChecklist,
-};
-use soroban_sdk::{contractimpl, symbol_short, Address, Env, Symbol};
+//! Governance and protocol-configuration entrypoints.
+//!
+//! This module owns admin-controlled persistent configuration:
+//! `DataKey::Admin` for authorization, `ProtocolFeeBps` for release fees,
+//! `GovernedParameters` for escrow caps, `ReadinessChecklist` for deployment
+//! readiness state, and `PendingAdmin` for two-step admin rotation proposals.
+//! Money movement for protocol-fee withdrawal remains in the crate root because
+//! it performs settlement-token transfers.
 
-/// Governance-related privileged operations and audit events.
-///
-/// This module implements a small set of admin-facing functions that
-/// produce parseable events for off-chain indexers. Events emitted here
-/// follow the existing convention of short `symbol_short!` topics used by
-/// other lifecycle events (e.g. `init`, `paused`, `emergency`).
-#[contractimpl]
-impl super::Escrow {
-    /// Set the protocol fee (basis points). Emits an event with
-    /// `(old_bps, new_bps, admin, timestamp)` under topic `protocol_fee_bps`.
+use crate::ttl::ADMIN_ROTATION_MIN_DELAY_LEDGERS;
+use crate::{
+    DataKey, Error, Escrow, EscrowArgs, EscrowClient, GovernedParameters, PendingAdminProposal,
+    ReadinessChecklist,
+};
+use soroban_sdk::{symbol_short, Address, Env, Symbol};
+
+#[soroban_sdk::contractimpl]
+impl Escrow {
+    /// Set the protocol fee in basis points.
+    ///
+    /// Admin-gated: the stored admin (under [`DataKey::Admin`]) must authorize
+    /// the call and the contract must be initialized.
+    ///
+    /// `new_bps` must be `≤ 10_000` (100%). The fee takes effect immediately for
+    /// the next `release_milestone` call.
+    ///
+    /// See [`docs/escrow/protocol-fees.md`](../../../docs/escrow/protocol-fees.md) for
+    /// the basis-point model, fee formula, accrual storage, and withdrawal flow.
+    ///
+    /// # Events
+    /// `(Symbol("protocol_fee_bps"),)` → `(old_bps, new_bps, admin, timestamp)`
     pub fn set_protocol_fee_bps(env: Env, new_bps: u32) -> bool {
         Self::require_initialized(&env);
         let admin: Address = env

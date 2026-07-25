@@ -1,10 +1,6 @@
 use super::{complete_contract, create_contract, default_milestones, register_client, total_milestone_amount};
 use crate::{EscrowError, ReleaseAuthorization, types::DataKey};
-use soroban_sdk::{
-    symbol_short,
-    testutils::{Address as _, Events as _},
-    Address, Env, Symbol, TryFromVal,
-};
+use soroban_sdk::{symbol_short, testutils::Address as _, Address, Env};
 
 #[test]
 fn multiple_contracts_for_same_freelancer() {
@@ -70,13 +66,7 @@ fn deposit_funds_emits_structured_deposit_event() {
     assert!(client.deposit_funds(&contract_id, &client_addr, &total_milestone_amount()));
 
     let events = env.events().all();
-    assert!(events.iter().any(|event| {
-        event.1.len() == 2
-            && Symbol::try_from_val(&env, &event.1.get(0).unwrap())
-                .ok()
-                .as_ref()
-                == Some(&symbol_short!("deposit"))
-    }));
+    assert!(events.iter().any(|event| event.0 == symbol_short!("deposit")));
 }
 
 #[test]

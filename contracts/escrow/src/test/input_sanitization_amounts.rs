@@ -2,7 +2,6 @@
 //!
 //! Tests all money-like values for positivity, max bounds, and stroop precision rules.
 
-use soroban_sdk::testutils::Ledger as _;
 use soroban_sdk::{testutils::Address as _, token::StellarAssetClient, vec, Address, Env};
 
 use crate::{
@@ -36,7 +35,6 @@ fn setup(env: &Env) -> (EscrowClient<'_>, Address, Address) {
 #[should_panic]
 fn test_create_contract_panics_when_single_milestone_is_zero() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     let (client, hiring_party, service_provider) = setup(&env);
     let milestones = vec![&env, 0_i128];
     client.create_contract(
@@ -52,7 +50,6 @@ fn test_create_contract_panics_when_single_milestone_is_zero() {
 #[should_panic]
 fn test_create_contract_panics_when_single_milestone_is_negative() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     let (client, hiring_party, service_provider) = setup(&env);
     let milestones = vec![&env, -1_i128];
     client.create_contract(
@@ -68,7 +65,6 @@ fn test_create_contract_panics_when_single_milestone_is_negative() {
 #[should_panic]
 fn test_create_contract_panics_when_any_milestone_is_non_positive() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     let (client, hiring_party, service_provider) = setup(&env);
     let milestones = vec![&env, 100_0000000_i128, 0_i128, 200_0000000_i128];
     client.create_contract(
@@ -83,7 +79,6 @@ fn test_create_contract_panics_when_any_milestone_is_non_positive() {
 #[test]
 fn test_create_contract_accepts_all_positive_milestones() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     let (client, hiring_party, service_provider) = setup(&env);
     let milestones = vec![&env, 100_0000000_i128, 1_i128, 999_0000000_i128];
     let id = client.create_contract(
@@ -100,7 +95,6 @@ fn test_create_contract_accepts_all_positive_milestones() {
 #[should_panic]
 fn test_create_contract_panics_when_total_exceeds_maximum() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     let (client, hiring_party, service_provider) = setup(&env);
     let milestones = vec![&env, 600_000_0000000_i128, 500_000_0000000_i128]; // 6M + 5M > 1M max
     client.create_contract(
@@ -116,7 +110,6 @@ fn test_create_contract_panics_when_total_exceeds_maximum() {
 #[should_panic]
 fn test_deposit_funds_panics_on_zero_amount() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     let (client, hiring_party, service_provider) = setup(&env);
     let milestones = vec![&env, 100_0000000_i128];
     let contract_id = client.create_contract(
@@ -133,7 +126,6 @@ fn test_deposit_funds_panics_on_zero_amount() {
 #[should_panic]
 fn test_deposit_funds_panics_on_negative_amount() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     let (client, hiring_party, service_provider) = setup(&env);
     let milestones = vec![&env, 100_0000000_i128];
     let contract_id = client.create_contract(
@@ -150,7 +142,6 @@ fn test_deposit_funds_panics_on_negative_amount() {
 #[should_panic]
 fn test_deposit_funds_panics_when_exceeding_contract_maximum() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     let (client, hiring_party, service_provider) = setup(&env);
     let milestones = vec![&env, 500_0000000_i128];
     let contract_id = client.create_contract(
@@ -166,7 +157,6 @@ fn test_deposit_funds_panics_when_exceeding_contract_maximum() {
 #[test]
 fn test_deposit_funds_accepts_valid_amounts() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     let (client, hiring_party, service_provider) = setup(&env);
     let milestones = vec![&env, 100_0000000_i128, 200_0000000_i128];
     let contract_id = client.create_contract(

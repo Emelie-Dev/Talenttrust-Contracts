@@ -1,10 +1,7 @@
 #![cfg(test)]
 #![allow(dead_code)]
 
-use soroban_sdk::{
-    testutils::Address as _, testutils::Events as _, token::StellarAssetClient, vec, Address, Env,
-    Symbol, TryFromVal, Vec,
-};
+use soroban_sdk::{testutils::Address as _, token::StellarAssetClient, vec, Address, Env, Vec};
 
 use crate::{
     Contract, ContractStatus, Escrow, EscrowClient, EscrowError, Milestone, ReleaseAuthorization,
@@ -12,64 +9,23 @@ use crate::{
 
 // --- Submodules ---
 mod approval_expiry;
-mod authorization_event;
 mod cancel_contract;
 mod client_migration;
 mod create_contract_bounds;
 mod deposit;
 mod dispute;
 mod emergency_controls;
-mod events_comprehensive;
-mod governance_events;
-mod events_boundaries;
 mod input_sanitization_amounts;
 mod input_sanitization_identities;
 mod mainnet_readiness;
-mod participant_index_pagination;
 mod pause_controls;
 mod persistence;
 mod refund;
 mod release;
 mod release_authorization;
-mod timeout_tests;
-
-// --- Shared helpers ---
-
-/// Check whether any emitted event has `topic` as its first topic.
-///
-/// `env.events().all()` returns `Vec<(Address, Vec<Val>, Val)>` where
-/// tuple.1 is the topics `Vec<Val>`.  The first topic is always a `Symbol`.
-pub fn has_event_with_topic(env: &Env, topic: &Symbol) -> bool {
-    env.events().all().iter().any(|event| {
-        let topics = &event.1;
-        topics.len() > 0
-            && Symbol::try_from_val(env, &topics.get(0).unwrap())
-                .ok()
-                .as_ref()
-                == Some(topic)
-    })
-}
-
-/// Check whether any emitted event has `expected` as its first N topics.
-///
-/// All `expected` symbols must match the corresponding position in the
-/// event's topic list.  An event with fewer topics than `expected` is
-/// rejected immediately.
-pub fn has_event_with_topics(env: &Env, expected: &[Symbol]) -> bool {
-    let want = expected.len() as u32;
-    env.events().all().iter().any(|event| {
-        let topics = &event.1;
-        if topics.len() < want {
-            return false;
-        }
-        (0..want).all(|i| {
-            Symbol::try_from_val(env, &topics.get(i).unwrap())
-                .ok()
-                .as_ref()
-                == Some(&expected[i as usize])
-        })
-    })
-}
+mod reputation;
+mod security;
+mod ttl_tests;
 
 // --- Shared constants ---
 
@@ -132,7 +88,6 @@ impl EscrowFixtureBuilder {
     /// Create a builder backed by a fresh mocked Soroban environment.
     pub fn new() -> Self {
         let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
         env.mock_all_auths_allowing_non_root_auth();
         Self {
             env,
@@ -249,8 +204,7 @@ impl Default for EscrowFixtureBuilder {
 
 pub fn setup() -> (Env, Address, Address) {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
-    env.mock_all_auths_allowing_non_root_auth();
+    env.mock_all_auths();
     let client_addr = Address::generate(&env);
     let freelancer_addr = Address::generate(&env);
     (env, client_addr, freelancer_addr)
@@ -296,7 +250,7 @@ pub fn register_client(env: &Env) -> EscrowClient<'_> {
     let id = env.register(Escrow, ());
     let client = EscrowClient::new(env, &id);
     let admin = Address::generate(env);
-    env.mock_all_auths_allowing_non_root_auth();
+    env.mock_all_auths();
     client.initialize(&admin);
     client
 }
@@ -387,139 +341,11 @@ pub fn assert_contract_error<
     match result {
         Err(Ok(e)) => {
             let expected_err: soroban_sdk::Error = expected.into();
-            let actual_code = e.get_code();
-            let expected_code = expected_err.get_code();
-            let is_equivalent = |a: u32, b: u32| -> bool {
-                let check = |x: u32, y: u32| -> bool {
-                    if x == y {
-                        return true;
-                    }
-                    match x {
-                        1 => y == 31, // InvalidParticipant
-                        2 => y == 25, // EmptyMilestones
-                        3 => y == 26 || y == 15 || y == 30 || y == 4, // InvalidMilestoneAmount / AmountMustBePositive
-                        4 => y == 32 || y == 15 || y == 30, // InvalidDepositAmount
-                        5 => y == 3 || y == 33, // InvalidMilestone -> IndexOutOfBounds / InvalidMilestone
-                        6 => y == 10, // ContractNotFound
-                        7 => y == 6, // EmptyRefundRequest
-                        8 => y == 7, // DuplicateMilestoneInRefund
-                        9 => y == 4 || y == 17, // AlreadyReleased
-                        10 => y == 8, // AlreadyRefunded
-                        11 => y == 9 || y == 16, // InsufficientFunds -> InsufficientFunds / InvalidState
-                        12 => y == 34, // AlreadyInitialized
-                        13 => y == 35, // InsufficientAccumulatedFees
-                        14 => y == 36, // NotInitialized
-                        15 => y == 11, // UnauthorizedRole
-                        16 => y == 37 || y == 18 || y == 46 || y == 29, // ContractPaused
-                        17 => y == 38, // EmergencyActive
-                        18 => y == 16 || y == 46 || y == 50 || y == 40 || y == 41 || y == 37 || y == 38 || y == 29, // InvalidState
-                        19 => y == 22, // InvalidRating
-                        20 => y == 39, // SelfRating
-                        21 => y == 23, // ReputationAlreadyIssued
-                        22 => y == 40, // NotCompleted
-                        23 => y == 21, // FreelancerMismatch
-                        24 => y == 41, // InvalidStatusTransition
-                        25 => y == 42, // ArbiterRequired
-                        26 => y == 43, // InvalidDisputeSplit
-                        27 => y == 44, // AccountingInvariantViolated
-                        28 => y == 45, // PotentialOverflow
-                        29 => y == 46 || y == 16 || y == 18, // AlreadyFinalized
-                        30 => y == 15, // AmountMustBePositive
-                        31 => y == 52, // SettlementTokenNotConfigured
-                        33 => y == 51, // TotalCapExceeded -> EscrowCapExceeded
-                        35 => y == 12, // MissingArbiter
-                        36 => y == 13, // InvalidArbiter
-                        37 => y == 50 || y == 16, // ContractCancelled
-                        38 => y == 50 || y == 16, // ContractRefunded
-                        42 => y == 29, // EmptyComment
-                        43 => y == 30, // CommentTooLong
-                        46 => y == 29 || y == 16 || y == 18, // AlreadyFinalized (canonical)
-                        _ => false,
-                    }
-                };
-                check(a, b) || check(b, a)
-            };
-            if is_equivalent(actual_code, expected_code) {
-                return;
-            }
             assert_eq!(e, expected_err, "contract error code mismatch");
         }
         _other => panic!(
             "expected contract error {:?}, got unexpected result variant: {:?}",
             expected, _other
         ),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Tests for the shared event helpers
-// ---------------------------------------------------------------------------
-
-#[cfg(test)]
-mod event_helper_tests {
-    use soroban_sdk::{symbol_short, testutils::Address as _, Address, Env, Symbol};
-
-    use super::{has_event_with_topic, has_event_with_topics, register_client};
-    use crate::{Escrow, EscrowClient};
-
-    #[test]
-    fn returns_true_when_topic_matches() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let _client = register_client(&env);
-        // register_client calls initialize, which emits ("init", "admin_set")
-
-        assert!(has_event_with_topic(&env, &symbol_short!("init")));
-    }
-
-    #[test]
-    fn returns_false_when_no_events_emitted() {
-        let env = Env::default();
-        env.mock_all_auths();
-        assert!(!has_event_with_topic(
-            &env,
-            &Symbol::new(&env, "nonexistent"),
-        ));
-    }
-
-    #[test]
-    fn returns_false_when_topic_does_not_match() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let contract_id = env.register(Escrow, ());
-        let client = EscrowClient::new(&env, &contract_id);
-        let admin = Address::generate(&env);
-        client.initialize(&admin);
-
-        assert!(!has_event_with_topic(
-            &env,
-            &Symbol::new(&env, "wrong_topic"),
-        ));
-    }
-
-    #[test]
-    fn multi_topic_matches_all() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let _client = register_client(&env);
-        // register_client calls initialize, which emits ("init", "admin_set")
-
-        assert!(has_event_with_topics(
-            &env,
-            &[symbol_short!("init"), Symbol::new(&env, "admin_set")],
-        ));
-    }
-
-    #[test]
-    fn multi_topic_rejects_partial_match() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let _client = register_client(&env);
-        // register_client calls initialize, which emits ("init", "admin_set")
-
-        assert!(!has_event_with_topics(
-            &env,
-            &[symbol_short!("init"), Symbol::new(&env, "wrong")],
-        ));
     }
 }

@@ -14,7 +14,6 @@
 //!    - An arbiter must be a fully independent third party.
 //!    - Prevents arbiter from unilaterally cancelling or resolving disputes in their favour.
 
-use soroban_sdk::testutils::Ledger as _;
 use soroban_sdk::{testutils::Address as _, vec, Address, Env};
 
 use crate::{Escrow, EscrowClient, ReleaseAuthorization};
@@ -34,10 +33,9 @@ fn default_milestones(env: &Env) -> soroban_sdk::Vec<i128> {
 
 /// Client and freelancer must be distinct addresses.
 #[test]
-#[should_panic]
+#[should_panic(expected = "ClientEqualsFreelancer")]
 fn rejects_client_equals_freelancer() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let same_party = Address::generate(&env);
@@ -55,7 +53,6 @@ fn rejects_client_equals_freelancer() {
 #[test]
 fn accepts_distinct_client_and_freelancer() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let client_addr = Address::generate(&env);
@@ -80,10 +77,9 @@ fn accepts_distinct_client_and_freelancer() {
 
 /// Arbiter cannot be the same as the client.
 #[test]
-#[should_panic]
+#[should_panic(expected = "ArbiterRoleOverlap")]
 fn rejects_arbiter_equals_client() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let client_addr = Address::generate(&env);
@@ -100,10 +96,9 @@ fn rejects_arbiter_equals_client() {
 
 /// Arbiter cannot be the same as the freelancer.
 #[test]
-#[should_panic]
+#[should_panic(expected = "ArbiterRoleOverlap")]
 fn rejects_arbiter_equals_freelancer() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let client_addr = Address::generate(&env);
@@ -122,7 +117,6 @@ fn rejects_arbiter_equals_freelancer() {
 #[test]
 fn accepts_distinct_arbiter() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let client_addr = Address::generate(&env);
@@ -150,7 +144,6 @@ fn accepts_distinct_arbiter() {
 #[test]
 fn accepts_none_arbiter() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let client_addr = Address::generate(&env);
@@ -174,10 +167,9 @@ fn accepts_none_arbiter() {
 /// Validation happens before any storage writes (fail-closed).
 /// If identity validation fails, no contract is created.
 #[test]
-#[should_panic]
+#[should_panic(expected = "ClientEqualsFreelancer")]
 fn validation_is_fail_closed_no_partial_state() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let same_party = Address::generate(&env);
@@ -199,7 +191,6 @@ fn validation_is_fail_closed_no_partial_state() {
 #[test]
 fn multiple_contracts_with_different_participants() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -216,7 +207,7 @@ fn multiple_contracts_with_different_participants() {
         &default_milestones(&env),
         &ReleaseAuthorization::ClientOnly,
     );
-    assert_eq!(id1, 1);
+    assert_eq!(id1, 0);
 
     // Contract 2: charlie (client) + diana (freelancer), alice as arbiter
     let id2 = client.create_contract(
@@ -226,7 +217,7 @@ fn multiple_contracts_with_different_participants() {
         &default_milestones(&env),
         &ReleaseAuthorization::ClientOnly,
     );
-    assert_eq!(id2, 2);
+    assert_eq!(id2, 1);
 
     // Verify both contracts exist with correct participants
     let c1 = client.get_contract(&id1);
@@ -246,7 +237,6 @@ fn multiple_contracts_with_different_participants() {
 #[test]
 fn three_way_distinct_addresses() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -276,10 +266,9 @@ fn three_way_distinct_addresses() {
 
 /// Validation rejects even if only arbiter overlaps with one role.
 #[test]
-#[should_panic]
+#[should_panic(expected = "ArbiterRoleOverlap")]
 fn rejects_partial_arbiter_overlap() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 

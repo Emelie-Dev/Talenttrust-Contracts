@@ -1,168 +1,17 @@
-//! Dispute payout arithmetic, final-status helpers, and dispute-record storage.
+//! Dispute payout arithmetic and final-status helpers.
 //!
-//! This module is the single owner of dispute-related helpers:
-//!
-//! - [`resolution_payouts`] computes how the available escrow balance should be
-//!   split for a [`DisputeResolution`].
-//! - [`final_status_after_resolution`] decides whether dispute settlement leaves
-//!   the contract as [`ContractStatus::Completed`] or [`ContractStatus::Refunded`].
-//! - [`write_dispute_record`], [`update_dispute_record`], [`read_dispute_record`],
-//!   and [`has_dispute_record`] own persistence of the
-//!   [`DisputeRecord`](crate::DisputeRecord) under
-//!   [`DataKey::Dispute`](crate::DataKey::Dispute).
-//!
-//! The root `raise_dispute` / `resolve_dispute` entrypoints live in
-//! `contracts/escrow/src/lib.rs` and delegate record persistence to this
-//! module so the read view ([`crate::Escrow::get_dispute_record`]) can read
-//! stored values without recomputation.
+//! This module is intentionally storage-free. It computes how the currently
+//! available escrow balance should be split for a `DisputeResolution` and tells
+//! the root dispute entrypoint whether the contract should end as `Completed`
+//! or `Refunded`. The root entrypoints own authentication, token transfer, event
+//! publication, and writes to `DataKey::Contract(contract_id)`.
 
 use soroban_sdk::{contractimpl, symbol_short, Address, Env};
 
 use crate::{
-    safe_add_amounts, Contract, ContractStatus, DataKey, Escrow, EscrowArgs, EscrowClient,
-    EscrowError,
+    safe_add_amounts, Contract, ContractStatus, DataKey, DisputeResolution, DisputeSplit, Error,
+    Escrow, EscrowArgs, EscrowClient,
 };
-use soroban_sdk::{contractimpl, symbol_short, Address, Env, Symbol};
-
-#[contractimpl]
-impl Escrow {
-    /// Raise a dispute on a funded escrow. Only the client or freelancer may call this.
-    pub fn raise_dispute(env: Env, contract_id: u32, caller: Address) -> bool {
-        if env
-            .storage()
-            .persistent()
-            .get::<_, bool>(&DataKey::Paused)
-            .unwrap_or(false)
-        {
-            env.panic_with_error(EscrowError::ContractPaused);
-        }
-        caller.require_auth();
-
-        let key = DataKey::Contract(contract_id);
-        let mut contract: Contract = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
-
-        if caller != contract.client && caller != contract.freelancer {
-            env.panic_with_error(EscrowError::UnauthorizedRole);
-        }
-        if contract.arbiter.is_none() {
-            env.panic_with_error(EscrowError::ArbiterRequired);
-        }
-        if contract.status != ContractStatus::Funded
-            && contract.status != ContractStatus::PartiallyFunded
-        {
-            env.panic_with_error(EscrowError::InvalidStatusTransition);
-        }
-
-        let old_status = contract.status;
-        contract.status = ContractStatus::Disputed;
-
-        env.storage().persistent().set(&key, &contract);
-
-        env.events().publish(
-            (symbol_short!("dispute"), contract_id),
-            (caller, env.ledger().timestamp()),
-        );
-        true
-    }
-
-    /// Resolve a disputed escrow and distribute the remaining balance according to the resolution.
-    pub fn resolve_dispute(
-        env: Env,
-        contract_id: u32,
-        arbiter: Address,
-        resolution: DisputeResolution,
-    ) -> bool {
-        if env
-            .storage()
-            .persistent()
-            .get::<_, bool>(&DataKey::Paused)
-            .unwrap_or(false)
-        {
-            env.panic_with_error(EscrowError::ContractPaused);
-        }
-        arbiter.require_auth();
-
-        let key = DataKey::Contract(contract_id);
-        let mut contract: Contract = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
-
-        if contract.status != ContractStatus::Disputed {
-            env.panic_with_error(EscrowError::InvalidStatusTransition);
-        }
-        if contract.arbiter.clone() != Some(arbiter.clone()) {
-            env.panic_with_error(EscrowError::UnauthorizedRole);
-        }
-
-        let old_status = contract.status;
-        let (client_payout, freelancer_payout) = resolution_payouts(&contract, &resolution)
-            .unwrap_or_else(|err| env.panic_with_error(err));
-
-        contract.refunded_amount = safe_add_amounts(contract.refunded_amount, client_payout)
-            .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
-        contract.released_amount = safe_add_amounts(contract.released_amount, freelancer_payout)
-            .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
-
-        if safe_add_amounts(contract.released_amount, contract.refunded_amount)
-            != Some(contract.funded_amount)
-        {
-            env.panic_with_error(EscrowError::AccountingInvariantViolated);
-        }
-
-        contract.status = final_status_after_resolution(&contract);
-        if contract.status == ContractStatus::Completed {
-            let pending_key = DataKey::PendingReputationCredits(contract.freelancer.clone());
-            let pending: i128 = env.storage().persistent().get(&pending_key).unwrap_or(0);
-            env.storage().persistent().set(&pending_key, &(pending + 1));
-        }
-
-        env.storage().persistent().set(&key, &contract);
-
-        env.events().publish(
-            (symbol_short!("dsp_res"), contract_id),
-            (
-                arbiter,
-                resolution.code(),
-                client_payout,
-                freelancer_payout,
-                env.ledger().timestamp(),
-            ),
-        );
-        true
-    }
-}
-
-/// Resolution selected by the assigned arbiter for a disputed escrow.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum DisputeResolution {
-    /// Refund all remaining escrowed funds to the client.
-    FullRefund,
-    /// Refund 70% of the remaining balance to the client and release 30% to the freelancer.
-    PartialRefund,
-    /// Release all remaining escrowed funds to the freelancer.
-    FullPayout,
-    /// Apply a custom split of the remaining balance.
-    Split(i128, i128),
-}
-
-#[contractimpl]
-impl Escrow {
-    pub fn raise_dispute(env: Env, contract_id: u32, caller: Address) -> bool {
-        Self::require_not_paused(&env);
-        caller.require_auth();
-
-        let mut contract: Contract = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Contract(contract_id))
-            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
 
 // ---------------------------------------------------------------------------
 // resolution_payouts: pure arithmetic for dispute payout calculations
@@ -177,11 +26,7 @@ impl Escrow {
 /// # Errors
 /// - `AccountingInvariantViolated` if available would be negative (corrupted state)
 /// - `PotentialOverflow` if intermediate calculations overflow
-/// - `InvalidDisputeSplit` for Split variant with:
-///   - Negative legs
-///   - Any leg exceeding `MAX_SINGLE_AMOUNT_STROOPS`
-///   - Individual leg exceeding the available balance
-///   - Non-conserving sum (total != available)
+/// - `InvalidDisputeSplit` for Split variant with negative legs or non-conserving sum
 pub fn resolution_payouts(
     contract: &Contract,
     resolution: &DisputeResolution,
@@ -210,12 +55,6 @@ pub fn resolution_payouts(
             if split.client_amount < 0 || split.freelancer_amount < 0 {
                 return Err(Error::InvalidDisputeSplit);
             }
-            // Bounds validation: reject split amounts that exceed the maximum single amount
-            if split.client_amount > MAX_SINGLE_AMOUNT_STROOPS
-                || split.freelancer_amount > MAX_SINGLE_AMOUNT_STROOPS
-            {
-                return Err(Error::InvalidDisputeSplit);
-            }
             // Issue #572: Reject split resolution whose components are individually within but jointly exceed balance
             if split.client_amount > available || split.freelancer_amount > available {
                 return Err(Error::InvalidDisputeSplit);
@@ -242,83 +81,9 @@ pub fn final_status_after_resolution(contract: &Contract) -> ContractStatus {
     }
 }
 
-#[contractimpl]
-impl Escrow {
-    /// Raise a dispute on a funded or partially funded escrow.
-    /// Only the client or freelancer may call this.
-    pub fn raise_dispute(env: Env, contract_id: u32, caller: Address) -> bool {
-        Self::require_not_paused(&env);
-        caller.require_auth();
-
-        let key = DataKey::Contract(contract_id);
-        let mut contract = env
-            .storage()
-            .persistent()
-            .get::<_, Contract>(&key)
-            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
-
-        if caller != contract.client && caller != contract.freelancer {
-            env.panic_with_error(Error::UnauthorizedRole);
-        }
-        if contract.arbiter.is_none() {
-            env.panic_with_error(Error::ArbiterRequired);
-        }
-        if contract.status != ContractStatus::Funded
-            && contract.status != ContractStatus::PartiallyFunded
-        {
-            env.panic_with_error(Error::InvalidState);
-        }
-
-        contract.status = ContractStatus::Disputed;
-        env.storage().persistent().set(&key, &contract);
-
-        env.events().publish(
-            (symbol_short!("dispute"), contract_id),
-            (caller, env.ledger().timestamp()),
-        );
-        true
-    }
-
-    /// Resolve a disputed escrow. Only the assigned arbiter may call this.
-    pub fn resolve_dispute(
-        env: Env,
-        contract_id: u32,
-        arbiter: Address,
-        resolution: DisputeResolution,
-    ) -> bool {
-        Self::require_not_paused(&env);
-        arbiter.require_auth();
-
-        let key = DataKey::Contract(contract_id);
-        let mut contract = env
-            .storage()
-            .persistent()
-            .get::<_, Contract>(&key)
-            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
-
-        if contract.status != ContractStatus::Disputed {
-            env.panic_with_error(Error::InvalidState);
-        }
-        if contract.arbiter.clone() != Some(arbiter.clone()) {
-            env.panic_with_error(Error::UnauthorizedRole);
-        }
-
-        let (client_payout, freelancer_payout) = resolution_payouts(&contract, &resolution)
-            .unwrap_or_else(|err| env.panic_with_error(err));
-
-        contract.refunded_amount = safe_add_amounts(contract.refunded_amount, client_payout)
-            .unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
-        contract.released_amount = safe_add_amounts(contract.released_amount, freelancer_payout)
-            .unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
-
-        if safe_add_amounts(contract.released_amount, contract.refunded_amount)
-            != Some(contract.funded_amount)
-        {
-            env.panic_with_error(Error::AccountingInvariantViolated);
-        }
-
-        contract.status = final_status_after_resolution(&contract);
-        env.storage().persistent().set(&key, &contract);
+// ---------------------------------------------------------------------------
+// raise_dispute / resolve_dispute entrypoints
+// ---------------------------------------------------------------------------
 
 // Dispute entrypoints are implemented in `contracts/escrow/src/lib.rs`.
 // This module retains dispute-related helpers only.

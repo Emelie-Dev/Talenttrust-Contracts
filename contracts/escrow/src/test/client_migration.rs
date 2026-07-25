@@ -11,10 +11,7 @@ use soroban_sdk::{
     Address, Env, IntoVal, Symbol, TryFromVal, Val,
 };
 
-use super::{
-    assert_contract_error, create_contract, has_event_with_topic, register_client,
-    total_milestone_amount,
-};
+use super::{assert_contract_error, create_contract, register_client, total_milestone_amount};
 
 // ---------------------------------------------------------------------------
 // Helper: forcibly inject a contract status via env.as_contract.
@@ -31,6 +28,28 @@ fn set_escrow_status(env: &Env, escrow_addr: &Address, id: u32, status: Contract
 }
 
 // ---------------------------------------------------------------------------
+// Helper: check whether any emitted event has a given Symbol as its first topic.
+//
+// env.events().all() returns Vec<(Address, Vec<Val>, Val)>:
+//   tuple.0 = the contract Address that emitted the event
+//   tuple.1 = the topics Vec<Val>  ← Symbol is topics[0]
+//   tuple.2 = the data Val
+// ---------------------------------------------------------------------------
+
+fn has_event_with_topic(env: &Env, topic: &Symbol) -> bool {
+    env.events().all().iter().any(|event| {
+        let topics = &event.1;
+        topics.len() > 0 && {
+            if let Ok(sym) = Symbol::try_from_val(env, &topics.get(0).unwrap()) {
+                sym == *topic
+            } else {
+                false
+            }
+        }
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Test 1 – propose → accept updates contract.client and emits expected events
 // ---------------------------------------------------------------------------
 
@@ -44,7 +63,6 @@ fn set_escrow_status(env: &Env, escrow_addr: &Address, id: u32, status: Contract
 #[ignore]
 fn propose_and_accept_updates_client_and_emits_events() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
 
     // Set max_entry_ttl high enough so the migration proposal's
@@ -118,7 +136,6 @@ fn propose_and_accept_updates_client_and_emits_events() {
 #[test]
 fn non_proposed_address_cannot_accept_migration() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -157,7 +174,6 @@ fn non_proposed_address_cannot_accept_migration() {
 #[test]
 fn expired_proposal_cannot_be_accepted() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
 
     // Set max_entry_ttl high enough so the proposal can be stored without hitting the cap.
@@ -221,7 +237,6 @@ fn expired_proposal_cannot_be_accepted() {
 #[test]
 fn proposal_accepted_at_window_boundary_succeeds() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
 
     // Give temporary entries enough head-room to live for the full TTL.
@@ -284,7 +299,6 @@ fn proposal_accepted_at_window_boundary_succeeds() {
 #[test]
 fn migration_blocked_on_completed_contract() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -307,7 +321,6 @@ fn migration_blocked_on_completed_contract() {
 #[test]
 fn migration_blocked_on_cancelled_contract() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -327,7 +340,6 @@ fn migration_blocked_on_cancelled_contract() {
 #[test]
 fn migration_blocked_on_refunded_contract() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -349,7 +361,6 @@ fn migration_blocked_on_refunded_contract() {
 #[test]
 fn migration_blocked_on_disputed_contract() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -375,7 +386,6 @@ fn migration_blocked_on_disputed_contract() {
 #[test]
 fn cannot_propose_freelancer_as_new_client() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -392,7 +402,6 @@ fn cannot_propose_freelancer_as_new_client() {
 #[test]
 fn cannot_propose_current_client_as_new_client() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -413,7 +422,6 @@ fn cannot_propose_current_client_as_new_client() {
 #[test]
 fn only_current_client_may_propose_migration() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -443,7 +451,6 @@ fn only_current_client_may_propose_migration() {
 #[test]
 fn duplicate_proposal_while_pending_is_rejected() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -468,7 +475,6 @@ fn duplicate_proposal_while_pending_is_rejected() {
 #[test]
 fn double_accept_after_migration_accepted_fails() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -493,7 +499,6 @@ fn double_accept_after_migration_accepted_fails() {
 #[test]
 fn migration_allowed_on_created_status() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -508,7 +513,6 @@ fn migration_allowed_on_created_status() {
 #[test]
 fn migration_allowed_on_partially_funded_status() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -529,7 +533,6 @@ fn migration_allowed_on_partially_funded_status() {
 #[test]
 fn migration_allowed_on_funded_status() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -551,7 +554,6 @@ fn migration_allowed_on_funded_status() {
 #[test]
 fn pending_migration_expiry_matches_ttl_constant() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 

@@ -1,4 +1,3 @@
-use soroban_sdk::testutils::Ledger as _;
 use super::{
     assert_contract_error, complete_contract, create_contract, default_milestones,
     generated_participants, register_client, total_milestone_amount, MILESTONE_ONE,
@@ -18,7 +17,6 @@ fn milestone_symbol(env: &Env) -> Symbol {
 #[test]
 fn finalize_completed_contract_allows_arbiter_finalizer() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (client_addr, _freelancer_addr, arbiter_addr, contract_id) =
@@ -52,7 +50,6 @@ fn finalize_completed_contract_allows_arbiter_finalizer() {
 #[test]
 fn participant_metadata_and_pending_credits_persist_until_reputation_is_issued() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -71,7 +68,6 @@ fn participant_metadata_and_pending_credits_persist_until_reputation_is_issued()
 #[test]
 fn try_get_contract_reports_missing_state_without_mutating_storage() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -92,7 +88,6 @@ fn try_get_contract_reports_missing_state_without_mutating_storage() {
 #[test]
 fn finalize_allows_freelancer_finalizer() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (_client_addr, freelancer_addr, contract_id) = super::complete_contract(&env, &client);
@@ -109,7 +104,6 @@ fn finalize_allows_freelancer_finalizer() {
 #[test]
 fn finalize_rejects_unauthorized_finalizer() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (_client_addr, _freelancer_addr, contract_id) = super::complete_contract(&env, &client);
@@ -126,7 +120,6 @@ fn finalize_rejects_unauthorized_finalizer() {
 #[test]
 fn finalize_rejects_created_contract() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (client_addr, _freelancer_addr, contract_id) = create_contract(&env, &client);
@@ -142,7 +135,6 @@ fn finalize_rejects_created_contract() {
 #[test]
 fn finalize_rejects_funded_contract() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (client_addr, _freelancer_addr, contract_id) = create_contract(&env, &client);
@@ -163,7 +155,6 @@ fn finalize_rejects_funded_contract() {
 #[test]
 fn finalize_is_idempotent_guarded() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (client_addr, _freelancer_addr, contract_id) = super::complete_contract(&env, &client);
@@ -179,7 +170,6 @@ fn finalize_is_idempotent_guarded() {
 #[test]
 fn release_milestone_rejects_after_finalization() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (client_addr, _freelancer_addr, contract_id) = super::complete_contract(&env, &client);
@@ -196,7 +186,6 @@ fn release_milestone_rejects_after_finalization() {
 #[test]
 fn refund_unreleased_milestones_rejects_after_finalization() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (client_addr, _freelancer_addr, contract_id) = super::complete_contract(&env, &client);
@@ -204,14 +193,18 @@ fn refund_unreleased_milestones_rejects_after_finalization() {
     assert!(client.finalize_contract(&contract_id, &client_addr));
 
     let res = client.try_refund_unreleased_milestones(&contract_id, &vec![&env, 0u32]);
-    super::assert_contract_error(res, Error::AlreadyFinalized);
+    match res {
+        Err(Ok(e)) => {
+            assert_eq!(e, soroban_sdk::Error::from(EscrowError::AlreadyFinalized));
+        }
+        other => panic!("expected contract error AlreadyFinalized, got {:?}", other),
+    }
 }
 
 /// deposit_funds is rejected after finalization.
 #[test]
 fn deposit_funds_rejects_after_finalization() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (client_addr, _freelancer_addr, contract_id) = super::complete_contract(&env, &client);
@@ -228,7 +221,6 @@ fn deposit_funds_rejects_after_finalization() {
 #[test]
 fn approve_milestone_release_rejects_after_finalization() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (client_addr, _freelancer_addr, contract_id) = super::complete_contract(&env, &client);
@@ -245,7 +237,6 @@ fn approve_milestone_release_rejects_after_finalization() {
 #[test]
 fn get_finalization_record_returns_none_for_unfinalized() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (_client_addr, _freelancer_addr, contract_id) = super::complete_contract(&env, &client);
@@ -257,7 +248,6 @@ fn get_finalization_record_returns_none_for_unfinalized() {
 #[test]
 fn get_finalization_record_returns_none_for_missing_contract() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -268,7 +258,6 @@ fn get_finalization_record_returns_none_for_missing_contract() {
 #[test]
 fn pause_blocks_finalization() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (client_addr, _freelancer_addr, contract_id) = super::complete_contract(&env, &client);
@@ -285,7 +274,6 @@ fn pause_blocks_finalization() {
 #[test]
 fn finalize_completed_with_mixed_releases_and_refunds() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
 
     env.mock_all_auths();
     let client = register_client(&env);
@@ -335,7 +323,6 @@ fn finalize_completed_with_mixed_releases_and_refunds() {
 #[test]
 fn get_contract_panics_for_unknown_id() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -347,7 +334,6 @@ fn get_contract_panics_for_unknown_id() {
 #[test]
 fn get_contract_panics_for_zero_id_when_no_zero_contract() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -361,7 +347,6 @@ fn get_contract_panics_for_zero_id_when_no_zero_contract() {
 #[test]
 fn get_contract_returns_record_for_valid_id() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (client_addr, freelancer_addr, contract_id) = create_contract(&env, &client);
@@ -384,7 +369,6 @@ fn get_contract_returns_record_for_valid_id() {
 #[test]
 fn get_contract_reflects_deposit_and_release_state() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (client_addr, _freelancer_addr, contract_id) = create_contract(&env, &client);
@@ -412,12 +396,10 @@ fn get_contract_reflects_deposit_and_release_state() {
 #[test]
 fn get_contract_observations_are_pure() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (client_addr, _freelancer_addr, contract_id) = create_contract(&env, &client);
     assert!(client.deposit_funds(&contract_id, &client_addr, &total_milestone_amount()));
-    client.approve_milestone_release(&contract_id, &client_addr, &0);
     assert!(client.release_milestone(&contract_id, &client_addr, &0));
 
     let initial = client.get_contract(&contract_id);
@@ -446,7 +428,6 @@ fn get_contract_observations_are_pure() {
 #[test]
 fn get_milestones_panics_for_unknown_id() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -458,7 +439,6 @@ fn get_milestones_panics_for_unknown_id() {
 #[test]
 fn get_milestones_panics_for_zero_id_when_no_zero_contract() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -472,7 +452,6 @@ fn get_milestones_panics_for_zero_id_when_no_zero_contract() {
 #[test]
 fn get_milestones_returns_vector_for_valid_id() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (_client_addr, _freelancer_addr, contract_id) = create_contract(&env, &client);
@@ -496,12 +475,10 @@ fn get_milestones_returns_vector_for_valid_id() {
 #[test]
 fn get_milestones_observations_are_pure() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (client_addr, _freelancer_addr, contract_id) = create_contract(&env, &client);
     assert!(client.deposit_funds(&contract_id, &client_addr, &total_milestone_amount()));
-    client.approve_milestone_release(&contract_id, &client_addr, &0);
     assert!(client.release_milestone(&contract_id, &client_addr, &0));
 
     let initial = client.get_milestones(&contract_id);
@@ -520,22 +497,26 @@ fn get_milestones_observations_are_pure() {
 #[test]
 fn get_refundable_balance_panics_for_unknown_id() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
-    assert_contract_error(client.try_get_refundable_balance(&999), Error::ContractNotFound);
+    match client.try_get_refundable_balance(&999) {
+        Err(Ok(e)) => assert_eq!(e, soroban_sdk::Error::from(Error::ContractNotFound)),
+        other => panic!("expected ContractNotFound, got {:?}", other),
+    }
 }
 
 /// `get_refundable_balance` panics with `ContractNotFound` for the zero id.
 #[test]
 fn get_refundable_balance_panics_for_zero_id() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
-    assert_contract_error(client.try_get_refundable_balance(&0), Error::ContractNotFound);
+    match client.try_get_refundable_balance(&0) {
+        Err(Ok(e)) => assert_eq!(e, soroban_sdk::Error::from(Error::ContractNotFound)),
+        other => panic!("expected ContractNotFound, got {:?}", other),
+    }
 }
 
 // ── get_refundable_balance: success ───────────────────────────────────────────
@@ -545,7 +526,6 @@ fn get_refundable_balance_panics_for_zero_id() {
 #[test]
 fn get_refundable_balance_is_zero_for_unfunded_contract() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (_client_addr, _freelancer_addr, contract_id) = create_contract(&env, &client);
@@ -557,7 +537,6 @@ fn get_refundable_balance_is_zero_for_unfunded_contract() {
 #[test]
 fn get_refundable_balance_equals_funded_amount_pre_release() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (client_addr, _freelancer_addr, contract_id) = create_contract(&env, &client);
@@ -573,12 +552,10 @@ fn get_refundable_balance_equals_funded_amount_pre_release() {
 #[test]
 fn get_refundable_balance_subtracts_released_amount() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (client_addr, _freelancer_addr, contract_id) = create_contract(&env, &client);
     assert!(client.deposit_funds(&contract_id, &client_addr, &total_milestone_amount()));
-    client.approve_milestone_release(&contract_id, &client_addr, &0);
     assert!(client.release_milestone(&contract_id, &client_addr, &0));
 
     let expected = total_milestone_amount() - MILESTONE_ONE;
@@ -590,7 +567,6 @@ fn get_refundable_balance_subtracts_released_amount() {
 #[test]
 fn get_refundable_balance_is_zero_after_full_release() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -603,12 +579,10 @@ fn get_refundable_balance_is_zero_after_full_release() {
 #[test]
 fn get_refundable_balance_observations_are_pure() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (client_addr, _freelancer_addr, contract_id) = create_contract(&env, &client);
     assert!(client.deposit_funds(&contract_id, &client_addr, &total_milestone_amount()));
-    client.approve_milestone_release(&contract_id, &client_addr, &0);
     assert!(client.release_milestone(&contract_id, &client_addr, &0));
 
     let initial = client.get_refundable_balance(&contract_id);
@@ -625,7 +599,6 @@ fn get_refundable_balance_observations_are_pure() {
 #[test]
 fn get_milestone_approvals_returns_none_when_absent() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (client_addr, _freelancer_addr, contract_id) = create_contract(&env, &client);
@@ -641,7 +614,6 @@ fn get_milestone_approvals_returns_none_when_absent() {
 #[test]
 fn get_milestone_approvals_returns_none_for_unknown_id() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -653,7 +625,6 @@ fn get_milestone_approvals_returns_none_for_unknown_id() {
 #[test]
 fn get_milestone_approvals_returns_some_after_recorded() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (client_addr, _freelancer_addr, contract_id) = create_contract(&env, &client);
@@ -685,7 +656,6 @@ fn get_milestone_approvals_returns_some_after_recorded() {
 /// a known sequence number so we can advance it deterministically.
 fn setup_ttl_env() -> Env {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.ledger().with_mut(|li| {
         li.max_entry_ttl = ttl::LEDGERS_PER_DAY * 60;
         li.min_persistent_entry_ttl = ttl::LEDGERS_PER_DAY * 60;
@@ -821,11 +791,6 @@ fn get_work_evidence_read_extends_persistent_ttl() {
             .sequence_number
             .saturating_add(initial_ttl.saturating_sub(bump_threshold) + 1);
     });
-    env.as_contract(&client.address, || {
-        env.storage()
-            .instance()
-            .extend_ttl(ttl::PERSISTENT_TTL_LEDGERS as u32, ttl::PERSISTENT_TTL_LEDGERS as u32);
-    });
 
     let result = client.get_work_evidence(&contract_id, &0);
     assert_eq!(result, Some(ev.clone()));
@@ -843,11 +808,6 @@ fn get_work_evidence_read_extends_persistent_ttl() {
 
     env.ledger().with_mut(|li| {
         li.sequence_number = li.sequence_number.saturating_add(extension - 1);
-    });
-    env.as_contract(&client.address, || {
-        env.storage()
-            .instance()
-            .extend_ttl(ttl::PERSISTENT_TTL_LEDGERS as u32, ttl::PERSISTENT_TTL_LEDGERS as u32);
     });
 
     let result_after = client.get_work_evidence(&contract_id, &0);
@@ -910,7 +870,6 @@ fn get_refundable_balance_read_extends_persistent_ttl() {
 #[test]
 fn read_getters_fail_for_arbitrary_unknown_id() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -937,13 +896,28 @@ fn read_getters_fail_for_arbitrary_unknown_id() {
         client.try_get_milestones(&4_242),
         EscrowError::ContractNotFound,
     );
-    assert_contract_error(
-        client.try_get_refundable_balance(&4_242),
-        EscrowError::ContractNotFound,
-    );
+    match client.try_get_refundable_balance(&4_242) {
+        Err(Ok(e)) => assert_eq!(e, soroban_sdk::Error::from(EscrowError::ContractNotFound)),
+        other => panic!("expected ContractNotFound, got {:?}", other),
+    };
 
     // State flags must remain unchanged after the failed reads.
     env.as_contract(&client.address, || {
+        let has_initialized = env.storage().persistent().has(&crate::DataKey::Initialized);
+        let has_admin = env.storage().persistent().has(&crate::DataKey::Admin);
+        let has_paused = env.storage().persistent().has(&crate::DataKey::Paused);
+        let has_emergency = env.storage().persistent().has(&crate::DataKey::Emergency);
+        let was_paused = client.is_paused();
+        let was_emergency = client.is_emergency();
+
+        // Invalid id 4_242 — no getter may mutate stored state.
+        assert_contract_error(client.try_get_contract(&4_242), Error::ContractNotFound);
+        assert_contract_error(client.try_get_milestones(&4_242), Error::ContractNotFound);
+        match client.try_get_refundable_balance(&4_242) {
+            Err(Ok(e)) => assert_eq!(e, soroban_sdk::Error::from(Error::ContractNotFound)),
+            other => panic!("expected ContractNotFound, got {:?}", other),
+        };
+
         // State flags must remain unchanged after the failed reads.
         assert_eq!(
             env.storage().persistent().has(&crate::DataKey::Initialized),
@@ -969,7 +943,6 @@ fn read_getters_fail_for_arbitrary_unknown_id() {
 #[test]
 fn get_contract_summary_works_as_expected() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -1064,7 +1037,6 @@ fn read_getters_succeed_after_creating_contract_at_zero_index() {
     // verifying reads work end-to-end. Contract id 0 occurs only when no prior
     // contract was allocated, which is the default fresh-env case.
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -1107,7 +1079,6 @@ fn read_getters_succeed_after_creating_contract_at_zero_index() {
 fn read_getters_unchanged_after_pause() {
     // Pause mutates `Paused`; read getters must remain available and correct.
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -1131,14 +1102,16 @@ fn read_getters_unchanged_after_pause() {
     // Not-found assertions still hold while paused.
     assert_contract_error(client.try_get_contract(&9999), Error::ContractNotFound);
     assert_contract_error(client.try_get_milestones(&9999), Error::ContractNotFound);
-    assert_contract_error(client.try_get_refundable_balance(&9999), Error::ContractNotFound);
+    match client.try_get_refundable_balance(&9999) {
+        Err(Ok(e)) => assert_eq!(e, soroban_sdk::Error::from(Error::ContractNotFound)),
+        other => panic!("expected ContractNotFound, got {:?}", other),
+    };
 }
 
 /// Finalization writes a round-tripped snapshot of milestone summaries and derived totals.
 #[test]
 fn finalize_round_trips_milestone_summaries_and_totals() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (client_addr, freelancer_addr, contract_id) = super::complete_contract(&env, &client);
@@ -1155,7 +1128,6 @@ fn finalize_round_trips_milestone_summaries_and_totals() {
 #[test]
 fn double_finalize_rejected() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (client_addr, _, contract_id) = super::complete_contract(&env, &client);
@@ -1168,7 +1140,6 @@ fn double_finalize_rejected() {
 #[test]
 fn milestone_symbol_helper_matches_expected() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     let helper_symbol = milestone_symbol(&env);
     let expected_symbol = Symbol::new(&env, "milestones");
     assert_eq!(helper_symbol, expected_symbol);

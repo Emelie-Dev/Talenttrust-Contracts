@@ -1,4 +1,3 @@
-use soroban_sdk::testutils::Ledger as _;
 use super::{default_milestones, generated_participants, register_client, total_milestones};
 use crate::{Error, ReleaseAuthorization};
 use soroban_sdk::{testutils::Address as _, Env};
@@ -6,7 +5,6 @@ use soroban_sdk::{testutils::Address as _, Env};
 #[test]
 fn test_only_client_can_deposit_funds() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
 
     let client = register_client(&env);
@@ -27,7 +25,6 @@ fn test_only_client_can_deposit_funds() {
 #[test]
 fn test_freelancer_cannot_approve_milestone_release() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
 
     let client = register_client(&env);
@@ -50,7 +47,6 @@ fn test_freelancer_cannot_approve_milestone_release() {
 #[test]
 fn test_freelancer_cannot_release_milestone() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
 
     let client = register_client(&env);
@@ -74,7 +70,6 @@ fn test_freelancer_cannot_release_milestone() {
 #[test]
 fn test_only_client_can_issue_reputation() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
 
     let client = register_client(&env);
@@ -103,7 +98,6 @@ fn test_only_client_can_issue_reputation() {
 #[test]
 fn test_issue_reputation_rejects_freelancer_mismatch() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
 
     let client = register_client(&env);
@@ -133,7 +127,6 @@ fn test_issue_reputation_rejects_freelancer_mismatch() {
 #[test]
 fn test_create_rejects_arbiter_modes_without_arbiter() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
 
     let client = register_client(&env);
@@ -152,7 +145,6 @@ fn test_create_rejects_arbiter_modes_without_arbiter() {
 #[test]
 fn test_create_rejects_invalid_arbiter_role_overlap() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
 
     let client = register_client(&env);
@@ -172,7 +164,6 @@ fn test_create_rejects_invalid_arbiter_role_overlap() {
 #[should_panic]
 fn test_create_contract_requires_authentication_of_roles() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     let client = register_client(&env);
     let (client_addr, freelancer_addr, _arbiter_addr) = generated_participants(&env);
 
@@ -189,7 +180,6 @@ fn test_create_contract_requires_authentication_of_roles() {
 #[test]
 fn test_create_rejects_same_client_and_freelancer() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (client_addr, _freelancer_addr, _arbiter_addr) = generated_participants(&env);
@@ -207,7 +197,6 @@ fn test_create_rejects_same_client_and_freelancer() {
 #[test]
 fn test_create_rejects_empty_milestones() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (client_addr, freelancer_addr, _arbiter_addr) = generated_participants(&env);
@@ -226,7 +215,6 @@ fn test_create_rejects_empty_milestones() {
 #[test]
 fn test_deposit_rejects_non_positive_amount() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (client_addr, freelancer_addr, _arbiter_addr) = generated_participants(&env);
@@ -246,7 +234,6 @@ fn test_deposit_rejects_non_positive_amount() {
 #[test]
 fn test_deposit_rejects_when_contract_not_created() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (client_addr, freelancer_addr, _arbiter_addr) = generated_participants(&env);
@@ -267,7 +254,6 @@ fn test_deposit_rejects_when_contract_not_created() {
 #[test]
 fn test_approve_requires_funded_state() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (client_addr, freelancer_addr, _arbiter_addr) = generated_participants(&env);
@@ -287,7 +273,6 @@ fn test_approve_requires_funded_state() {
 #[test]
 fn test_approve_rejects_already_released_milestone() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (client_addr, freelancer_addr, _arbiter_addr) = generated_participants(&env);
@@ -311,7 +296,6 @@ fn test_approve_rejects_already_released_milestone() {
 #[test]
 fn test_approve_rejects_duplicate_client_approval() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (client_addr, freelancer_addr, _arbiter_addr) = generated_participants(&env);
@@ -333,7 +317,6 @@ fn test_approve_rejects_duplicate_client_approval() {
 #[test]
 fn test_approve_rejects_duplicate_arbiter_approval() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (client_addr, freelancer_addr, arbiter_addr) = generated_participants(&env);
@@ -355,7 +338,6 @@ fn test_approve_rejects_duplicate_arbiter_approval() {
 #[test]
 fn test_release_requires_funded_state() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (client_addr, freelancer_addr, _arbiter_addr) = generated_participants(&env);
@@ -375,7 +357,6 @@ fn test_release_requires_funded_state() {
 #[test]
 fn test_release_rejects_already_released_milestone() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (client_addr, freelancer_addr, _arbiter_addr) = generated_participants(&env);
@@ -398,7 +379,6 @@ fn test_release_rejects_already_released_milestone() {
 #[test]
 fn test_issue_reputation_rejects_invalid_rating() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (client_addr, freelancer_addr, _arbiter_addr) = generated_participants(&env);
@@ -426,7 +406,6 @@ fn test_issue_reputation_rejects_invalid_rating() {
 #[test]
 fn test_issue_reputation_requires_completed_contract() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (client_addr, freelancer_addr, _arbiter_addr) = generated_participants(&env);
@@ -446,7 +425,6 @@ fn test_issue_reputation_requires_completed_contract() {
 #[test]
 fn test_issue_reputation_rejects_duplicate_issuance() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (client_addr, freelancer_addr, _arbiter_addr) = generated_participants(&env);
@@ -475,7 +453,6 @@ fn test_issue_reputation_rejects_duplicate_issuance() {
 #[test]
 fn test_client_and_arbiter_mode_rejects_third_party_approval() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (client_addr, freelancer_addr, arbiter_addr) = generated_participants(&env);
@@ -497,7 +474,6 @@ fn test_client_and_arbiter_mode_rejects_third_party_approval() {
 #[test]
 fn test_arbiter_only_flow_enforces_arbiter_approval_and_release() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (client_addr, freelancer_addr, arbiter_addr) = generated_participants(&env);

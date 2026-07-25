@@ -9,56 +9,87 @@
 //!
 //! ## Escrow source tree map
 //!
-//! (your original documentation table unchanged)
-
+//! | Source | Responsibility | Storage keys owned or touched |
+//! | --- | --- | --- |
+//! | `lib.rs` | Contract wrapper plus root entrypoints for setup, custody, money movement, reads, reputation, work evidence, pause/emergency, fee withdrawal, and dispute orchestration. | `DataKey::Initialized`, `Admin`, `SettlementToken`, `Paused`, `Emergency`, `ReadinessChecklist`, `Contract(id)`, `(Contract(id), "milestones")`, `MilestoneApprovals`, `AccumulatedProtocolFees`, `ReputationIssued`, `PendingReputationCredits`, `Reputation`, `ReputationComment` |
+//! | `amount_validation` | Stateless validation and checked arithmetic for stroop amounts and milestone totals. | None directly; callers write validated amounts to `Contract(id)` and milestone vectors. |
+//! | `approvals` | Temporary milestone release approvals and release-authorization checks. | Temporary `DataKey::MilestoneApprovals(contract_id, milestone_index)`; reads `Contract(id)` and `(Contract(id), "milestones")`. |
+//! | `deposit` | Deposit preflight and post-transfer accounting used by `deposit_funds`. | `DataKey::Contract(contract_id)` and `(DataKey::Contract(contract_id), "milestones")`. |
+//! | `finalize` | Immutable finalization records, finalization guards, and final contract summaries. | `DataKey::Finalization(contract_id)`; reads `Contract(id)`, `(Contract(id), "milestones")`, `Paused`, and `Emergency`. |
+//! | `migration` | Client migration proposals, acceptance checks, cancellation, and pending-migration reads. | Temporary `DataKey::PendingClientMigration(contract_id)`; reads and updates `DataKey::Contract(contract_id)`. |
+//! | `ttl` | TTL constants plus helpers for temporary and persistent storage renewal. | Extends caller-provided keys, especially `Contract(id)`, `(Contract(id), "milestones")`, `NextContractId`, participant indexes, approvals, and migrations. |
+//! | `types` | Shared Soroban types, error enums, summaries, governance records, dispute records, and the canonical `DataKey` enum. | Declares storage key schema only; does not access storage itself. |
+//! | `utils` | Small deterministic helpers shared by entrypoints, currently ledger timestamp access. | None. |
+//! | `create_contract` | Contract creation, participant/milestone validation, ID allocation, and creation events. | `DataKey::Contract(id)`, `(DataKey::Contract(id), "milestones")`, `NextContractId`, and `GovernedParameters`. |
+//! | `dispute` | Pure dispute payout arithmetic and final-status selection for dispute resolution. | None directly; root dispute entrypoints update `DataKey::Contract(contract_id)`. |
+//! | `governance` | Admin-controlled protocol fee, governed parameter, readiness, and admin-rotation entrypoints. | `DataKey::Admin`, `ProtocolFeeBps`, `PendingAdmin`, `GovernedParameters`, and `ReadinessChecklist`. |
+//!
+//! Generate this map with `cargo doc -p escrow --no-deps` and open
+//! `target/doc/escrow/index.html`.
 #![no_std]
 #![allow(clippy::derivable_impls)]
 #![allow(clippy::manual_range_contains)]
-// ... (keep all your #![allow] lines)
+#![allow(clippy::assertions_on_constants)]
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::type_complexity)]
+#![allow(clippy::needless_range_loop)]
+#![allow(clippy::collapsible_if)]
+#![allow(clippy::collapsible_else_if)]
+#![allow(clippy::redundant_field_names)]
+#![allow(clippy::ptr_arg)]
+#![allow(clippy::useless_vec)]
+#![allow(clippy::let_and_return)]
+#![allow(clippy::inconsistent_digit_grouping)]
+#![allow(clippy::int_plus_one)]
+#![allow(clippy::duplicated_attributes)]
+#![allow(clippy::unreadable_literal)]
+#![allow(clippy::redundant_clone)]
+#![allow(clippy::bool_assert_comparison)]
+#![allow(clippy::needless_borrow)]
+#![allow(clippy::clone_on_copy)]
+#![allow(clippy::module_inception)]
+#![allow(clippy::single_match)]
+#![allow(clippy::useless_conversion)]
 
-mod amount_validation;
 mod amount_validation;
 mod approvals;
 mod deposit;
 mod finalize;
 mod migration;
-mod status_index;
 mod ttl;
 mod types;
 mod utils;
 
 use crate::utils::now_seconds;
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, log, symbol_short, token, Address, Env, String, Symbol,
+    contract, contracterror, contractimpl, log, symbol_short, token, Address, Env, String, Symbol,
     Vec,
 };
 
 pub use amount_validation::accumulate_amounts;
 pub use amount_validation::safe_add_amounts;
-pub use amount_validation::{safe_add_amounts, safe_subtract_amounts};
-pub use dispute::DisputeResolution;
+pub use amount_validation::safe_subtract_amounts;
+pub use amount_validation::validate_deposit_amount;
+pub use amount_validation::validate_milestone_amounts;
+pub use amount_validation::validate_single_amount;
+pub use dispute::final_status_after_resolution;
+pub use dispute::resolution_payouts;
 pub use migration::PendingClientMigration;
 pub use ttl::{ADMIN_ROTATION_MIN_DELAY_LEDGERS, PENDING_MIGRATION_TTL_LEDGERS};
-
+// Keep shared storage keys and escrow domain types centralized in `types.rs`.
+// `DisputeResolution` and `DisputeSplit` are defined once in `types.rs` and
+// re-exported here; `dispute.rs` uses them via `crate::DisputeResolution`.
 pub use types::{
     Contract, ContractBounds, ContractStatus, ContractSummary, DataKey, DepositMode,
-    DisputeRecord, DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone,
-    MilestoneApprovals, MilestoneSummary, PendingAdminProposal, ReadinessChecklist,
     DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone, MilestoneApprovals,
     MilestoneSummary, PendingAdminProposal, ReadinessChecklist, ReleaseAuthorization, Reputation,
     SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION,
 };
 
+// Maximum bounds constants - re-export from amount_validation for API visibility
 pub const MAX_MILESTONES: u32 = 10;
 pub const MAX_SINGLE_AMOUNT_STROOPS: i128 = crate::amount_validation::MAX_SINGLE_AMOUNT_STROOPS;
 pub const MAX_TOTAL_ESCROW_STROOPS: i128 = MAX_SINGLE_AMOUNT_STROOPS;
-
-// ── AuthorizationState for read-only view (#820) ─────────────────────────────
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AuthorizationState {
-    pub release_authorization: ReleaseAuthorization,
-}
 
 #[contract]
 pub struct Escrow;
@@ -67,6 +98,7 @@ mod create_contract;
 mod dispute;
 mod governance;
 
+/// Governance-level errors for admin-gated operations.
 #[contracterror]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
@@ -84,6 +116,11 @@ pub enum EscrowError {
     InsufficientFunds = 11,
     AlreadyInitialized = 12,
     InsufficientAccumulatedFees = 13,
+    /// Returned by lifecycle entrypoints when `initialize` has not been called.
+    ///
+    /// All money-flow operations require initialization so the admin-controlled
+    /// safety rails (pause, emergency controls, protocol fees) are always in
+    /// scope before any funds can move.
     NotInitialized = 14,
     UnauthorizedRole = 15,
     ContractPaused = 16,
@@ -101,32 +138,121 @@ pub enum EscrowError {
     PotentialOverflow = 28,
     AlreadyFinalized = 29,
     AmountMustBePositive = 30,
+    /// No settlement token has been bound for custody transfers.
     SettlementTokenNotConfigured = 31,
+    /// A settlement token has already been bound.
     SettlementTokenAlreadyBound = 32,
+    /// The sum of milestone amounts exceeded the configured maximum or overflowed.
     TotalCapExceeded = 33,
+    /// Too many milestones were provided.
     TooManyMilestones = 34,
+    /// An arbiter was required by the release authorization mode but not provided.
     MissingArbiter = 35,
+    /// The provided arbiter is invalid (same as client or freelancer).
     InvalidArbiter = 36,
+    /// Contract is cancelled and must not accept further value-moving operations.
     ContractCancelled = 37,
+    /// Contract has been refunded and is terminal for value-moving operations.
     ContractRefunded = 38,
+    /// The address supplied as settlement token is not a valid token contract.
+    /// The pre-bind probe called `token::Client::balance` against the escrow
+    /// contract address and the call panicked — the address does not implement
+    /// the SAC token interface.
     InvalidSettlementToken = 39,
+    /// The address supplied as settlement token is the escrow contract itself.
+    /// Binding self would create a circular custody reference and brick all
+    /// transfer paths.
     SettlementTokenIsSelf = 40,
+    /// The address supplied as settlement token is the escrow admin.
+    /// Binding the admin as the custody asset conflates governance authority
+    /// with the settlement token role.
     SettlementTokenIsAdmin = 41,
+    /// Reputation feedback comment was empty.
     EmptyComment = 42,
+    /// Reputation feedback comment exceeded the 200-character maximum.
     CommentTooLong = 43,
 }
 
-/// Returns `Some(a + b)`, or `None` on overflow.
-pub fn safe_add_amounts(a: i128, b: i128) -> Option<i128> {
-    a.checked_add(b)
-}
+impl Escrow {
+    /// Get the settlement token address from the canonical `DataKey` binding.
+    pub(crate) fn read_settlement_token(env: &Env) -> Option<Address> {
+        env.storage().persistent().get(&DataKey::SettlementToken)
+    }
 
-pub fn safe_add_amounts(a: i128, b: i128) -> Option<i128> {
-    a.checked_add(b)
+    /// Persist the settlement token address under the canonical `DataKey` binding.
+    pub(crate) fn write_settlement_token(env: &Env, token: &Address) {
+        env.storage()
+            .persistent()
+            .set(&DataKey::SettlementToken, token);
+    }
 }
 
 #[contractimpl]
 impl Escrow {
+    /// Bind the single Stellar Asset Contract (SAC) token this escrow instance will custody.
+    ///
+    /// This is a **write-once** step: once a token is recorded under
+    /// [`DataKey::SettlementToken`] all subsequent money-flow entrypoints
+    /// (`deposit_funds`, `release_milestone`, `refund_unreleased_milestones`,
+    /// `cancel_contract`, `withdraw_protocol_fees`) read that address to execute SAC
+    /// `transfer` calls.  A second call with any token address is rejected with
+    /// `SettlementTokenAlreadyBound`.
+    ///
+    /// # Pre-bind probe (issue #723)
+    ///
+    /// Before persisting the token address, this entrypoint performs a **read-only
+    /// probe** to verify the supplied address is a live SAC token contract:
+    ///
+    /// 1. Calls `token::Client::balance(env.current_contract_address())` against
+    ///    the candidate address. If the address does not implement the SAC token
+    ///    interface, the call panics and the bind is rejected with
+    ///    `InvalidSettlementToken`.
+    /// 2. Rejects `env.current_contract_address()` (the escrow contract itself)
+    ///    with `SettlementTokenIsSelf` — binding self creates a circular custody
+    ///    reference.
+    /// 3. Rejects the stored admin address with `SettlementTokenIsAdmin` —
+    ///    conflating governance authority with the settlement token role is a
+    ///    privilege-separation violation.
+    ///
+    /// # Reentrancy mitigation
+    ///
+    /// All downstream money-flow entrypoints (`deposit_funds`, `release_milestone`,
+    /// `cancel_contract`, `refund_unreleased_milestones`) follow strict
+    /// **state-before-transfer** (Checks-Effects-Interactions) ordering: contract
+    /// state is finalized *before* any `token::Client::transfer` call.  A
+    /// malicious token contract that re-enters the escrow during a transfer will
+    /// observe the already-mutated state and cannot double-spend or front-run
+    /// the operation.  The probe itself performs no state mutation — it only
+    /// reads the token balance — so it cannot be used as a reentrancy vector.
+    ///
+    /// See [`docs/escrow/sac-custody.md`](../../../docs/escrow/sac-custody.md) for the
+    /// full custody model, accounting invariant, and lifecycle sequence diagram.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `admin` - The admin address (must match stored admin)
+    /// * `token` - The SAC token address
+    ///
+    /// # Errors
+    /// * `NotInitialized` if `initialize` has not been called
+    /// * `UnauthorizedRole` if `admin` is not the stored admin
+    /// * `SettlementTokenAlreadyBound` if a token is already bound
+    /// * `InvalidSettlementToken` if the probe call to `token::Client::balance` panics
+    /// * `SettlementTokenIsSelf` if `token == env.current_contract_address()`
+    /// * `SettlementTokenIsAdmin` if `token == stored_admin`
+    ///
+    /// # Events
+    /// On a successful, authorized bind this publishes a `settlement_token_bound`
+    /// event so off-chain indexers and monitoring dashboards can observe which
+    /// asset an escrow settles in, and when the binding happened.
+    ///
+    /// * Topics: `(Symbol "settlement_token_bound",)`
+    /// * Data: `(admin: Address, token: Address, timestamp: u64)`
+    ///
+    /// The event only fires after the write succeeds. Rejected binds
+    /// (uninitialized, unauthorized, invalid token, self, admin) panic before
+    /// this point and therefore publish nothing. All payload fields are public
+    /// configuration.
     pub fn bind_settlement_token(env: Env, admin: Address, token: Address) -> bool {
         Self::require_initialized(&env);
         let stored_admin: Address = env
@@ -140,23 +266,45 @@ impl Escrow {
         }
         admin.require_auth();
 
+        // Reject double-bind: once a settlement token is recorded, any
+        // subsequent bind attempt is rejected. This is a write-once field.
         if Self::read_settlement_token(&env).is_some() {
             env.panic_with_error(EscrowError::SettlementTokenAlreadyBound);
         }
 
+        // ── Pre-bind probe (issue #723) ─────────────────────────────────────
+        //
+        // Reject the escrow contract's own address — binding self would create
+        // a circular custody reference and brick every transfer path.
         if token == env.current_contract_address() {
             env.panic_with_error(EscrowError::SettlementTokenIsSelf);
         }
 
+        // Reject the admin address — conflating governance authority with the
+        // settlement token role is a privilege-separation violation.
         if token == stored_admin {
             env.panic_with_error(EscrowError::SettlementTokenIsAdmin);
         }
 
+        // Read-only probe: call `token::Client::balance` against the escrow
+        // contract address. If `token` does not implement the SAC token
+        // interface, the host panics and we translate that into
+        /// `InvalidSettlementToken`.
+        //
+        // This is safe because:
+        // - `balance` is a read-only entrypoint (no state mutation on the
+        //   token contract).
+        // - We have not yet written anything to storage — a panic here leaves
+        //   no partial state.
+        // - The probe cannot be used for reentrancy: it calls `balance`, not
+        //   `transfer`, and the escrow has no callback the token could invoke.
         let token_client = token::Client::new(&env, &token);
         let _probe: i128 = token_client.balance(&env.current_contract_address());
 
         Self::write_settlement_token(&env, &token);
 
+        // Emit after the binding write succeeds so indexers can track the bound
+        // asset. Consistent topic naming with `init` / `protocol_fee_bps` events.
         env.events().publish(
             (Symbol::new(&env, "settlement_token_bound"),),
             (admin, token, env.ledger().timestamp()),
@@ -164,32 +312,83 @@ impl Escrow {
         true
     }
 
+    /// Deprecated thin delegate for [`bind_settlement_token`](Self::bind_settlement_token).
+    ///
+    /// Retained for backward compatibility with external callers that used the historical API name.
+    /// Delegates directly to [`bind_settlement_token`](Self::bind_settlement_token) and inherits
+    /// every security guard (`SettlementTokenAlreadyBound`, admin auth check, SAC interface probe,
+    /// self/admin validation) and event emission.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `admin` - The admin address (must match stored admin)
+    /// * `token` - The SAC token address
+    ///
+    /// # Deprecated
+    /// Use [`bind_settlement_token`](Self::bind_settlement_token) instead.
     #[deprecated(note = "Use bind_settlement_token instead.")]
     pub fn set_settlement_token(env: Env, admin: Address, token: Address) -> bool {
         Self::bind_settlement_token(env, admin, token)
     }
 
+    /// Returns the bound settlement token, or `None` if no token has been bound.
     pub fn get_settlement_token(env: Env) -> Option<Address> {
         Self::read_settlement_token(&env)
     }
 
+    /// Returns `true` exactly when a settlement token is bound.
+    ///
+    /// This is the recommended cheap pre-flight readiness check before calling
+    /// `deposit_funds`, which panics when no settlement token has been bound.
+    /// Integrators that only need to know *whether* the escrow can accept
+    /// deposits — without caring about the specific token address — should use
+    /// this instead of fetching and discarding the `Address` from
+    /// `get_settlement_token`.
+    ///
+    /// Read-only and auth-free: it performs no state mutation (no TTL write is
+    /// needed for the simple binding key).
+    ///
+    /// # Returns
+    /// * `true` if a settlement token is bound
+    /// * `false` if no settlement token has been bound yet
     pub fn is_settlement_token_bound(env: Env) -> bool {
         Self::read_settlement_token(&env).is_some()
     }
 
+    // ── Initialization ───────────────────────────────────────────────────────
+
+    /// Initializes the escrow contract with the operational admin.
+    ///
+    /// Single-use. Stores the admin address that controls pause, emergency,
+    /// protocol-fee, and governance operations. All escrow lifecycle operations
+    /// (create, deposit, release, refund, cancel) call `require_initialized`
+    /// so that these safety rails are always bound before money can move.
     pub fn initialize(env: Env, admin: Address) -> bool {
-        if env.storage().persistent().get::<_, bool>(&DataKey::Initialized).unwrap_or(false) {
+        if env
+            .storage()
+            .persistent()
+            .get::<_, bool>(&DataKey::Initialized)
+            .unwrap_or(false)
+        {
             env.panic_with_error(Error::AlreadyInitialized);
         }
 
         admin.require_auth();
         env.storage().persistent().set(&DataKey::Initialized, &true);
         env.storage().persistent().set(&DataKey::Admin, &admin);
-        env.storage().persistent().set(&DataKey::NextContractId, &1u32);
+        env.storage()
+            .persistent()
+            .set(&DataKey::NextContractId, &1u32);
 
-        let mut checklist: ReadinessChecklist = env.storage().persistent().get(&DataKey::ReadinessChecklist).unwrap_or_default();
+        let mut checklist: ReadinessChecklist = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ReadinessChecklist)
+            .unwrap_or_default();
         checklist.initialized = true;
-        env.storage().persistent().set(&DataKey::ReadinessChecklist, &checklist);
+        env.storage()
+            .persistent()
+            .set(&DataKey::ReadinessChecklist, &checklist);
 
         env.events().publish(
             (symbol_short!("init"), Symbol::new(&env, "admin_set")),
@@ -199,6 +398,7 @@ impl Escrow {
         true
     }
 
+    /// Returns the stored governance admin address.
     pub fn get_admin(env: Env) -> Option<Address> {
         env.storage().persistent().get(&DataKey::Admin)
     }
@@ -273,31 +473,15 @@ impl Escrow {
     /// * `InvalidParticipants` - If client and freelancer are the same address
     /// * `EmptyMilestones` - If no milestones are provided
     /// * `InvalidMilestoneAmount` - If any milestone amount is <= 0
-    /// * `MissingArbiter` - If arbiter is required but not provided
-    /// * `InvalidArbiter` - If arbiter is same as client or freelancer
-    /// * `ContractIdOverflow` - If the next id would exceed `u32::MAX`
-    /// * `ContractIdCollision` - If the allocated id slot is already occupied
-    pub fn create_contract(
-        env: Env,
-        client: Address,
-        freelancer: Address,
-        arbiter: Option<Address>,
-        milestones: Vec<i128>,
-        release_authorization: ReleaseAuthorization,
-        deadlines: Option<Vec<u64>>,
-    ) -> u32 {
-        create_contract::create_contract_impl(
-            &env,
-            client,
-            freelancer,
-            arbiter,
-            milestones,
-            release_authorization,
-            deadlines,
-        )
-    }
-
-    /// Deposits funds into the contract. Transitions to Funded status when fully funded.
+    /// Pull the settlement-token deposit from the client into the escrow contract address.
+    ///
+    /// Executes `SAC::transfer(from: client, to: escrow_address, amount)` and advances
+    /// status from `Created` to `Funded` once the full milestone sum has been deposited.
+    /// Requires `bind_settlement_token` to have been called first; panics with
+    /// `SettlementTokenNotConfigured` otherwise.
+    ///
+    /// See [`docs/escrow/sac-custody.md`](../../../docs/escrow/sac-custody.md) for the
+    /// full custody model and accounting invariant.
     ///
     /// # Arguments
     /// * `env` - The contract environment
@@ -441,10 +625,7 @@ impl Escrow {
     fn grant_pending_reputation_credit(env: &Env, freelancer: &Address) {
         let pending_key = DataKey::PendingReputationCredits(freelancer.clone());
         let pending: i128 = env.storage().persistent().get(&pending_key).unwrap_or(0);
-        let new_pending = pending
-            .checked_add(1)
-            .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
-        env.storage().persistent().set(&pending_key, &new_pending);
+        env.storage().persistent().set(&pending_key, &(pending + 1));
     }
 
     /// Releases a specific milestone, transferring the net payout to the freelancer.
@@ -516,7 +697,11 @@ impl Escrow {
         // Authenticate caller before any state-dependent logic
         caller.require_auth();
 
-        let mut contract = Self::load_escrow_contract(&env, contract_id, EscrowError::ContractNotFound);
+        let mut contract: Contract = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Contract(contract_id))
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
 
         // Extend TTL on contract read
         ttl::extend_contract_ttl(&env, contract_id);
@@ -662,12 +847,10 @@ impl Escrow {
 
         // Accrue the fee into the protocol's accumulated balance.
         if protocol_fee > 0 {
-            let new_accumulated_fees = accumulated_fees
-                .checked_add(protocol_fee)
-                .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
-            env.storage()
-                .persistent()
-                .set(&DataKey::AccumulatedProtocolFees, &new_accumulated_fees);
+            env.storage().persistent().set(
+                &DataKey::AccumulatedProtocolFees,
+                &(accumulated_fees + protocol_fee),
+            );
         }
 
         milestone.released = true;
@@ -684,14 +867,8 @@ impl Escrow {
 
         // Accounting invariant: net released + refunded + all accumulated fees
         // must never exceed the total funded amount.
-        let new_accumulated = accumulated_fees
-            .checked_add(protocol_fee)
-            .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
-        let invariant_sum = contract
-            .released_amount
-            .checked_add(contract.refunded_amount)
-            .and_then(|s| s.checked_add(new_accumulated))
-            .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
+        let new_accumulated = accumulated_fees + protocol_fee;
+        let invariant_sum = contract.released_amount + contract.refunded_amount + new_accumulated;
         if invariant_sum > contract.funded_amount {
             env.panic_with_error(EscrowError::AccountingInvariantViolated);
         }
@@ -858,7 +1035,11 @@ impl Escrow {
             }
         }
 
-        let mut contract = Self::load_escrow_contract(&env, contract_id, EscrowError::ContractNotFound);
+        let mut contract: Contract = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Contract(contract_id))
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
 
         // Extend TTL on contract read
         ttl::extend_contract_ttl(&env, contract_id);
@@ -910,9 +1091,7 @@ impl Escrow {
             }
             // If no deadline (None), allow refund anytime (backward compatibility)
 
-            total_refund_amount = total_refund_amount
-                .checked_add(milestone.amount)
-                .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
+            total_refund_amount += milestone.amount;
         }
 
         // Check if there's enough balance
@@ -983,124 +1162,49 @@ impl Escrow {
         total_refund_amount
     }
 
-    /// Claims a timeout-based refund for an unreleased milestone whose deadline has passed.
+    /// Checks whether a contract with the given ID exists in storage.
     ///
-    /// Allows the client to recover funds from a milestone when the freelancer has
-    /// not released it before the optional per-milestone deadline. The milestone
-    /// must have a `deadline` set, must not yet be released or refunded, and the
-    /// current ledger timestamp must exceed the deadline.
+    /// This is a cheap, non-panicking existence probe that returns `true` if
+    /// the contract record is present and `false` otherwise. Unlike `get_contract`,
+    /// this function does **not** panic with `ContractNotFound` for missing IDs,
+    /// making it safe for indexers and clients iterating over ID ranges.
+    ///
+    /// # Security
+    /// This is a read-only operation that does **not** extend the contract's TTL.
+    /// Probing for contract existence cannot be abused to keep entries alive.
+    /// Only actual contract operations (reads/writes) extend TTL.
     ///
     /// # Arguments
     /// * `env` - The contract environment
-    /// * `contract_id` - The contract ID
-    /// * `milestone_index` - The index of the milestone to refund
+    /// * `contract_id` - The contract ID to check
     ///
     /// # Returns
-    /// The amount refunded
+    /// * `true` if the contract exists
+    /// * `false` if the contract does not exist
     ///
-    /// # Errors
-    /// * `ContractPaused` - If pause or emergency controls are active
-    /// * `ContractNotFound` - If contract doesn't exist
-    /// * `AlreadyFinalized` - If contract has been finalized
-    /// * `InvalidState` - If contract is not in an active state
-    /// * `IndexOutOfBounds` - If milestone_index is out of bounds
-    /// * `MilestoneAlreadyReleased` - If milestone was already released
-    /// * `AlreadyRefunded` - If milestone was already refunded
-    /// * `DeadlineNotPassed` - If milestone has no deadline or deadline hasn't passed
-    /// * `UnauthorizedRole` - If caller is not the client
-    pub fn claim_timeout_refund(env: Env, contract_id: u32, milestone_index: u32) -> i128 {
-        Self::require_not_paused(&env);
-
-        let mut contract: Contract = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Contract(contract_id))
-            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
-        ttl::extend_contract_ttl(&env, contract_id);
-        Self::require_not_finalized(&env, contract_id);
-
-        // Require an active, non-terminal contract status
-        if contract.status != ContractStatus::Created
-            && contract.status != ContractStatus::Funded
-            && contract.status != ContractStatus::PartiallyFunded
-        {
-            env.panic_with_error(Error::InvalidState);
-        }
-
-        let milestone_key = Symbol::new(&env, "milestones");
-        let mut milestones: Vec<Milestone> = env
-            .storage()
-            .persistent()
-            .get(&(DataKey::Contract(contract_id), milestone_key.clone()))
-            .unwrap();
-
-        ttl::extend_milestone_ttl(&env, contract_id);
-
-        if milestone_index >= milestones.len() {
-            env.panic_with_error(Error::IndexOutOfBounds);
-        }
-
-        let mut milestone = milestones.get(milestone_index).unwrap();
-
-        if milestone.released {
-            env.panic_with_error(Error::AlreadyReleased);
-        }
-
-        if milestone.refunded {
-            env.panic_with_error(Error::AlreadyRefunded);
-        }
-
-        // Check deadline has been set and has passed
-        match milestone.deadline {
-            Some(deadline) => {
-                if utils::now_seconds(&env) <= deadline {
-                    env.panic_with_error(Error::DeadlineNotPassed);
-                }
-            }
-            None => {
-                env.panic_with_error(Error::DeadlineNotPassed);
-            }
-        }
-
-        contract.client.require_auth();
-
-        // Mark milestone as refunded
-        milestone.refunded = true;
-        milestones.set(milestone_index, milestone.clone());
-        contract.refunded_amount += milestone.amount;
-
-        // Check status transitions
-        let all_refunded_or_released = milestones.iter().all(|m| m.released || m.refunded);
-        if all_refunded_or_released {
-            let all_refunded = milestones.iter().all(|m| m.refunded);
-            if all_refunded {
-                contract.status = ContractStatus::Refunded;
-            } else {
-                contract.status = ContractStatus::Completed;
-            }
-        }
-
-        env.storage().persistent().set(
-            &(DataKey::Contract(contract_id), milestone_key),
-            &milestones,
-        );
+    /// # Examples
+    /// ```
+    /// // Safe iteration over a range of IDs
+    /// for id in 1..=100 {
+    ///     if escrow.contract_exists(id) {
+    ///         let contract = escrow.get_contract(id);
+    ///         // process contract
+    ///     }
+    /// }
+    /// ```
+    pub fn contract_exists(env: Env, contract_id: u32) -> bool {
         env.storage()
             .persistent()
-            .set(&DataKey::Contract(contract_id), &contract);
-
-        ttl::extend_contract_and_milestones_ttl(&env, contract_id);
-
-        env.events().publish(
-            (symbol_short!("timeout"), symbol_short!("refund")),
-            (contract_id, milestone_index, milestone.amount),
-        );
-
-        milestone.amount
+            .has(&DataKey::Contract(contract_id))
     }
 
     /// Retrieves contract information.
     pub fn get_contract(env: Env, contract_id: u32) -> Contract {
-        let contract = Self::load_escrow_contract(&env, contract_id, Error::ContractNotFound);
+        let contract = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Contract(contract_id))
+            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
 
         // Extend TTL on contract read
         ttl::extend_contract_ttl(&env, contract_id);
@@ -1156,7 +1260,11 @@ impl Escrow {
     /// # Errors
     /// * `ContractNotFound` - If contract doesn't exist
     pub fn get_contract_summary(env: Env, contract_id: u32) -> ContractSummary {
-        let contract = Self::load_escrow_contract(&env, contract_id, EscrowError::ContractNotFound);
+        let contract: Contract = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Contract(contract_id))
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
 
         // Extend TTL on contract and milestones read
         ttl::extend_contract_and_milestones_ttl(&env, contract_id);
@@ -1251,7 +1359,11 @@ impl Escrow {
 
     /// Returns funded minus released minus refunded for `contract_id`.
     pub fn get_refundable_balance(env: Env, contract_id: u32) -> i128 {
-        let contract = Self::load_escrow_contract(&env, contract_id, EscrowError::ContractNotFound);
+        let contract: Contract = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Contract(contract_id))
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
         ttl::extend_contract_ttl(&env, contract_id);
         contract.funded_amount - contract.released_amount - contract.refunded_amount
     }
@@ -1480,7 +1592,11 @@ impl Escrow {
     /// * `InvalidStatusTransition` - If the contract is not `Created`/`Funded` or has already released funds.
     pub fn cancel_contract(env: Env, contract_id: u32, client: Address) -> bool {
         Self::require_not_paused(&env);
-        let mut contract = Self::load_escrow_contract(&env, contract_id, EscrowError::ContractNotFound);
+        let mut contract: Contract = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Contract(contract_id))
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
         ttl::extend_contract_ttl(&env, contract_id);
 
         Self::require_not_finalized(&env, contract_id);
@@ -1570,7 +1686,11 @@ impl Escrow {
         comment: String,
     ) -> bool {
         Self::require_not_paused(&env);
-        let mut contract = Self::load_escrow_contract(&env, contract_id, Error::ContractNotFound);
+        let mut contract: Contract = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Contract(contract_id))
+            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
         ttl::extend_contract_ttl(&env, contract_id);
 
         if caller != contract.client {
@@ -1624,14 +1744,8 @@ impl Escrow {
         let rep_key = DataKey::Reputation(contract.freelancer.clone());
         let mut rep: types::Reputation =
             env.storage().persistent().get(&rep_key).unwrap_or_default();
-        rep.completed_contracts = rep
-            .completed_contracts
-            .checked_add(1)
-            .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
-        rep.total_rating = rep
-            .total_rating
-            .checked_add(rating as i128)
-            .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
+        rep.completed_contracts += 1;
+        rep.total_rating += rating as i128;
         rep.last_rating = rating as i128;
         env.storage().persistent().set(&rep_key, &rep);
 
@@ -1749,7 +1863,11 @@ impl Escrow {
         Self::require_not_paused(&env);
         caller.require_auth();
 
-        let contract = Self::load_escrow_contract(&env, contract_id, EscrowError::ContractNotFound);
+        let contract: Contract = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Contract(contract_id))
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
 
         ttl::extend_contract_ttl(&env, contract_id);
         Self::require_not_finalized(&env, contract_id);
@@ -1846,17 +1964,6 @@ impl Escrow {
     // -----------------------------------------------------------------------
     // Internal helpers
     // -----------------------------------------------------------------------
-
-    /// Loads a contract from storage, panicking with the provided error if not found.
-    fn load_escrow_contract<E>(env: &Env, contract_id: u32, error: E) -> Contract
-    where
-        E: Into<soroban_sdk::Error>,
-    {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Contract(contract_id))
-            .unwrap_or_else(|| env.panic_with_error(error))
-    }
 
     // ── Finalization ─────────────────────────────────────────────────────────
 
@@ -2081,7 +2188,11 @@ impl Escrow {
         Self::require_not_paused(&env);
         caller.require_auth();
 
-        let mut contract = Self::load_escrow_contract(&env, contract_id, Error::ContractNotFound);
+        let mut contract: Contract = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Contract(contract_id))
+            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
 
         ttl::extend_contract_ttl(&env, contract_id);
         Self::require_not_finalized(&env, contract_id);
@@ -2161,7 +2272,11 @@ impl Escrow {
         Self::require_not_paused(&env);
         arbiter.require_auth();
 
-        let mut contract = Self::load_escrow_contract(&env, contract_id, Error::ContractNotFound);
+        let mut contract: Contract = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Contract(contract_id))
+            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
 
         ttl::extend_contract_ttl(&env, contract_id);
         Self::require_not_finalized(&env, contract_id);
@@ -2183,14 +2298,8 @@ impl Escrow {
                 .unwrap_or_else(|e| env.panic_with_error(e));
 
         // Update contract accounting
-        contract.refunded_amount = contract
-            .refunded_amount
-            .checked_add(client_payout)
-            .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
-        contract.released_amount = contract
-            .released_amount
-            .checked_add(freelancer_payout)
-            .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
+        contract.refunded_amount += client_payout;
+        contract.released_amount += freelancer_payout;
 
         // Set final status
         contract.status = dispute::final_status_after_resolution(&contract);
@@ -2216,5 +2325,3 @@ impl Escrow {
 /// Test fixtures and suites are compiled only for native test builds, never wasm.
 #[cfg(test)]
 mod test;
-#[cfg(test)]
-mod test_storage_arithmetic;

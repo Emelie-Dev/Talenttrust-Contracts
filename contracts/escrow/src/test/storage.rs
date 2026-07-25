@@ -1,4 +1,3 @@
-use soroban_sdk::testutils::Ledger as _;
 use super::{
     assert_contract_error, complete_contract, create_contract, default_milestones,
     generated_participants, register_client, total_milestone_amount, MILESTONE_ONE, MILESTONE_THREE,
@@ -12,7 +11,6 @@ use soroban_sdk::{testutils::Address as _, Address, Env};
 #[test]
 fn initialized_written_on_initialize() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let admin = Address::generate(&env);
@@ -32,7 +30,6 @@ fn initialized_written_on_initialize() {
 #[test]
 fn admin_written_on_initialize() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let admin = Address::generate(&env);
@@ -48,7 +45,6 @@ fn admin_written_on_initialize() {
 #[test]
 fn double_initialize_fails() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let admin = Address::generate(&env);
@@ -65,7 +61,6 @@ fn double_initialize_fails() {
 #[test]
 fn paused_written_by_pause_and_cleared_by_unpause() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let admin = Address::generate(&env);
@@ -95,7 +90,6 @@ fn paused_written_by_pause_and_cleared_by_unpause() {
 #[test]
 fn paused_blocks_create_contract() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let admin = Address::generate(&env);
@@ -118,7 +112,6 @@ fn paused_blocks_create_contract() {
 #[test]
 fn paused_blocks_deposit_funds() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let admin = Address::generate(&env);
@@ -136,7 +129,6 @@ fn paused_blocks_deposit_funds() {
 #[test]
 fn paused_blocks_release_milestone() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let admin = Address::generate(&env);
@@ -155,7 +147,6 @@ fn paused_blocks_release_milestone() {
 #[test]
 fn paused_blocks_cancel_contract() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let admin = Address::generate(&env);
@@ -173,7 +164,6 @@ fn paused_blocks_cancel_contract() {
 #[test]
 fn read_only_queries_not_blocked_by_pause() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let admin = Address::generate(&env);
@@ -192,7 +182,6 @@ fn read_only_queries_not_blocked_by_pause() {
 #[test]
 fn emergency_written_by_activate_and_cleared_by_resolve() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let admin = Address::generate(&env);
@@ -222,7 +211,6 @@ fn emergency_written_by_activate_and_cleared_by_resolve() {
 #[test]
 fn unpause_blocked_while_emergency_active() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let admin = Address::generate(&env);
@@ -237,7 +225,6 @@ fn unpause_blocked_while_emergency_active() {
 #[test]
 fn contract_written_on_create_and_readable() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (c, f) = generated_participants(&env);
@@ -259,7 +246,6 @@ fn contract_written_on_create_and_readable() {
 #[test]
 fn next_contract_id_increments_per_contract() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -271,7 +257,6 @@ fn next_contract_id_increments_per_contract() {
 #[test]
 fn get_contract_fails_for_unknown_id() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -289,7 +274,6 @@ fn get_contract_fails_for_unknown_id() {
 #[test]
 fn milestone_released_flag_set_in_vector_on_release() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -307,7 +291,6 @@ fn milestone_released_flag_set_in_vector_on_release() {
 #[test]
 fn double_release_same_milestone_fails() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -324,7 +307,6 @@ fn double_release_same_milestone_fails() {
 #[test]
 fn release_out_of_bounds_milestone_fails() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -342,7 +324,6 @@ fn release_out_of_bounds_milestone_fails() {
 #[test]
 fn reputation_issued_written_and_reputation_updated() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -367,7 +348,6 @@ fn reputation_issued_written_and_reputation_updated() {
 #[test]
 fn double_issue_reputation_fails() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -383,7 +363,6 @@ fn double_issue_reputation_fails() {
 #[test]
 fn pending_reputation_credits_incremented_on_completion() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -394,7 +373,6 @@ fn pending_reputation_credits_incremented_on_completion() {
 #[test]
 fn pending_reputation_credits_decremented_on_issue() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -408,7 +386,6 @@ fn pending_reputation_credits_decremented_on_issue() {
 #[test]
 fn reputation_not_issuable_before_completion() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -430,7 +407,6 @@ fn reputation_not_issuable_before_completion() {
 #[test]
 fn reputation_requires_client_caller() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -448,7 +424,6 @@ fn reputation_requires_client_caller() {
 #[test]
 fn readiness_checklist_initialized_flag_set_by_initialize() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let admin = Address::generate(&env);
@@ -469,7 +444,6 @@ fn readiness_checklist_initialized_flag_set_by_initialize() {
 #[test]
 fn readiness_checklist_emergency_flag_set_by_activate() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let admin = Address::generate(&env);
@@ -492,7 +466,6 @@ fn readiness_checklist_emergency_flag_set_by_activate() {
 #[test]
 fn released_amount_tracks_milestone_amounts() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -518,7 +491,6 @@ fn released_amount_tracks_milestone_amounts() {
 #[test]
 fn get_milestone_index_zero_returns_first_milestone() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     // Default contract has three milestones: ONE, TWO, THREE.
@@ -535,7 +507,6 @@ fn get_milestone_index_zero_returns_first_milestone() {
 #[test]
 fn get_milestone_last_valid_index_returns_last_milestone() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (_client_addr, _, id) = create_contract(&env, &client);
@@ -552,7 +523,6 @@ fn get_milestone_last_valid_index_returns_last_milestone() {
 #[test]
 fn get_milestone_out_of_bounds_returns_none() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
     let (_client_addr, _, id) = create_contract(&env, &client);
@@ -566,7 +536,6 @@ fn get_milestone_out_of_bounds_returns_none() {
 #[test]
 fn get_milestone_unknown_contract_panics_contract_not_found() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 
@@ -580,7 +549,6 @@ fn get_milestone_unknown_contract_panics_contract_not_found() {
 #[test]
 fn deposit_exceeding_total_fails() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let client = register_client(&env);
 

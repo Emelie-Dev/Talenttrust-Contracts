@@ -1,42 +1,72 @@
-use crate::{ttl, Contract, ContractStatus, DataKey, Error, Milestone, ReleaseAuthorization};
-use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
+use crate::{
+    amount_validation, ttl, Contract, ContractStatus, DataKey, Error, Escrow, EscrowArgs,
+    EscrowClient, EscrowError, GovernedParameters, Milestone, ReleaseAuthorization, MAX_MILESTONES,
+};
+use soroban_sdk::{contractimpl, symbol_short, Address, Env, Symbol, Vec};
 
-/// Creates a new escrow contract with the specified client, freelancer, and milestone amounts.
-///
-/// # Arguments
-/// * `env` - The contract environment
-/// * `client` - The address of the client funding the contract
-/// * `freelancer` - The address of the freelancer performing the work
-/// * `arbiter` - Optional arbiter address for dispute resolution
-/// * `milestones` - Vector of milestone amounts (in stroops)
-/// * `release_authorization` - Authorization mode for milestone releases
-/// * `deadlines` - Optional per-milestone deadlines (Unix timestamps in seconds)
-///
-/// # Returns
-/// The unique contract ID
-///
-/// # Errors
-/// * `InvalidParticipants` - If client and freelancer are the same address
-/// * `EmptyMilestones` - If no milestones are provided
-/// * `InvalidMilestoneAmount` - If any milestone amount is <= 0
-/// * `MissingArbiter` - If arbiter is required but not provided
-/// * `InvalidArbiter` - If arbiter is same as client or freelancer
-/// * `ContractIdOverflow` - If the next id would exceed `u32::MAX`
-/// * `ContractIdCollision` - If the allocated id slot is already occupied
-pub fn create_contract_impl(
-    env: &Env,
-    client: Address,
-    freelancer: Address,
-    arbiter: Option<Address>,
-    milestones: Vec<i128>,
-    release_authorization: ReleaseAuthorization,
-    deadlines: Option<Vec<u64>>,
-) -> u32 {
-    client.require_auth();
+#[contractimpl]
+impl Escrow {
+    /// Creates a new escrow contract with the specified client, freelancer, and milestone amounts.
+    ///
+    /// This is the single canonical creation path. It enforces:
+    /// - Distinct client and freelancer addresses
+    /// - Arbiter presence when required by the release authorization mode
+    /// - Arbiter distinctness from client and freelancer
+    /// - At least one milestone with all amounts strictly positive
+    /// - The `MAX_MILESTONES` cap
+    /// - The governed total-escrow cap (falls back to `i128::MAX` when unset)
+    /// - No contract-id collision or overflow
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `client` - The address of the client funding the contract
+    /// * `freelancer` - The address of the freelancer performing the work
+    /// * `arbiter` - Optional arbiter address for dispute resolution
+    /// * `milestones` - Vector of milestone amounts (in stroops)
+    /// * `release_authorization` - Authorization mode for milestone releases
+    ///
+    /// # Returns
+    /// The unique contract ID assigned to the new escrow.
+    ///
+    /// # Errors
+    /// * `InvalidParticipant`   - If client and freelancer are the same address
+    /// * `EmptyMilestones`      - If no milestones are provided
+    /// * `InvalidMilestoneAmount` - If any milestone amount is <= 0
+    /// * `MissingArbiter`       - If arbiter is required but not provided
+    /// * `InvalidArbiter`       - If arbiter is same as client or freelancer
+    /// * `TooManyMilestones`    - If the number of milestones exceeds `MAX_MILESTONES`
+    /// * `TotalCapExceeded`     - If the sum of milestone amounts exceeds the governed cap
+    /// * `ContractIdOverflow`   - If the next id would exceed `u32::MAX`
+    /// * `ContractIdCollision`  - If the allocated id slot is already occupied
+    pub fn create_contract(
+        env: Env,
+        client: Address,
+        freelancer: Address,
+        arbiter: Option<Address>,
+        milestones: Vec<i128>,
+        release_authorization: ReleaseAuthorization,
+    ) -> u32 {
+        // Reject state-changing calls while paused or in emergency mode so every
+        // mutating entrypoint halts uniformly. Runs before auth. See
+        // finalize.rs::require_not_paused.
+        Self::require_not_paused(&env);
 
-    if client == freelancer {
-        env.panic_with_error(Error::InvalidParticipants);
-    }
+        client.require_auth();
+
+        // Validate that client and freelancer are distinct participants.
+        if client == freelancer {
+            env.panic_with_error(EscrowError::InvalidParticipant);
+        }
+
+        // Validate arbiter requirement based on release authorization mode.
+        match release_authorization {
+            ReleaseAuthorization::ArbiterOnly | ReleaseAuthorization::ClientAndArbiter
+                if arbiter.is_none() =>
+            {
+                env.panic_with_error(EscrowError::MissingArbiter);
+            }
+            _ => {}
+        }
 
         // Validate arbiter is distinct from both client and freelancer.
         if let Some(ref arb) = arbiter {
@@ -82,63 +112,63 @@ pub fn create_contract_impl(
             },
         }
 
-    // Validate deadline count matches milestone count
-    if let Some(ref deadlines_vec) = deadlines {
-        if deadlines_vec.len() != milestones.len() {
-            env.panic_with_error(Error::InvalidMilestoneAmount);
-        }
-    }
+        // Extend TTL for the next-contract-id counter before reading it.
+        ttl::extend_next_contract_id_ttl(&env);
 
-    let id = next_contract_id(&env);
+        let id = next_contract_id(&env);
 
-    ttl::extend_next_contract_id_ttl(&env);
+        let freelancer_addr = freelancer.clone();
 
-    let freelancer_addr = freelancer.clone();
-    let contract = Contract {
-        client: client.clone(),
-        freelancer: freelancer.clone(),
-        arbiter,
-        status: ContractStatus::Created,
-        total_deposited: 0,
-        funded_amount: 0,
-        released_amount: 0,
-        refunded_amount: 0,
-        release_authorization,
-    };
-    env.storage()
-        .persistent()
-        .set(&DataKey::Contract(id), &contract);
-
-    let mut milestone_vec: Vec<Milestone> = Vec::new(&env);
-    for (i, amount) in milestones.iter().enumerate() {
-        let deadline = deadlines.as_ref().and_then(|d| d.get(i as u32));
-        milestone_vec.push_back(Milestone {
-            amount,
+        // Construct the contract with all required fields, initialising accounting
+        // counters to zero and reputation_issued to false.
+        let contract = Contract {
+            client: client.clone(),
+            freelancer: freelancer.clone(),
+            arbiter,
+            status: ContractStatus::Created,
+            total_deposited: 0,
             funded_amount: 0,
             released_amount: 0,
             refunded_amount: 0,
-            deadline,
-        });
-    }
-    let milestone_key = Symbol::new(&env, "milestones");
-    env.storage()
-        .persistent()
-        .set(&(DataKey::Contract(id), milestone_key), &milestone_vec);
+            release_authorization,
+            reputation_issued: false,
+        };
+        env.storage()
+            .persistent()
+            .set(&DataKey::Contract(id), &contract);
 
-    env.storage()
-        .persistent()
-        .set(&DataKey::NextContractId, &(id + 1));
+        // Build and persist the milestone vector.
+        let mut milestone_vec: Vec<Milestone> = Vec::new(&env);
+        for amount in milestones.iter() {
+            milestone_vec.push_back(Milestone {
+                amount,
+                funded_amount: 0,
+                released: false,
+                refunded: false,
+                work_evidence: None,
+                refunded_amount: 0,
+                deadline: None,
+            });
+        }
+        let milestone_key = Symbol::new(&env, "milestones");
+        env.storage()
+            .persistent()
+            .set(&(DataKey::Contract(id), milestone_key), &milestone_vec);
+
+        // Advance the counter. `next_contract_id` already checked `id < u32::MAX`;
+        // the `checked_add` here is a defense-in-depth guard.
+        let next_id = id
+            .checked_add(1)
+            .unwrap_or_else(|| env.panic_with_error(Error::ContractIdOverflow));
+        env.storage()
+            .persistent()
+            .set(&DataKey::NextContractId, &next_id);
 
         // Emit creation event for indexers and off-chain subscribers.
         env.events().publish(
             (symbol_short!("created"), id),
             (client, freelancer_addr, env.ledger().timestamp()),
         );
-
-        // Maintain participant and status indexes for paginated readers.
-        status_index::index_new_contract(&env, id, &ContractStatus::Created);
-        status_index::index_participant(&env, id, &contract.client, 0);
-        status_index::index_participant(&env, id, &contract.freelancer, 1);
 
         id
     }

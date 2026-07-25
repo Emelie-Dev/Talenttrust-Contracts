@@ -13,7 +13,7 @@ use crate::ttl::{PENDING_APPROVAL_BUMP_THRESHOLD, PENDING_APPROVAL_TTL_LEDGERS};
 use crate::types::{
     Contract, ContractStatus, DataKey, Error, Milestone, MilestoneApprovals, ReleaseAuthorization,
 };
-use soroban_sdk::{symbol_short, Address, Env, Vec};
+use soroban_sdk::{Address, Env, Vec};
 
 /// Approves a milestone for release by the caller.
 ///
@@ -153,14 +153,6 @@ pub fn approve_milestone(
         &approval_key,
         PENDING_APPROVAL_BUMP_THRESHOLD,
         PENDING_APPROVAL_TTL_LEDGERS,
-    );
-
-    // Dedicated authorization-state-change event so indexers don't have to
-    // infer approvals from storage reads. Fund movement is untouched here;
-    // this only fires once the approval record above has been persisted.
-    env.events().publish(
-        (symbol_short!("auth_chg"), contract_id),
-        (caller.clone(), milestone_index, milestone.amount),
     );
 
     Ok(true)

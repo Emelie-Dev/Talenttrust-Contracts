@@ -12,7 +12,6 @@
 
 #![cfg(test)]
 
-use soroban_sdk::testutils::Ledger as _;
 use soroban_sdk::{testutils::Address as _, vec, Address, Env};
 use crate::{Escrow, EscrowClient, EscrowError, ReleaseAuthorization};
 
@@ -50,7 +49,6 @@ fn create_funded_contract(
 #[test]
 fn clientonly_matrix_allowed_approvers() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let (client, client_addr, freelancer_addr, arbiter_addr) = setup(&env);
 
@@ -79,7 +77,6 @@ fn clientonly_matrix_allowed_approvers() {
 #[test]
 fn clientonly_matrix_required_approvals() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let (client, client_addr, freelancer_addr, _) = setup(&env);
 
@@ -105,7 +102,6 @@ fn clientonly_matrix_required_approvals() {
 #[test]
 fn clientonly_matrix_allowed_release_callers() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let (client, client_addr, freelancer_addr, arbiter_addr) = setup(&env);
 
@@ -140,7 +136,6 @@ fn clientonly_matrix_allowed_release_callers() {
 #[test]
 fn arbiteronly_matrix_allowed_approvers() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let (client, client_addr, freelancer_addr, arbiter_addr) = setup(&env);
 
@@ -169,7 +164,6 @@ fn arbiteronly_matrix_allowed_approvers() {
 #[test]
 fn arbiteronly_matrix_required_approvals() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let (client, client_addr, freelancer_addr, arbiter_addr) = setup(&env);
 
@@ -195,7 +189,6 @@ fn arbiteronly_matrix_required_approvals() {
 #[test]
 fn arbiteronly_matrix_allowed_release_callers() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let (client, client_addr, freelancer_addr, arbiter_addr) = setup(&env);
 
@@ -230,7 +223,6 @@ fn arbiteronly_matrix_allowed_release_callers() {
 #[test]
 fn clientandarbiter_matrix_allowed_approvers() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let (client, client_addr, freelancer_addr, arbiter_addr) = setup(&env);
 
@@ -259,7 +251,6 @@ fn clientandarbiter_matrix_allowed_approvers() {
 #[test]
 fn clientandarbiter_matrix_required_approvals_or_logic() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let (client, client_addr, freelancer_addr, arbiter_addr) = setup(&env);
 
@@ -293,7 +284,6 @@ fn clientandarbiter_matrix_required_approvals_or_logic() {
 #[test]
 fn clientandarbiter_matrix_allowed_release_callers() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let (client, client_addr, freelancer_addr, arbiter_addr) = setup(&env);
 
@@ -337,7 +327,6 @@ fn clientandarbiter_matrix_allowed_release_callers() {
 #[test]
 fn multisig_matrix_allowed_approvers() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let (client, client_addr, freelancer_addr, arbiter_addr) = setup(&env);
 
@@ -366,7 +355,6 @@ fn multisig_matrix_allowed_approvers() {
 #[test]
 fn multisig_matrix_required_approvals_and_logic() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let (client, client_addr, freelancer_addr, _) = setup(&env);
 
@@ -393,7 +381,6 @@ fn multisig_matrix_required_approvals_and_logic() {
 #[test]
 fn multisig_matrix_allowed_release_callers() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let (client, client_addr, freelancer_addr, arbiter_addr) = setup(&env);
 
@@ -439,7 +426,6 @@ fn multisig_matrix_allowed_release_callers() {
 #[test]
 fn matrix_error_codes_unauthorized_role() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let (client, client_addr, freelancer_addr, arbiter_addr) = setup(&env);
 
@@ -459,7 +445,6 @@ fn matrix_error_codes_unauthorized_role() {
 #[test]
 fn matrix_error_codes_already_approved() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let (client, client_addr, freelancer_addr, _) = setup(&env);
 
@@ -483,7 +468,6 @@ fn matrix_error_codes_already_approved() {
 #[test]
 fn matrix_error_codes_insufficient_approvals() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let (client, client_addr, freelancer_addr, _) = setup(&env);
 
@@ -504,7 +488,6 @@ fn matrix_error_codes_insufficient_approvals() {
 #[test]
 fn matrix_error_codes_missing_arbiter() {
     let env = Env::default();
-    env.ledger().with_mut(|li| { li.max_entry_ttl = 3_110_400; li.min_persistent_entry_ttl = 3_110_400; });
     env.mock_all_auths();
     let (client, client_addr, freelancer_addr, _) = setup(&env);
 
