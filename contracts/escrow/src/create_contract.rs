@@ -1,6 +1,4 @@
-use crate::{
-    ttl, Contract, ContractStatus, DataKey, Error, Milestone, ReleaseAuthorization,
-};
+use crate::{ttl, Contract, ContractStatus, DataKey, Error, Milestone, ReleaseAuthorization};
 use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
 
 /// Creates a new escrow contract with the specified client, freelancer, and milestone amounts.
@@ -12,6 +10,7 @@ use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
 /// * `arbiter` - Optional arbiter address for dispute resolution
 /// * `milestones` - Vector of milestone amounts (in stroops)
 /// * `release_authorization` - Authorization mode for milestone releases
+/// * `deadlines` - Optional per-milestone deadlines (Unix timestamps in seconds)
 ///
 /// # Returns
 /// The unique contract ID
@@ -31,6 +30,7 @@ pub fn create_contract_impl(
     arbiter: Option<Address>,
     milestones: Vec<i128>,
     release_authorization: ReleaseAuthorization,
+    deadlines: Option<Vec<u64>>,
 ) -> u32 {
     client.require_auth();
 
@@ -63,6 +63,13 @@ pub fn create_contract_impl(
         }
     }
 
+    // Validate deadline count matches milestone count
+    if let Some(ref deadlines_vec) = deadlines {
+        if deadlines_vec.len() != milestones.len() {
+            env.panic_with_error(Error::InvalidMilestoneAmount);
+        }
+    }
+
     let id = next_contract_id(&env);
 
     ttl::extend_next_contract_id_ttl(&env);
@@ -84,7 +91,8 @@ pub fn create_contract_impl(
         .set(&DataKey::Contract(id), &contract);
 
     let mut milestone_vec: Vec<Milestone> = Vec::new(&env);
-    for amount in milestones.iter() {
+    for (i, amount) in milestones.iter().enumerate() {
+        let deadline = deadlines.as_ref().and_then(|d| d.get(i as u32));
         milestone_vec.push_back(Milestone {
             amount,
             funded_amount: 0,
@@ -92,6 +100,7 @@ pub fn create_contract_impl(
             refunded: false,
             work_evidence: None,
             refunded_amount: 0,
+            deadline,
         });
     }
     let milestone_key = Symbol::new(&env, "milestones");
@@ -119,16 +128,13 @@ pub(crate) fn next_contract_id(env: &Env) -> u32 {
         .get(&DataKey::NextContractId)
         .unwrap_or(1);
 
-        if env
-            .storage()
-            .persistent()
-            .get::<_, Contract>(&DataKey::Contract(id))
-            .is_some()
-        {
-            env.panic_with_error(Error::ContractIdCollision);
-        }
-
-        id
+    if env
+        .storage()
+        .persistent()
+        .get::<_, Contract>(&DataKey::Contract(id))
+        .is_some()
+    {
+        env.panic_with_error(Error::ContractIdCollision);
     }
 
     id

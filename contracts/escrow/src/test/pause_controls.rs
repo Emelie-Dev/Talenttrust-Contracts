@@ -34,10 +34,7 @@ fn setup_initialized() -> (Env, EscrowClient<'_>, Address) {
 /// only accepts `Created` state on `main` — a `Funded` contract would panic
 /// with `InvalidState` before `set_paused` can be exercised on top of it.
 /// Returns `(client_addr, freelancer_addr, contract_id)`.
-fn setup_created_contract(
-    env: &Env,
-    client: &EscrowClient<'_>,
-) -> (Address, Address, u32) {
+fn setup_created_contract(env: &Env, client: &EscrowClient<'_>) -> (Address, Address, u32) {
     let client_addr = Address::generate(env);
     let freelancer_addr = Address::generate(env);
     let milestones = vec![env, 100_i128, 200_i128, 300_i128];
@@ -56,10 +53,7 @@ fn setup_created_contract(
 /// Used by release/refund/issue_reputation/cancel tests that need a `Funded`
 /// or `Completed` baseline (NOT for deposit-only happy-path tests, see
 /// `setup_created_contract`).
-fn setup_funded_contract(
-    env: &Env,
-    client: &EscrowClient<'_>,
-) -> (Address, Address, u32) {
+fn setup_funded_contract(env: &Env, client: &EscrowClient<'_>) -> (Address, Address, u32) {
     let client_addr = Address::generate(env);
     let freelancer_addr = Address::generate(env);
     let milestones = vec![env, 100_i128, 200_i128];
@@ -76,10 +70,7 @@ fn setup_funded_contract(
 
 /// Create and complete a contract (all milestones released) so issue_reputation
 /// can be exercised from a `Completed` baseline.
-fn setup_completed_contract(
-    env: &Env,
-    client: &EscrowClient<'_>,
-) -> (Address, Address, u32) {
+fn setup_completed_contract(env: &Env, client: &EscrowClient<'_>) -> (Address, Address, u32) {
     let (client_addr, freelancer_addr, id) = setup_funded_contract(env, client);
     client.approve_milestone_release(&id, &client_addr, &0);
     client.release_milestone(&id, &client_addr, &0);
@@ -97,7 +88,9 @@ fn set_emergency_only(env: &Env, client: &EscrowClient<'_>) {
     // hits the Emergency check first.
     let contract_addr: Address = client.address.clone();
     env.as_contract(&contract_addr, || {
-        env.storage().persistent().set(&crate::DataKey::Paused, &false);
+        env.storage()
+            .persistent()
+            .set(&crate::DataKey::Paused, &false);
     });
 }
 
@@ -106,7 +99,10 @@ fn set_emergency_only(env: &Env, client: &EscrowClient<'_>) {
 #[test]
 fn initialize_only_once_fails() {
     let (_env, client, admin) = setup_initialized();
-    super::assert_contract_error(client.try_initialize(&admin), EscrowError::AlreadyInitialized);
+    super::assert_contract_error(
+        client.try_initialize(&admin),
+        EscrowError::AlreadyInitialized,
+    );
 }
 
 // ─── pause / unpause state ──────────────────────────────────────────────────

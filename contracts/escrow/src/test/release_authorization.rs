@@ -18,7 +18,9 @@
 
 #![cfg(test)]
 
-use soroban_sdk::{testutils::Address as _, testutils::Events, vec, Address, Env, IntoVal, Symbol, TryFromVal};
+use soroban_sdk::{
+    testutils::Address as _, testutils::Events, vec, Address, Env, IntoVal, Symbol, TryFromVal,
+};
 
 use super::register_client;
 use crate::{ContractStatus, Error, Escrow, EscrowClient, ReleaseAuthorization};

@@ -24,6 +24,7 @@
 #![allow(clippy::useless_conversion)]
 
 mod amount_validation;
+mod amount_validation;
 mod approvals;
 mod create_contract;
 mod deposit;
@@ -33,10 +34,10 @@ mod governance;
 mod migration;
 mod ttl;
 mod types;
-mod amount_validation;
 mod utils;
 
 pub use amount_validation::safe_add_amounts;
+pub use amount_validation::{safe_add_amounts, safe_subtract_amounts};
 pub use dispute::DisputeResolution;
 pub use migration::PendingClientMigration;
 pub use ttl::{ADMIN_ROTATION_MIN_DELAY_LEDGERS, PENDING_MIGRATION_TTL_LEDGERS};
@@ -45,7 +46,6 @@ pub use types::{
     MilestoneApprovals, MilestoneSummary, ReadinessChecklist, ReleaseAuthorization, Reputation,
     CONTRACT_SUMMARY_SCHEMA_VERSION,
 };
-pub use amount_validation::{safe_add_amounts, safe_subtract_amounts};
 
 // Re-export for internal use
 pub(crate) use amount_validation::safe_subtract_amounts;
@@ -98,8 +98,6 @@ pub enum EscrowError {
     AlreadyFinalized = 29,
     AmountMustBePositive = 30,
 }
-
-
 
 /// Returns `Some(a + b)`, or `None` on overflow.
 pub fn safe_add_amounts(a: i128, b: i128) -> Option<i128> {
@@ -224,8 +222,17 @@ impl Escrow {
         arbiter: Option<Address>,
         milestones: Vec<i128>,
         release_authorization: ReleaseAuthorization,
+        deadlines: Option<Vec<u64>>,
     ) -> u32 {
-        create_contract::create_contract_impl(&env, client, freelancer, arbiter, milestones, release_authorization)
+        create_contract::create_contract_impl(
+            &env,
+            client,
+            freelancer,
+            arbiter,
+            milestones,
+            release_authorization,
+            deadlines,
+        )
     }
 
     /// Deposits funds into the contract. Transitions to Funded status when fully funded.
@@ -266,7 +273,10 @@ impl Escrow {
     }
 
     /// Return immutable close metadata for `contract_id`, if it has been finalized.
-    pub fn get_finalization_record(env: Env, contract_id: u32) -> Option<finalize::FinalizationRecord> {
+    pub fn get_finalization_record(
+        env: Env,
+        contract_id: u32,
+    ) -> Option<finalize::FinalizationRecord> {
         finalize::get_finalization_record_impl(&env, contract_id)
     }
 
@@ -611,6 +621,121 @@ impl Escrow {
         ttl::extend_contract_and_milestones_ttl(&env, contract_id);
 
         total_refund_amount
+    }
+
+    /// Claims a timeout-based refund for an unreleased milestone whose deadline has passed.
+    ///
+    /// Allows the client to recover funds from a milestone when the freelancer has
+    /// not released it before the optional per-milestone deadline. The milestone
+    /// must have a `deadline` set, must not yet be released or refunded, and the
+    /// current ledger timestamp must exceed the deadline.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `contract_id` - The contract ID
+    /// * `milestone_index` - The index of the milestone to refund
+    ///
+    /// # Returns
+    /// The amount refunded
+    ///
+    /// # Errors
+    /// * `ContractPaused` - If pause or emergency controls are active
+    /// * `ContractNotFound` - If contract doesn't exist
+    /// * `AlreadyFinalized` - If contract has been finalized
+    /// * `InvalidState` - If contract is not in an active state
+    /// * `IndexOutOfBounds` - If milestone_index is out of bounds
+    /// * `MilestoneAlreadyReleased` - If milestone was already released
+    /// * `AlreadyRefunded` - If milestone was already refunded
+    /// * `DeadlineNotPassed` - If milestone has no deadline or deadline hasn't passed
+    /// * `UnauthorizedRole` - If caller is not the client
+    pub fn claim_timeout_refund(env: Env, contract_id: u32, milestone_index: u32) -> i128 {
+        Self::require_not_paused(&env);
+
+        let mut contract: Contract = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Contract(contract_id))
+            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
+        ttl::extend_contract_ttl(&env, contract_id);
+        Self::require_not_finalized(&env, contract_id);
+
+        // Require an active, non-terminal contract status
+        if contract.status != ContractStatus::Created
+            && contract.status != ContractStatus::Funded
+            && contract.status != ContractStatus::PartiallyFunded
+        {
+            env.panic_with_error(Error::InvalidState);
+        }
+
+        let milestone_key = Symbol::new(&env, "milestones");
+        let mut milestones: Vec<Milestone> = env
+            .storage()
+            .persistent()
+            .get(&(DataKey::Contract(contract_id), milestone_key.clone()))
+            .unwrap();
+
+        ttl::extend_milestone_ttl(&env, contract_id);
+
+        if milestone_index >= milestones.len() {
+            env.panic_with_error(Error::IndexOutOfBounds);
+        }
+
+        let mut milestone = milestones.get(milestone_index).unwrap();
+
+        if milestone.released {
+            env.panic_with_error(Error::AlreadyReleased);
+        }
+
+        if milestone.refunded {
+            env.panic_with_error(Error::AlreadyRefunded);
+        }
+
+        // Check deadline has been set and has passed
+        match milestone.deadline {
+            Some(deadline) => {
+                if utils::now_seconds(&env) <= deadline {
+                    env.panic_with_error(Error::DeadlineNotPassed);
+                }
+            }
+            None => {
+                env.panic_with_error(Error::DeadlineNotPassed);
+            }
+        }
+
+        contract.client.require_auth();
+
+        // Mark milestone as refunded
+        milestone.refunded = true;
+        milestones.set(milestone_index, milestone.clone());
+        contract.refunded_amount += milestone.amount;
+
+        // Check status transitions
+        let all_refunded_or_released = milestones.iter().all(|m| m.released || m.refunded);
+        if all_refunded_or_released {
+            let all_refunded = milestones.iter().all(|m| m.refunded);
+            if all_refunded {
+                contract.status = ContractStatus::Refunded;
+            } else {
+                contract.status = ContractStatus::Completed;
+            }
+        }
+
+        env.storage().persistent().set(
+            &(DataKey::Contract(contract_id), milestone_key),
+            &milestones,
+        );
+        env.storage()
+            .persistent()
+            .set(&DataKey::Contract(contract_id), &contract);
+
+        ttl::extend_contract_and_milestones_ttl(&env, contract_id);
+
+        env.events().publish(
+            (symbol_short!("timeout"), symbol_short!("refund")),
+            (contract_id, milestone_index, milestone.amount),
+        );
+
+        milestone.amount
     }
 
     /// Retrieves contract information.

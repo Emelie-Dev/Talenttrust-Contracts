@@ -1,10 +1,8 @@
 extern crate std;
 
-use soroban_sdk::{testutils::Address as _, Address, Env, testutils::Events};
+use soroban_sdk::{testutils::Address as _, testutils::Events, Address, Env};
 
-use crate::{
-    Escrow, EscrowClient, EscrowError,
-};
+use crate::{Escrow, EscrowClient, EscrowError};
 
 /// Returns a fresh (Env, contract Address) pair with all auths mocked.
 fn setup() -> (Env, Address) {
@@ -23,8 +21,14 @@ fn fresh_contract_returns_safe_defaults() {
 
     let info = client.get_mainnet_readiness_info();
 
-    assert!(!info.initialized, "initialized should be false on a fresh contract");
-    assert!(!info.governed_params_set, "governed_params_set should be false on a fresh contract");
+    assert!(
+        !info.initialized,
+        "initialized should be false on a fresh contract"
+    );
+    assert!(
+        !info.governed_params_set,
+        "governed_params_set should be false on a fresh contract"
+    );
     assert!(
         !info.emergency_controls_enabled,
         "emergency_controls_enabled should be false on a fresh contract"
@@ -42,7 +46,10 @@ fn initialize_sets_initialized_to_true() {
     client.initialize(&admin);
 
     let info = client.get_mainnet_readiness_info();
-    assert!(info.initialized, "initialized must be true after initialize()");
+    assert!(
+        info.initialized,
+        "initialized must be true after initialize()"
+    );
 }
 
 // ── 4.3 ─────────────────────────────────────────────────────────────────────
@@ -180,8 +187,14 @@ fn get_mainnet_readiness_info_is_idempotent() {
     let second = client.get_mainnet_readiness_info();
     let third = client.get_mainnet_readiness_info();
 
-    assert_eq!(first, second, "repeated calls must return identical results");
-    assert_eq!(second, third, "repeated calls must return identical results");
+    assert_eq!(
+        first, second,
+        "repeated calls must return identical results"
+    );
+    assert_eq!(
+        second, third,
+        "repeated calls must return identical results"
+    );
 }
 
 // ── 4.10 ────────────────────────────────────────────────────────────────────
@@ -276,8 +289,14 @@ fn test_operator_workflow_transitions() {
     assert!(info.initialized);
     assert!(info.governed_params_set);
     assert!(info.emergency_controls_enabled);
-    assert!(client.is_paused(), "Contract should be paused after activating emergency pause");
-    assert!(client.is_emergency(), "Contract should be in emergency mode");
+    assert!(
+        client.is_paused(),
+        "Contract should be paused after activating emergency pause"
+    );
+    assert!(
+        client.is_emergency(),
+        "Contract should be in emergency mode"
+    );
 
     // 5. Step 5: Resolve the Emergency (Resume normal operations)
     client.resolve_emergency();
@@ -285,7 +304,12 @@ fn test_operator_workflow_transitions() {
     assert!(info.initialized);
     assert!(info.governed_params_set);
     assert!(info.emergency_controls_enabled); // Should remain true once enabled
-    assert!(!client.is_paused(), "Contract should be unpaused after resolving emergency");
-    assert!(!client.is_emergency(), "Contract should not be in emergency mode");
+    assert!(
+        !client.is_paused(),
+        "Contract should be unpaused after resolving emergency"
+    );
+    assert!(
+        !client.is_emergency(),
+        "Contract should not be in emergency mode"
+    );
 }
-

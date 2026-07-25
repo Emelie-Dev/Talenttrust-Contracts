@@ -100,8 +100,8 @@ pub fn accept_client_migration_impl(env: &Env, contract_id: u32, new_client: Add
     Escrow::require_migration_allowed(&env, contract.status);
 
     let key = Escrow::pending_migration_key(contract_id);
-    let pending: PendingClientMigration = read_if_live(&env, &key)
-        .unwrap_or_else(|| env.panic_with_error(EscrowError::InvalidState));
+    let pending: PendingClientMigration =
+        read_if_live(&env, &key).unwrap_or_else(|| env.panic_with_error(EscrowError::InvalidState));
 
     if pending.proposed_client != new_client {
         env.panic_with_error(EscrowError::UnauthorizedRole);

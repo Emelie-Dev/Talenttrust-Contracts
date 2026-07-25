@@ -144,9 +144,7 @@ pub fn finalize_contract_impl(env: &Env, contract_id: u32, finalizer: Address) -
     Escrow::require_not_finalized(&env, contract_id);
     Escrow::require_finalizer_role(&env, &contract, &finalizer);
 
-    if contract.status != ContractStatus::Completed
-        && contract.status != ContractStatus::Disputed
-    {
+    if contract.status != ContractStatus::Completed && contract.status != ContractStatus::Disputed {
         env.panic_with_error(EscrowError::InvalidStatusTransition);
     }
 

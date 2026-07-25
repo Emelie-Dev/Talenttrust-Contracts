@@ -111,6 +111,7 @@ pub enum Error {
     ContractIdOverflow = 28,
     EmptyComment = 29,
     CommentTooLong = 30,
+    DeadlineNotPassed = 31,
 }
 
 /// Contract lifecycle states
@@ -150,6 +151,7 @@ pub struct Milestone {
     pub refunded: bool,
     pub work_evidence: Option<String>,
     pub refunded_amount: i128,
+    pub deadline: Option<u64>,
 }
 
 /// Defines who can approve milestone releases.

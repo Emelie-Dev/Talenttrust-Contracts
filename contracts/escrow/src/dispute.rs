@@ -1,7 +1,8 @@
 use soroban_sdk::{contractimpl, contracttype, Address, Env};
 
 use crate::{
-    safe_add_amounts, Contract, ContractStatus, EscrowError, Escrow, EscrowClient, EscrowArgs, DataKey
+    safe_add_amounts, Contract, ContractStatus, DataKey, Escrow, EscrowArgs, EscrowClient,
+    EscrowError,
 };
 use soroban_sdk::{contractimpl, symbol_short, Address, Env, Symbol};
 
@@ -9,7 +10,12 @@ use soroban_sdk::{contractimpl, symbol_short, Address, Env, Symbol};
 impl Escrow {
     /// Raise a dispute on a funded escrow. Only the client or freelancer may call this.
     pub fn raise_dispute(env: Env, contract_id: u32, caller: Address) -> bool {
-        if env.storage().persistent().get::<_, bool>(&DataKey::Paused).unwrap_or(false) {
+        if env
+            .storage()
+            .persistent()
+            .get::<_, bool>(&DataKey::Paused)
+            .unwrap_or(false)
+        {
             env.panic_with_error(EscrowError::ContractPaused);
         }
         caller.require_auth();
@@ -52,7 +58,12 @@ impl Escrow {
         arbiter: Address,
         resolution: DisputeResolution,
     ) -> bool {
-        if env.storage().persistent().get::<_, bool>(&DataKey::Paused).unwrap_or(false) {
+        if env
+            .storage()
+            .persistent()
+            .get::<_, bool>(&DataKey::Paused)
+            .unwrap_or(false)
+        {
             env.panic_with_error(EscrowError::ContractPaused);
         }
         arbiter.require_auth();
@@ -72,9 +83,8 @@ impl Escrow {
         }
 
         let old_status = contract.status;
-        let (client_payout, freelancer_payout) =
-            resolution_payouts(&contract, &resolution)
-                .unwrap_or_else(|err| env.panic_with_error(err));
+        let (client_payout, freelancer_payout) = resolution_payouts(&contract, &resolution)
+            .unwrap_or_else(|err| env.panic_with_error(err));
 
         contract.refunded_amount = safe_add_amounts(contract.refunded_amount, client_payout)
             .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
@@ -268,9 +278,8 @@ impl Escrow {
             env.panic_with_error(Error::UnauthorizedRole);
         }
 
-        let (client_payout, freelancer_payout) =
-            resolution_payouts(&contract, &resolution)
-                .unwrap_or_else(|err| env.panic_with_error(err));
+        let (client_payout, freelancer_payout) = resolution_payouts(&contract, &resolution)
+            .unwrap_or_else(|err| env.panic_with_error(err));
 
         contract.refunded_amount = safe_add_amounts(contract.refunded_amount, client_payout)
             .unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
