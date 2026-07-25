@@ -211,6 +211,8 @@ pub enum Error {
     MilestoneNotOverdue = 53,
     /// The contract ID is out of valid bounds.
     InvalidContractId = 54,
+    /// The batch size exceeds the configured maximum.
+    BatchItemLimitExceeded = 55,
 }
 
 /// Contract lifecycle states
@@ -339,6 +341,15 @@ pub struct Reputation {
     pub completed_contracts: i128,
     pub total_rating: i128,
     pub last_rating: i128,
+}
+
+/// A single item in a bounded batch reputation write.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReputationBatchItem {
+    pub contract_id: u32,
+    pub rating: u32,
+    pub comment: String,
 }
 
 // ── Dispute Resolution ───────────────────────────────────────────────────────

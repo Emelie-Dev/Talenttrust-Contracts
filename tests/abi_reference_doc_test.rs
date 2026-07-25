@@ -39,6 +39,7 @@ fn abi_reference_document_lists_current_public_entrypoints() {
         "raise_dispute",
         "resolve_dispute",
         "issue_reputation",
+        "issue_reputation_batch",
         "get_reputation_comment",
         "get_reputation",
         "get_average_rating",

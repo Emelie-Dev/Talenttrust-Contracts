@@ -2,8 +2,8 @@
 //!
 //! The crate root exposes the Soroban contract and still owns several public
 //! entrypoints directly: initialization, settlement-token binding, deposits,
-//! milestone release/refund/cancel flows, reputation, work evidence, protocol
-//! fee withdrawal, and dispute entrypoints. Supporting modules keep reusable
+//! milestone release/refund/cancel flows, reputation (including batch), work
+//! evidence, protocol fee withdrawal, and dispute entrypoints. Supporting modules keep reusable
 //! validation, storage, governance, and lifecycle helpers close to the paths
 //! that use them.
 //!
@@ -11,7 +11,7 @@
 //!
 //! | Source | Responsibility | Storage keys owned or touched |
 //! | --- | --- | --- |
-//! | `lib.rs` | Contract wrapper plus root entrypoints for setup, custody, money movement, reads, reputation, work evidence, pause/emergency, fee withdrawal, and dispute orchestration. | `DataKey::Initialized`, `Admin`, `SettlementToken`, `Paused`, `Emergency`, `ReadinessChecklist`, `Contract(id)`, `(Contract(id), "milestones")`, `MilestoneApprovals`, `AccumulatedProtocolFees`, `ReputationIssued`, `PendingReputationCredits`, `Reputation`, `ReputationComment` |
+//! | `lib.rs` | Contract wrapper plus root entrypoints for setup, custody, money movement, reads, reputation (incl. batch), work evidence, pause/emergency, fee withdrawal, and dispute orchestration. | `DataKey::Initialized`, `Admin`, `SettlementToken`, `Paused`, `Emergency`, `ReadinessChecklist`, `Contract(id)`, `(Contract(id), "milestones")`, `MilestoneApprovals`, `AccumulatedProtocolFees`, `ReputationIssued`, `PendingReputationCredits`, `Reputation`, `ReputationComment` |
 //! | `amount_validation` | Stateless validation and checked arithmetic for stroop amounts and milestone totals. | None directly; callers write validated amounts to `Contract(id)` and milestone vectors. |
 //! | `approvals` | Temporary milestone release approvals and release-authorization checks. | Temporary `DataKey::MilestoneApprovals(contract_id, milestone_index)`; reads `Contract(id)` and `(Contract(id), "milestones")`. |
 //! | `deposit` | Deposit preflight and post-transfer accounting used by `deposit_funds`. | `DataKey::Contract(contract_id)` and `(DataKey::Contract(contract_id), "milestones")`. |
@@ -84,7 +84,7 @@ pub use types::{
     Contract, ContractBounds, ContractStatus, ContractSummary, DataKey, DepositMode,
     DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone, MilestoneApprovals,
     MilestoneEntry, MilestoneSummary, PendingAdminProposal, ReadinessChecklist,
-    ReleaseAuthorization, Reputation, SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION,
+    ReleaseAuthorization, Reputation, ReputationBatchItem, SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION,
 };
 
 /// Default maximum number of milestones allowed per contract.
@@ -110,6 +110,9 @@ pub const MIN_MAX_ESCROW_STROOPS: i128 = 1_000_000;
 
 pub const MAINNET_PROTOCOL_VERSION: u32 = 1u32;
 pub const MAINNET_MAX_TOTAL_ESCROW_PER_CONTRACT_STROOPS: i128 = 1_000_000_000_000_000i128;
+
+/// Maximum number of reputation items accepted in a single batch call.
+pub const MAX_REPUTATION_BATCH_SIZE: usize = 10;
 
 // ─── Contract data ────────────────────────────────────────────────────────────
 
@@ -2110,6 +2113,106 @@ impl Escrow {
             ttl::PERSISTENT_TTL_LEDGERS,
         );
 
+        true
+    }
+
+    /// Batch variant of [`issue_reputation`] that processes multiple
+    /// contracts in a single call.
+    ///
+    /// Each item is validated and persisted independently so that a later
+    /// item cannot alter the outcome of an earlier one.  The cap is
+    /// [`MAX_REPUTATION_BATCH_SIZE`]; requests that exceed it are rejected
+    /// with [`Error::BatchItemLimitExceeded`] before any state is written.
+    ///
+    /// # Errors
+    /// Same per-item errors as [`issue_reputation`], plus:
+    /// * `BatchItemLimitExceeded` — when the batch length exceeds
+    ///   [`MAX_REPUTATION_BATCH_SIZE`].
+    pub fn issue_reputation_batch(
+        env: Env,
+        caller: Address,
+        items: Vec<ReputationBatchItem>,
+    ) -> bool {
+        Self::require_not_paused(&env);
+        if items.len() > MAX_REPUTATION_BATCH_SIZE {
+            env.panic_with_error(Error::BatchItemLimitExceeded);
+        }
+        caller.require_auth();
+        let mut i = 0;
+        while i < items.len() {
+            let item = items.get(i).unwrap();
+            Self::validate_contract_id_bounds(&env, item.contract_id);
+            let mut contract: Contract = env
+                .storage()
+                .persistent()
+                .get(&DataKey::Contract(item.contract_id))
+                .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
+            ttl::extend_contract_ttl(&env, item.contract_id);
+            if caller != contract.client {
+                env.panic_with_error(Error::UnauthorizedRole);
+            }
+            if item.rating < 1 || item.rating > 5 {
+                env.panic_with_error(Error::InvalidRating);
+            }
+            if item.comment.len() == 0 {
+                env.panic_with_error(Error::EmptyComment);
+            }
+            if item.comment.len() > 200 {
+                env.panic_with_error(Error::CommentTooLong);
+            }
+            if contract.status != ContractStatus::Completed {
+                env.panic_with_error(Error::NotCompleted);
+            }
+            if contract.reputation_issued {
+                env.panic_with_error(Error::ReputationAlreadyIssued);
+            }
+            if contract.client == contract.freelancer {
+                env.panic_with_error(Error::SelfRating);
+            }
+            contract.reputation_issued = true;
+            env.storage()
+                .persistent()
+                .set(&DataKey::Contract(item.contract_id), &contract);
+            env.storage()
+                .persistent()
+                .set(&DataKey::ReputationIssued(item.contract_id), &true);
+            env.storage().persistent().extend_ttl(
+                &DataKey::ReputationIssued(item.contract_id),
+                ttl::PERSISTENT_BUMP_THRESHOLD,
+                ttl::PERSISTENT_TTL_LEDGERS,
+            );
+            let pending_key = DataKey::PendingReputationCredits(contract.freelancer.clone());
+            let pending: i128 = env.storage().persistent().get(&pending_key).unwrap_or(0);
+            if pending <= 0 {
+                env.panic_with_error(Error::InvalidState);
+            }
+            env.storage().persistent().set(&pending_key, &(pending - 1));
+            let rep_key = DataKey::Reputation(contract.freelancer.clone());
+            let mut rep: types::Reputation =
+                env.storage().persistent().get(&rep_key).unwrap_or_default();
+            rep.completed_contracts = rep
+                .completed_contracts
+                .checked_add(1)
+                .unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
+            rep.total_rating = rep
+                .total_rating
+                .checked_add(item.rating as i128)
+                .unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
+            rep.last_rating = item.rating as i128;
+            env.storage().persistent().set(&rep_key, &rep);
+            let comment_key = DataKey::ReputationComment(item.contract_id);
+            env.storage().persistent().set(&comment_key, &item.comment);
+            env.storage().persistent().extend_ttl(
+                &comment_key,
+                ttl::PERSISTENT_BUMP_THRESHOLD,
+                ttl::PERSISTENT_TTL_LEDGERS,
+            );
+            env.events().publish(
+                (symbol_short!("rep_iss"), item.contract_id),
+                (caller.clone(), item.rating, env.ledger().timestamp()),
+            );
+            i += 1;
+        }
         true
     }
 

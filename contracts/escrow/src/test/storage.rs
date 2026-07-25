@@ -4,7 +4,7 @@ use super::{
     MILESTONE_TWO,
 };
 use crate::{ContractStatus, DataKey, EscrowError, ReadinessChecklist, ReleaseAuthorization};
-use soroban_sdk::{testutils::Address as _, Address, Env};
+use soroban_sdk::{testutils::Address as _, Address, Env, Vec};
 
 // ─── Initialized / Admin ──────────────────────────────────────────────────────
 
@@ -417,6 +417,127 @@ fn reputation_requires_client_caller() {
         client.try_issue_reputation(&id, &stranger, &f, &5),
         EscrowError::UnauthorizedRole,
     );
+}
+
+// ─── Reputation Batch ─────────────────────────────────────────────────
+
+fn reputation_batch_item(env: &Env, contract_id: u32, rating: u32) -> crate::ReputationBatchItem {
+    crate::ReputationBatchItem {
+        contract_id,
+        rating,
+        comment: String::from_str(&env, "batch comment"),
+    }
+}
+
+#[test]
+fn issue_reputation_batch_empty_is_noop() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+    let (c, _f, _id) = complete_contract(&env, &client);
+
+    let items: Vec<crate::ReputationBatchItem> = Vec::new(&env);
+    let result = client.issue_reputation_batch(&c, &items);
+    assert!(result);
+}
+
+#[test]
+fn issue_reputation_batch_over_cap_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+
+    let (c, _f, id) = complete_contract(&env, &client);
+
+    let mut items: Vec<crate::ReputationBatchItem> = Vec::new(&env);
+    for _ in 0..crate::MAX_REPUTATION_BATCH_SIZE + 1 {
+        let item = crate::ReputationBatchItem {
+            contract_id: id,
+            rating: 5,
+            comment: String::from_str(&env, "batch comment"),
+        };
+        items.push_back(&item);
+    }
+
+    assert_contract_error(
+        client.try_issue_reputation_batch(&c, &items),
+        EscrowError::BatchItemLimitExceeded,
+    );
+}
+
+#[test]
+fn issue_reputation_batch_at_cap_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+
+    let (c, f, id) = complete_contract(&env, &client);
+
+    let mut contract_ids: Vec<u32> = Vec::new(&env);
+    contract_ids.push_back(&id);
+
+    // Create additional contracts to fill up the batch cap.
+    for _ in 1..crate::MAX_REPUTATION_BATCH_SIZE {
+        let c2 = client
+            .create_contract(
+                &c,
+                &f,
+                &None,
+                &default_milestones(&env),
+                &ReleaseAuthorization::ClientOnly,
+            );
+        let total = total_milestone_amount();
+        client.deposit_funds(&c2, &c, &total);
+        for milestone_index in 0..3u32 {
+            client.approve_milestone_release(&c2, &c, &milestone_index);
+            client.release_milestone(&c2, &c, &milestone_index);
+        }
+        contract_ids.push_back(&c2);
+    }
+
+    let mut items: Vec<crate::ReputationBatchItem> = Vec::new(&env);
+    for i in 0..crate::MAX_REPUTATION_BATCH_SIZE {
+        let contract_id = contract_ids.get(i as u32).unwrap();
+        let item = crate::ReputationBatchItem {
+            contract_id: *contract_id,
+            rating: 5,
+            comment: String::from_str(&env, "batch comment"),
+        };
+        items.push_back(&item);
+    }
+
+    let result = client.issue_reputation_batch(&c, &items);
+    assert!(result);
+}
+
+#[test]
+fn issue_reputation_batch_per_item_semantics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+
+    let (c, f, id) = complete_contract(&env, &client);
+
+    let item = reputation_batch_item(&env, id, 4);
+    let mut items: Vec<crate::ReputationBatchItem> = Vec::new(&env);
+    items.push_back(&item);
+
+    let result = client.issue_reputation_batch(&c, &items);
+    assert!(result);
+
+    env.as_contract(&client.address, || {
+        let issued: bool = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ReputationIssued(id))
+            .unwrap_or(false);
+        assert!(issued);
+    });
+
+    let rep = client.get_reputation(&f).unwrap();
+    assert_eq!(rep.completed_contracts, 1);
+    assert_eq!(rep.total_rating, 4);
+    assert_eq!(rep.last_rating, 4);
 }
 
 // ─── ReadinessChecklist ───────────────────────────────────────────────────────

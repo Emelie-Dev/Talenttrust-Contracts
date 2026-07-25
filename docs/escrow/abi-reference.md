@@ -294,6 +294,16 @@ The list intentionally omits planned or reserved entrypoints that are not implem
 - Events: None in the current implementation
 - Errors: `ContractNotFound`, `UnauthorizedRole`, `InvalidRating`, `EmptyComment`, `CommentTooLong`, `NotCompleted`, `ReputationAlreadyIssued`, `SelfRating`, `InvalidState`
 
+### issue_reputation_batch
+
+- Signature: `issue_reputation_batch(env: Env, caller: Address, items: Vec<ReputationBatchItem>) -> bool`
+- Kind: Mutating
+- Auth: `caller.require_auth()`
+- Semantics: Issues reputation for multiple completed contracts in a single call. Each item is validated and persisted independently. Emits `rep_iss` events per successfully processed item. Rejects the entire batch if any item would fail.
+- Max items: [`MAX_REPUTATION_BATCH_SIZE`] (10)
+- Events: `rep_iss` `(caller: Address, rating: u32, timestamp: u64)` per item
+- Errors: `ContractNotFound`, `UnauthorizedRole`, `InvalidRating`, `EmptyComment`, `CommentTooLong`, `NotCompleted`, `ReputationAlreadyIssued`, `SelfRating`, `InvalidState`, `BatchItemLimitExceeded`
+
 ### get_reputation_comment
 
 - Signature: `get_reputation_comment(env: Env, contract_id: u32) -> Option<String>`

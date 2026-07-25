@@ -30,6 +30,7 @@ mod release_authorization;
 mod reputation;
 mod reputation_bounds_tests;
 mod security;
+mod storage;
 mod ttl_tests;
 
 // --- Shared constants ---
