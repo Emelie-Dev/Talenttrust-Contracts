@@ -45,6 +45,40 @@ impl Escrow {
         }
     }
 
+    /// Load a contract from persistent storage, extend its TTL, and assert it
+    /// has not been finalized.
+    ///
+    /// This is the canonical shared precondition for every state-changing
+    /// entrypoint that operates on an existing escrow contract:
+    ///
+    /// 1. **Load** — reads `DataKey::Contract(contract_id)` from persistent
+    ///    storage.  Panics with [`Error::ContractNotFound`] when the key is
+    ///    absent.
+    /// 2. **Extend TTL** — calls [`ttl::extend_contract_ttl`] so that active
+    ///    contracts are not evicted from ledger state while they are being
+    ///    mutated.
+    /// 3. **Finalization guard** — calls [`Self::require_not_finalized`], which
+    ///    panics with [`Error::AlreadyFinalized`] when a
+    ///    [`DataKey::Finalization`] record exists for the contract.
+    ///
+    /// Callers that do **not** need the finalization check (currently only
+    /// `issue_reputation`) should call [`ttl::extend_contract_ttl`] and the
+    /// storage `get` directly instead of using this helper.
+    ///
+    /// # Errors
+    /// * [`Error::ContractNotFound`]  — `contract_id` is not in storage.
+    /// * [`Error::AlreadyFinalized`]  — the contract has been finalized.
+    pub(crate) fn load_and_check_contract(env: &Env, contract_id: u32) -> Contract {
+        let contract: Contract = env
+            .storage()
+            .persistent()
+            .get(&crate::DataKey::Contract(contract_id))
+            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
+        crate::ttl::extend_contract_ttl(env, contract_id);
+        Self::require_not_finalized(env, contract_id);
+        contract
+    }
+
     pub(crate) fn require_not_paused(env: &Env) {
         if env
             .storage()
