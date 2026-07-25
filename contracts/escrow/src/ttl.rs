@@ -130,7 +130,44 @@ where
     env.storage().temporary().has(key)
 }
 
-/// Loads the milestone vector for a contract and extends its TTL.
+/// Loads the persistent milestone vector for `contract_id` and bumps its
+/// persistent TTL.
+///
+/// This is the **single canonical read path** for milestone vectors across
+/// the escrow contract (see issue #701). Centralising access here
+/// normalises three concerns:
+///
+/// 1. **Composite key** — built exactly once via [`milestone_storage_key`].
+///    No inline `Symbol::new(&env, "milestones")` literals remain.
+/// 2. **Missing-entry error** — always `Error::ContractNotFound`. Open-coded
+///    sites previously mixed `.unwrap()` / `panic_with_error` /
+///    `ok_or(ContractNotFound)` and confused off-chain tooling.
+/// 3. **TTL bump** — always uses `PERSISTENT_BUMP_THRESHOLD` /
+///    `PERSISTENT_TTL_LEDGERS` so the entry cannot be silently archived
+///    between two reads in the same call frame.
+///
+/// # Arguments
+/// * `env`  - The contract environment (must be inside an `as_contract`
+///            scope when invoked from a `#[test]` harness).
+/// * `contract_id` - The `u32` identifier previously returned by
+///                    [`crate::create_contract`].
+///
+/// # Returns
+/// The `Vec<Milestone>` currently persisted under the composite key
+/// `(DataKey::Contract(contract_id), Symbol("milestones"))`.
+///
+/// # Panics
+/// Panics with [`Error::ContractNotFound`] when the milestone vector is
+/// absent or has been archived by the host. Call sites that need
+/// different failure semantics must use [`try_load_milestones`] instead.
+///
+/// # Side effects
+/// Extends the milestone entry's persistent TTL via
+/// [`extend_milestone_ttl`].
+///
+/// # See also
+/// - [`try_load_milestones`] — non-panicking variant.
+/// - [`store_milestones`] — symmetric write path.
 pub fn load_milestones(env: &Env, contract_id: u32) -> Vec<Milestone> {
     let key = milestone_storage_key(env, contract_id);
     let milestones: Vec<Milestone> = env
@@ -142,7 +179,56 @@ pub fn load_milestones(env: &Env, contract_id: u32) -> Vec<Milestone> {
     milestones
 }
 
-/// Stores the milestone vector for a contract and extends its TTL.
+/// Non-panicking counterpart to [`load_milestones`].
+///
+/// Returns `Some(Vec<Milestone>)` when the milestone vector is present
+/// (and bumps its persistent TTL), or `None` when it is absent. Use this
+/// in read-only paths where a missing milestone vector is a non-error
+/// outcome (e.g. `is_milestone_overdue` for an arbitrary caller-supplied
+/// `contract_id`).
+///
+/// # Arguments
+/// * `env`  - The contract environment.
+/// * `contract_id` - The `u32` identifier under which a milestone vector
+///                    may or may not exist.
+///
+/// # Returns
+/// * `Some(Vec<Milestone>)` — the persisted vector, with TTL bumped.
+/// * `None` — no milestone vector is persisted for `contract_id`. No TTL
+///            bump is performed on this branch (there is nothing to bump).
+pub fn try_load_milestones(env: &Env, contract_id: u32) -> Option<Vec<Milestone>> {
+    let key = milestone_storage_key(env, contract_id);
+    let milestones: Option<Vec<Milestone>> = env.storage().persistent().get(&key);
+    if milestones.is_some() {
+        extend_milestone_ttl(env, contract_id);
+    }
+    milestones
+}
+
+/// Persists `milestones` for `contract_id` under the canonical composite
+/// key and bumps the persistent TTL.
+///
+/// This is the **single canonical write path** for milestone vectors.
+/// Every entrypoint that mutates milestone state (e.g. `release_milestone`,
+/// `refund_unreleased_milestones`, `submit_work_evidence`, approval flows,
+/// creation) must funnel through this helper so the lives of three
+/// concerns stay in lock-step:
+///
+/// 1. **Composite key** — built once via [`milestone_storage_key`].
+/// 2. **Atomic write + TTL bump** — the TTL is bumped in the same
+///    logical step as the write, so a freshly-stored vector cannot be
+///    archived in the same ledger window.
+/// 3. **Bump parameters** — `PERSISTENT_BUMP_THRESHOLD` /
+///    `PERSISTENT_TTL_LEDGERS`, identical to the read path's bump.
+///
+/// # Arguments
+/// * `env`         - The contract environment.
+/// * `contract_id` - The `u32` identifier previously allocated by
+///                    [`crate::create_contract`].
+/// * `milestones`  - The new vector to persist.
+///
+/// # See also
+/// - [`load_milestones`] — the symmetric read path.
 pub fn store_milestones(env: &Env, contract_id: u32, milestones: &Vec<Milestone>) {
     let key = milestone_storage_key(env, contract_id);
     env.storage().persistent().set(&key, milestones);

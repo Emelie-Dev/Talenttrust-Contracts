@@ -76,6 +76,15 @@ pub use dispute::final_status_after_resolution;
 pub use dispute::resolution_payouts;
 pub use migration::PendingClientMigration;
 pub use ttl::{ADMIN_ROTATION_MIN_DELAY_LEDGERS, PENDING_MIGRATION_TTL_LEDGERS};
+// Canonical milestone-vector storage helpers (issue #701). Every module in
+// the contract must route milestone reads/writes through these (defined in
+// `ttl`) rather than constructing the composite `(DataKey::Contract(id),
+// Symbol("milestones"))` key inline. Centralising access gives a single
+// point of truth for the key shape, the missing-entry error path, and
+// the persistent-TTL bump parameters used by every read and write.
+pub use ttl::{
+    load_milestones, milestone_storage_key, store_milestones, try_load_milestones,
+};
 // Keep shared storage keys and escrow domain types centralized in `types.rs`.
 // `DisputeResolution` and `DisputeSplit` are defined once in `types.rs` and
 // re-exported here; `dispute.rs` uses them via `crate::DisputeResolution`.
