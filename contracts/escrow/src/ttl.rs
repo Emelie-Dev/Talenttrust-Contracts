@@ -46,7 +46,11 @@ pub const LEDGERS_PER_DAY: u32 = 17_280;
 
 pub const PENDING_APPROVAL_TTL_LEDGERS: u32 = LEDGERS_PER_DAY * 7;
 pub const PENDING_APPROVAL_BUMP_THRESHOLD: u32 = LEDGERS_PER_DAY;
-pub const MIN_APPROVAL_TTL: u32 = 17_280;
+/// Minimum TTL for a milestone approval entry (1 day).
+///
+/// This is the shortest lifetime we assign to a temporary approval. After this
+/// many ledgers without a bump the entry is eligible for eviction by the host.
+pub const MIN_APPROVAL_TTL: u32 = LEDGERS_PER_DAY;
 
 /// Minimum ledgers that must elapse between proposing and finalising a
 /// treasury / admin rotation. At ~5 s per ledger this is roughly 2 days,

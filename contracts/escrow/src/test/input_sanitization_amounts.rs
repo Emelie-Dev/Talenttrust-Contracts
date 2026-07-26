@@ -7,7 +7,7 @@ use soroban_sdk::{testutils::Address as _, token::StellarAssetClient, vec, Addre
 use crate::{
     safe_add_amounts, safe_subtract_amounts, validate_deposit_amount, validate_milestone_amounts,
     validate_single_amount, Escrow, EscrowClient, EscrowError, ReleaseAuthorization,
-    MAX_TOTAL_ESCROW_STROOPS,
+    MAX_MILESTONES, MAX_SINGLE_AMOUNT_STROOPS, MAX_TOTAL_ESCROW_STROOPS,
 };
 
 fn setup(env: &Env) -> (EscrowClient<'_>, Address, Address) {
@@ -151,7 +151,8 @@ fn test_deposit_funds_panics_when_exceeding_contract_maximum() {
         &milestones,
         &ReleaseAuthorization::ClientOnly,
     );
-    client.deposit_funds(&contract_id, &hiring_party, &1_000_000_0000000_i128); // 1M tokens > remaining capacity
+    client.deposit_funds(&contract_id, &hiring_party, &MAX_SINGLE_AMOUNT_STROOPS);
+    // 1M tokens > remaining capacity
 }
 
 #[test]
@@ -179,7 +180,7 @@ fn test_single_amount_validation() {
     // Valid amounts
     assert!(validate_single_amount(1).is_ok()); // Minimum positive
     assert!(validate_single_amount(100_0000000).is_ok()); // 1 token
-    assert!(validate_single_amount(1_000_000_0000000).is_ok()); // Max single amount
+    assert!(validate_single_amount(MAX_SINGLE_AMOUNT_STROOPS).is_ok()); // Max single amount
 
     // Invalid amounts
     assert_eq!(
@@ -195,7 +196,7 @@ fn test_single_amount_validation() {
         Err(EscrowError::AmountMustBePositive)
     );
     assert_eq!(
-        validate_single_amount(1_000_000_0000001),
+        validate_single_amount(MAX_SINGLE_AMOUNT_STROOPS + 1),
         Err(EscrowError::InvalidMilestoneAmount)
     );
 }
@@ -297,9 +298,9 @@ fn test_edge_cases() {
     assert!(validate_milestone_amounts(&small_milestones, max_total).is_ok());
 
     // Test boundary values
-    assert!(validate_single_amount(1_000_000_0000000).is_ok()); // Max single amount
+    assert!(validate_single_amount(MAX_SINGLE_AMOUNT_STROOPS).is_ok()); // Max single amount
     assert_eq!(
-        validate_single_amount(1_000_000_0000001),
+        validate_single_amount(MAX_SINGLE_AMOUNT_STROOPS + 1),
         Err(EscrowError::InvalidMilestoneAmount)
     );
 
@@ -334,12 +335,12 @@ fn test_stroop_precision() {
 fn test_large_amount_arrays() {
     let max_total = MAX_TOTAL_ESCROW_STROOPS;
 
-    // Test with maximum number of milestones (10)
-    let many_milestones = [100_0000000; 10]; // 1 token each
+    // Test with maximum number of milestones
+    let many_milestones = [100_0000000; MAX_MILESTONES as usize]; // 1 token each
     assert!(validate_milestone_amounts(&many_milestones, max_total).is_ok());
 
     // Test overflow detection in array validation
-    let overflow_milestones = [200_000_0000000; 10]; // 200M tokens each
+    let overflow_milestones = [200_000_0000000; MAX_MILESTONES as usize]; // 200M tokens each
     assert_eq!(
         validate_milestone_amounts(&overflow_milestones, max_total),
         Err(EscrowError::InvalidMilestoneAmount)

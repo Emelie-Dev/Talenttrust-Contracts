@@ -1,6 +1,7 @@
 use crate::{
     amount_validation, ttl, Contract, ContractStatus, DataKey, Error, Escrow, EscrowArgs,
-    EscrowClient, EscrowError, GovernedParameters, Milestone, ReleaseAuthorization, MAX_MILESTONES,
+    EscrowClient, EscrowError, GovernedParameters, Milestone, ReleaseAuthorization,
+    INITIAL_CONTRACT_ID, MAX_MILESTONES,
 };
 use soroban_sdk::{contractimpl, symbol_short, Address, Env, Symbol, Vec};
 
@@ -183,7 +184,7 @@ pub(crate) fn next_contract_id(env: &Env) -> u32 {
         .storage()
         .persistent()
         .get(&DataKey::NextContractId)
-        .unwrap_or(1);
+        .unwrap_or(INITIAL_CONTRACT_ID);
 
     if env
         .storage()

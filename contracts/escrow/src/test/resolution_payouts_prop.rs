@@ -11,7 +11,7 @@
 
 use soroban_sdk::{testutils::Address as _, Address, Env, Vec as SdkVec};
 
-use crate::{Escrow, EscrowClient, ReleaseAuthorization};
+use crate::{Escrow, EscrowClient, MAX_BPS, ReleaseAuthorization};
 
 // ── Deterministic property-style tests ───────────────────────────────────────
 //
@@ -155,13 +155,13 @@ fn prop_1000bps_boundary_milestone() {
 
 #[test]
 fn prop_max_fee_bps_single_milestone() {
-    // 10000 bps = 100%: all funds become fees, freelancer gets 0
-    run_multi_release(&[1_000], 10_000);
+    // MAX_BPS = 100%: all funds become fees, freelancer gets 0
+    run_multi_release(&[1_000], MAX_BPS);
 }
 
 #[test]
 fn prop_max_fee_bps_two_milestones() {
-    run_multi_release(&[1_000, 2_000], 10_000);
+    run_multi_release(&[1_000, 2_000], MAX_BPS);
 }
 
 // ── Large amounts ─────────────────────────────────────────────────────────────

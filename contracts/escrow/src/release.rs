@@ -1,6 +1,6 @@
 use crate::{
     approvals, ttl, Contract, ContractStatus, DataKey, Error, Escrow, Milestone,
-    ReleaseAuthorization,
+    ReleaseAuthorization, REPUTATION_CREDIT_INCREMENT,
 };
 use soroban_sdk::{Address, Env, Symbol, Vec};
 
@@ -124,7 +124,7 @@ impl Escrow {
             contract.status = ContractStatus::Completed;
             let pending_key = DataKey::PendingReputationCredits(contract.freelancer.clone());
             let pending: i128 = env.storage().persistent().get(&pending_key).unwrap_or(0);
-            env.storage().persistent().set(&pending_key, &(pending + 1));
+            env.storage().persistent().set(&pending_key, &(pending + REPUTATION_CREDIT_INCREMENT));
         }
 
         env.storage().persistent().set(

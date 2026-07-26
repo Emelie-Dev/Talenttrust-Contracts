@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use crate::{Escrow, EscrowClient};
+use crate::{Escrow, EscrowClient, MAX_BPS};
 use soroban_sdk::{testutils::Address as _, vec, Address, Env};
 
 // ── Unit tests for calculate_protocol_fee floor-division rounding ─────────
@@ -62,8 +62,8 @@ fn test_calculate_protocol_fee_overflow_guard_fires() {
 fn test_net_payout_never_negative_for_valid_inputs() {
     let env = Env::default();
     let cases: &[(i128, u32)] = &[
-        (1, 10_000),       // maximum fee rate, minimal amount
-        (10_000, 10_000),  // 100% fee rate
+        (1, MAX_BPS),       // maximum fee rate, minimal amount
+        (MAX_BPS as i128, MAX_BPS),  // 100% fee rate
         (50_000, 500),     // 5% fee rate
         (3_333, 1_000),    // 10% fee rate, indivisible
         (1, 1),            // near-zero fee
