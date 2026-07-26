@@ -124,7 +124,7 @@ impl Escrow {
             contract.status = ContractStatus::Completed;
             let pending_key = DataKey::PendingReputationCredits(contract.freelancer.clone());
             let pending: i128 = env.storage().persistent().get(&pending_key).unwrap_or(0);
-            env.storage().persistent().set(&pending_key, &(pending + 1));
+            env.storage().persistent().set(&pending_key, &(pending + crate::REPUTATION_CREDIT_INCREMENT));
         }
 
         env.storage().persistent().set(

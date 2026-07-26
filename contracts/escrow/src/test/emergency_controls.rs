@@ -1,4 +1,4 @@
-use crate::{Error, Escrow, EscrowClient, EscrowError, ReleaseAuthorization};
+use crate::{Error, Escrow, EscrowClient, EscrowError, ReleaseAuthorization, MAX_RATING};
 use soroban_sdk::{testutils::Address as _, vec, Address, Env};
 
 fn setup_initialized() -> (Env, Address, Address) {
@@ -131,7 +131,7 @@ fn emergency_blocks_issue_reputation() {
 
     let comment = soroban_sdk::String::from_str(&env, "Good job");
     super::assert_contract_error(
-        client.try_issue_reputation(&id, &client_addr, &5_u32, &comment),
+        client.try_issue_reputation(&id, &client_addr, &MAX_RATING, &comment),
         Error::ContractPaused,
     );
 }

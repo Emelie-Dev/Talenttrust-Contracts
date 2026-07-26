@@ -53,11 +53,14 @@
 
 mod amount_validation;
 mod approvals;
+mod constants;
 mod deposit;
 mod finalize;
 mod migration;
 mod ttl;
 mod types;
+
+pub use constants::*;
 mod utils;
 
 use crate::utils::now_seconds;
@@ -625,7 +628,9 @@ impl Escrow {
     fn grant_pending_reputation_credit(env: &Env, freelancer: &Address) {
         let pending_key = DataKey::PendingReputationCredits(freelancer.clone());
         let pending: i128 = env.storage().persistent().get(&pending_key).unwrap_or(0);
-        env.storage().persistent().set(&pending_key, &(pending + 1));
+        env.storage()
+            .persistent()
+            .set(&pending_key, &(pending + REPUTATION_CREDIT_INCREMENT));
     }
 
     /// Releases a specific milestone, transferring the net payout to the freelancer.
@@ -1697,7 +1702,7 @@ impl Escrow {
             env.panic_with_error(Error::UnauthorizedRole);
         }
 
-        if rating < 1 || rating > 5 {
+        if rating < MIN_RATING || rating > MAX_RATING {
             env.panic_with_error(Error::InvalidRating);
         }
 
@@ -1705,7 +1710,7 @@ impl Escrow {
             env.panic_with_error(Error::EmptyComment);
         }
 
-        if comment.len() > 200 {
+        if comment.len() > MAX_COMMENT_BYTES {
             env.panic_with_error(Error::CommentTooLong);
         }
 
@@ -1739,12 +1744,14 @@ impl Escrow {
         if pending <= 0 {
             env.panic_with_error(Error::InvalidState);
         }
-        env.storage().persistent().set(&pending_key, &(pending - 1));
+        env.storage()
+            .persistent()
+            .set(&pending_key, &(pending - REPUTATION_CREDIT_INCREMENT));
 
         let rep_key = DataKey::Reputation(contract.freelancer.clone());
         let mut rep: types::Reputation =
             env.storage().persistent().get(&rep_key).unwrap_or_default();
-        rep.completed_contracts += 1;
+        rep.completed_contracts += REPUTATION_CREDIT_INCREMENT;
         rep.total_rating += rating as i128;
         rep.last_rating = rating as i128;
         env.storage().persistent().set(&rep_key, &rep);
@@ -1793,9 +1800,6 @@ impl Escrow {
     /// Checked arithmetic is used throughout; division by zero is impossible
     /// because `None` is returned whenever `completed_contracts == 0`.
     pub fn get_average_rating(env: Env, address: Address) -> Option<i128> {
-        /// Basis-point scaling factor (×10 000 preserves four decimal places).
-        const SCALE: i128 = 10_000;
-
         let rep: types::Reputation = env
             .storage()
             .persistent()
@@ -1806,7 +1810,7 @@ impl Escrow {
         }
 
         rep.total_rating
-            .checked_mul(SCALE)
+            .checked_mul(crate::SCALE)
             .and_then(|scaled| scaled.checked_div(rep.completed_contracts))
     }
 

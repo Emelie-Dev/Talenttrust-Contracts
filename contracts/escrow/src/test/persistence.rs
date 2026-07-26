@@ -3,7 +3,7 @@ use super::{
     generated_participants, register_client, total_milestone_amount, MILESTONE_ONE,
     MILESTONE_THREE, MILESTONE_TWO,
 };
-use crate::{ttl, ContractStatus, Error, EscrowError, ReleaseAuthorization};
+use crate::{ttl, ContractStatus, Error, EscrowError, ReleaseAuthorization, MAX_RATING};
 use soroban_sdk::{
     testutils::{storage::Persistent, Address as _, Ledger},
     vec, Address, Env, Symbol,
@@ -61,7 +61,7 @@ fn participant_metadata_and_pending_credits_persist_until_reputation_is_issued()
     assert_eq!(client.get_pending_reputation_credits(&freelancer_addr), 1);
 
     let comment = soroban_sdk::String::from_str(&env, "Good job");
-    assert!(client.issue_reputation(&contract_id, &client_addr, &5_u32, &comment));
+    assert!(client.issue_reputation(&contract_id, &client_addr, &MAX_RATING, &comment));
     assert_eq!(client.get_pending_reputation_credits(&freelancer_addr), 0);
 }
 
