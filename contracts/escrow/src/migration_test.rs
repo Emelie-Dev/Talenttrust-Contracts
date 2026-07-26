@@ -13,20 +13,19 @@ fn test_get_state_forward_compatible() {
     let freelancer_addr = Address::generate(&env);
     let milestones = vec![&env, 1000_i128, 2000_i128];
 
-    // Inject legacy StateV1 directly into the persistent storage representing pre-migration ledger data
+    // Inject legacy StateV1 directly into persistent storage
     let legacy_state = StateV1 {
         client: client_addr.clone(),
         freelancer: freelancer_addr.clone(),
         milestones: milestones.clone(),
     };
-    // The environment directly simulates pre-migration environments here safely over contract scopes
     env.as_contract(&contract_id, || {
         env.storage()
             .persistent()
             .set(&DataKey::State, &legacy_state);
     });
 
-    // Execute standard forward-compatible read entrypoint handling standard upgrades natively
+    // Execute forward-compatible read
     let active_state: StateV2 = client.get_state();
 
     assert_eq!(active_state.client, client_addr);
@@ -37,7 +36,7 @@ fn test_get_state_forward_compatible() {
 #[test]
 fn test_migrate_state_persistence() {
     let env = Env::default();
-    env.mock_all_auths(); // Bypass strict Auth limits during environment test bounds explicitly
+    env.mock_all_auths();
     let contract_id = env.register(Escrow, ());
     let client = EscrowClient::new(&env, &contract_id);
 
@@ -58,11 +57,11 @@ fn test_migrate_state_persistence() {
             .set(&DataKey::State, &legacy_state);
     });
 
-    // Execute migration handling logic validating Auth checks bounds and rewrite loops
+    // Execute migration
     let success = client.migrate_state(&admin_caller);
     assert!(success);
 
-    // Evaluate direct storage retrieval to guarantee memory parsed V2 explicitly onto datakey
+    // Verify migration
     env.as_contract(&contract_id, || {
         let saved_state: StateV2 = env.storage().persistent().get(&DataKey::State).unwrap();
         assert_eq!(saved_state.status, ContractStatus::Created);
