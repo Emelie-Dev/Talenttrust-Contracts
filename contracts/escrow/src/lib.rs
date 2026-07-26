@@ -105,7 +105,7 @@ pub use types::{
     Contract, ContractBounds, ContractStatus, ContractSummary, DataKey, DepositMode,
     DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone, MilestoneApprovals,
     MilestoneSummary, PendingAdminProposal, ReadinessChecklist, ReleaseAuthorization, Reputation,
-    SimulateDepositResult, SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION,
+    SimulateCreateContractOutcome, SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION,
 };
 
 /// Default maximum number of milestones allowed per contract.
@@ -1655,72 +1655,54 @@ impl Escrow {
             .unwrap_or(1)
     }
 
-    /// Returns a bounded, paginated view of arbiter records.
+    /// Simulates contract creation without writing to storage or emitting events.
     ///
-    /// Enumerates contracts that have an assigned arbiter and returns
-    /// [`ArbiterEntry`] values in ascending contract-id order. Contracts
-    /// without an arbiter are skipped and do not consume a page slot.
+    /// This is a read-only variant of `create_contract` that performs all the same
+    /// validation checks but returns the projected outcome without:
+    /// - Mutating storage
+    /// - Emitting events
+    /// - Incrementing the contract ID counter
+    /// - Requiring caller authorization
     ///
-    /// # Pagination
+    /// The simulated contract ID is based on the current `NextContractId` value at the
+    /// time of the call. If validation fails, the function panics with the same error
+    /// as the real `create_contract` would.
     ///
-    /// - `start` is the zero-based offset into the filtered arbiter-record
-    ///   sequence (not the raw contract-id space). An out-of-range `start`
-    ///   produces an empty page (never a panic).
-    /// - `limit` is clamped to `[0, PAGE_CEILING]` before use. The caller
-    ///   never receives more than `PAGE_CEILING` entries per call.
-    /// - Returns an empty `Vec` when no contracts exist or none have an
-    ///   arbiter assigned.
+    /// # Use cases
+    /// - Clients can preview what contract ID and outcomes would result from their parameters
+    /// - Off-chain indexers can validate contract parameters before submitting transactions
+    /// - Testing and debugging contract creation logic
     ///
     /// # Arguments
-    /// * `env` - The Soroban environment
-    /// * `start` - Zero-based index of the first arbiter record in the page
-    /// * `limit` - Maximum entries to return (clamped to `PAGE_CEILING`)
+    /// * `env` - The contract environment
+    /// * `client` - The address of the client funding the contract
+    /// * `freelancer` - The address of the freelancer performing the work
+    /// * `arbiter` - Optional arbiter address for dispute resolution
+    /// * `milestones` - Vector of milestone amounts (in stroops)
+    /// * `release_authorization` - Authorization mode for milestone releases
     ///
     /// # Returns
-    /// A [`Vec<ArbiterEntry>`] containing at most `min(limit, PAGE_CEILING)`
-    /// entries.
+    /// A [`SimulateCreateContractOutcome`] containing the projected contract details,
+    /// including the simulated contract ID and all input parameters.
     ///
-    /// # Side effects
-    /// Extends the contract TTL for each returned entry, consistent with
-    /// `get_contract`. Auth-free and otherwise non-mutating.
-    pub fn get_arbiters_page(env: Env, start: u32, limit: u32) -> Vec<ArbiterEntry> {
-        let capped_limit = core::cmp::min(limit, PAGE_CEILING);
-        if capped_limit == 0 {
-            return Vec::new(&env);
-        }
-
-        let next_id = Self::get_next_contract_id(env.clone());
-        if next_id <= 1 {
-            return Vec::new(&env);
-        }
-
-        let mut result = Vec::new(&env);
-        let mut matched: u32 = 0;
-        let mut collected: u32 = 0;
-        let mut id: u32 = 1;
-
-        while id < next_id && collected < capped_limit {
-            if let Some(contract) = env
-                .storage()
-                .persistent()
-                .get::<_, Contract>(&DataKey::Contract(id))
-            {
-                if let Some(arbiter) = contract.arbiter {
-                    if matched >= start {
-                        ttl::extend_contract_ttl(&env, id);
-                        result.push_back(ArbiterEntry {
-                            contract_id: id,
-                            arbiter,
-                        });
-                        collected += 1;
-                    }
-                    matched = matched.saturating_add(1);
-                }
-            }
-            id = id.saturating_add(1);
-        }
-
-        result
+    /// # Errors
+    /// Same as `create_contract`:
+    /// * `InvalidParticipant`   - If client and freelancer are the same address
+    /// * `EmptyMilestones`      - If no milestones are provided
+    /// * `InvalidMilestoneAmount` - If any milestone amount is <= 0
+    /// * `MissingArbiter`       - If arbiter is required but not provided
+    /// * `InvalidArbiter`       - If arbiter is same as client or freelancer
+    /// * `TooManyMilestones`    - If the number of milestones exceeds `MAX_MILESTONES`
+    /// * `TotalCapExceeded`     - If the sum of milestone amounts exceeds the governed cap
+    pub fn simulate_create_contract(
+        env: Env,
+        client: Address,
+        freelancer: Address,
+        arbiter: Option<Address>,
+        milestones: soroban_sdk::Vec<i128>,
+        release_authorization: ReleaseAuthorization,
+    ) -> SimulateCreateContractOutcome {
+        Self::simulate_create_contract(env, client, freelancer, arbiter, milestones, release_authorization)
     }
 
     /// Returns a structured summary of the contract and its milestones.
