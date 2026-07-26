@@ -398,6 +398,7 @@ impl Escrow {
     ///
     /// # Errors
     /// * `NotInitialized` if `initialize` has not been called
+    /// * `ContractPaused` if the contract is paused
     /// * `UnauthorizedRole` if `admin` is not the stored admin
     /// * `SettlementTokenAlreadyBound` if a token is already bound
     /// * `InvalidSettlementToken` if the probe call to `token::Client::balance` panics
@@ -2414,23 +2415,19 @@ impl Escrow {
     /// Requires the stored admin's authorization. Only an amount up to the
     /// currently accumulated fees can be withdrawn.
     ///
+    /// # Errors
+    /// * `ContractPaused` if the contract is paused
+    /// * `EmergencyActive` if the contract is in emergency pause
+    /// * `UnauthorizedRole` if the caller is not the stored admin
+    /// * `InsufficientAccumulatedFees` if the requested amount exceeds accrued fees
+    ///
     /// # Arguments
     /// * `env` - The contract environment
     /// * `amount` - The amount of fees to withdraw
     /// * `to` - The destination address for the withdrawn fees
     pub fn withdraw_protocol_fees(env: Env, amount: i128, to: Address) -> bool {
         Self::require_initialized(&env);
-
-        // Block withdrawal while paused or in emergency â€” consistent with all
-        // other mutating entrypoints in this contract.
-        if env
-            .storage()
-            .persistent()
-            .get::<_, bool>(&DataKey::Paused)
-            .unwrap_or(false)
-        {
-            env.panic_with_error(EscrowError::ContractPaused);
-        }
+        Self::require_not_paused(&env);
 
         let admin: Address = env
             .storage()
