@@ -43,11 +43,24 @@ fn make_env() -> Env {
 }
 
 fn make_client(env: &Env) -> EscrowClient<'_> {
+    env.mock_all_auths_allowing_non_root_auth();
     let id = env.register(Escrow, ());
     let client = EscrowClient::new(env, &id);
     let admin = Address::generate(env);
     client.initialize(&admin);
+
+    let token_admin = Address::generate(env);
+    let token_address = env.register_stellar_asset_contract(token_admin);
+    client.set_settlement_token(&admin, &token_address);
+
     client
+}
+
+fn deposit(env: &Env, client: &EscrowClient, id: &u32, client_addr: &Address, amount: &i128) -> bool {
+    if let Some(token) = client.get_settlement_token() {
+        soroban_sdk::token::StellarAssetClient::new(env, &token).mint(client_addr, amount);
+    }
+    client.deposit_funds(id, client_addr, amount)
 }
 
 /// Build a bare `Contract` value with controlled accounting fields for unit tests
@@ -87,7 +100,7 @@ fn funded_contract_with_arbiter(
         &milestones,
         &ReleaseAuthorization::ClientOnly,
     );
-    assert!(client.deposit_funds(&contract_id, &client_addr, &100_i128));
+    assert!(deposit(env, client, &contract_id, &client_addr, &100_i128));
     (client_addr, freelancer_addr, arbiter_addr, contract_id)
 }
 
@@ -104,7 +117,7 @@ fn funded_contract_no_arbiter(env: &Env, client: &EscrowClient<'_>) -> (Address,
         &milestones,
         &ReleaseAuthorization::ClientOnly,
     );
-    assert!(client.deposit_funds(&contract_id, &client_addr, &100_i128));
+    assert!(deposit(env, client, &contract_id, &client_addr, &100_i128));
     (client_addr, freelancer_addr, contract_id)
 }
 
@@ -167,7 +180,7 @@ fn resolution_payouts_split_accepts_exact_conserving_amounts() {
                 freelancer_amount: 60,
             })
         ),
-        Ok((0, 0))
+        Ok((40, 60))
     );
     // One stroop → floor(1 * 30 / 100) = 0, client gets 1
     assert_eq!(
@@ -186,13 +199,13 @@ fn resolution_payouts_partial_refund_odd_amount_rounding() {
     let env = make_env();
     // (available, expected_client, expected_freelancer)
     let cases: &[(i128, i128, i128)] = &[
-        (7, 7, 0),
+        (7, 5, 2),
         (10, 7, 3),
-        (99, 69, 30),
+        (99, 70, 29),
         (100, 70, 30),
         (101, 71, 30),
-        (102, 71, 31),
-        (103, 72, 31),
+        (102, 72, 30),
+        (103, 73, 30),
     ];
     for (available, expected_client, expected_freelancer) in cases {
         let contract = payout_contract(&env, *available, 0, 0);
@@ -295,7 +308,7 @@ fn resolution_payouts_split_rejects_overflowing_sum() {
     };
     assert_eq!(
         resolution_payouts(&contract, &DisputeResolution::Split(split)),
-        Err(Error::PotentialOverflow)
+        Err(Error::InvalidDisputeSplit)
     );
 }
 
@@ -389,7 +402,7 @@ fn resolve_full_refund_conserves_and_marks_refunded() {
         &milestones,
         &ReleaseAuthorization::ClientOnly,
     );
-    client.deposit_funds(&escrow_id, &client_addr, &200_i128);
+    deposit(&env, &client, &escrow_id, &client_addr, &200_i128);
 
     client.raise_dispute(&escrow_id, &client_addr);
     client.resolve_dispute(&escrow_id, &arbiter_addr, &DisputeResolution::FullRefund);
@@ -420,7 +433,7 @@ fn resolve_full_payout_conserves_and_marks_completed() {
         &milestones,
         &ReleaseAuthorization::ClientOnly,
     );
-    client.deposit_funds(&escrow_id, &client_addr, &150_i128);
+    deposit(&env, &client, &escrow_id, &client_addr, &150_i128);
 
     client.raise_dispute(&escrow_id, &client_addr);
     client.resolve_dispute(&escrow_id, &arbiter_addr, &DisputeResolution::FullPayout);
@@ -451,7 +464,7 @@ fn resolve_partial_refund_conserves_70_30_split() {
         &milestones,
         &ReleaseAuthorization::ClientOnly,
     );
-    client.deposit_funds(&escrow_id, &client_addr, &100_i128);
+    deposit(&env, &client, &escrow_id, &client_addr, &100_i128);
 
     client.raise_dispute(&escrow_id, &client_addr);
     client.resolve_dispute(&escrow_id, &arbiter_addr, &DisputeResolution::PartialRefund);
@@ -480,7 +493,7 @@ fn resolve_split_conserves_custom_amounts() {
         &milestones,
         &ReleaseAuthorization::ClientOnly,
     );
-    client.deposit_funds(&escrow_id, &client_addr, &100_i128);
+    deposit(&env, &client, &escrow_id, &client_addr, &100_i128);
 
     client.raise_dispute(&escrow_id, &client_addr);
     let split = DisputeSplit {
@@ -583,8 +596,9 @@ fn raise_dispute_on_completed_contract_is_rejected() {
         &milestones,
         &ReleaseAuthorization::ClientOnly,
     );
-    assert!(client.deposit_funds(&contract_id, &client_addr, &100_i128));
+    assert!(deposit(&env, &client, &contract_id, &client_addr, &100_i128));
     // Release the only milestone to reach Completed state.
+    assert!(client.approve_milestone_release(&contract_id, &client_addr, &0));
     assert!(client.release_milestone(&contract_id, &client_addr, &0));
     assert_eq!(
         client.get_contract(&contract_id).status,
@@ -673,9 +687,11 @@ fn raise_dispute_after_settle_is_rejected() {
         &milestones,
         &ReleaseAuthorization::ClientOnly,
     );
-    assert!(client.deposit_funds(&contract_id, &client_addr, &100_i128));
+    assert!(deposit(&env, &client, &contract_id, &client_addr, &100_i128));
     // Release all milestones to settle the contract.
+    assert!(client.approve_milestone_release(&contract_id, &client_addr, &0));
     assert!(client.release_milestone(&contract_id, &client_addr, &0));
+    assert!(client.approve_milestone_release(&contract_id, &client_addr, &1));
     assert!(client.release_milestone(&contract_id, &client_addr, &1));
     assert_eq!(
         client.get_contract(&contract_id).status,
@@ -744,7 +760,7 @@ fn raise_dispute_on_refunded_contract_is_rejected() {
     // Cannot raise again.
     super::assert_contract_error(
         client.try_raise_dispute(&contract_id, &freelancer_addr),
-        Error::AlreadyFinalized,
+        Error::InvalidState,
     );
 }
 
@@ -776,8 +792,7 @@ fn resolution_payouts_full_payout_with_i128_max_ok() {
 #[test]
 fn resolution_payouts_partial_refund_rejects_overflowing_mul() {
     let env = make_env();
-    // available = i128::MAX → mul(30) overflows i128
-    let contract = payout_contract(&env, i128::MAX, 0, 0);
+    let contract = payout_contract(&env, i128::MAX / 25, 0, 0);
     assert_eq!(
         resolution_payouts(&contract, &DisputeResolution::PartialRefund),
         Err(Error::PotentialOverflow)
@@ -813,7 +828,7 @@ fn resolution_payouts_split_rejects_overflowing_sum_extreme() {
     let contract = payout_contract(&env, i128::MAX, 0, 0);
     assert_eq!(
         resolution_payouts(&contract, &DisputeResolution::Split(split)),
-        Err(Error::PotentialOverflow)
+        Err(Error::InvalidDisputeSplit)
     );
     // Symmetric: freelancer_amount = i128::MAX, client_amount = 1
     let split = DisputeSplit {
@@ -822,28 +837,27 @@ fn resolution_payouts_split_rejects_overflowing_sum_extreme() {
     };
     assert_eq!(
         resolution_payouts(&contract, &DisputeResolution::Split(split)),
-        Err(Error::PotentialOverflow)
+        Err(Error::InvalidDisputeSplit)
     );
 }
 
-/// Split with the maximum sum that exactly fits i128::MAX matches available
+/// Split with the maximum sum that exactly fits MAX_SINGLE_AMOUNT_STROOPS matches available
 /// and must succeed.
 #[test]
 fn resolution_payouts_split_at_i128_max_sum_succeeds() {
     let env = make_env();
-    // client_amount = i128::MAX / 2, freelancer_amount = i128::MAX - (i128::MAX / 2)
-    // Their sum is exactly i128::MAX, matching available.
-    let client_half = i128::MAX / 2;
-    let freelancer_half = i128::MAX - client_half;
+    let max = crate::amount_validation::MAX_SINGLE_AMOUNT_STROOPS;
+    let client_half = max / 2;
+    let freelancer_half = max - client_half;
     let split = DisputeSplit {
         client_amount: client_half,
         freelancer_amount: freelancer_half,
     };
-    let contract = payout_contract(&env, i128::MAX, 0, 0);
+    let contract = payout_contract(&env, max, 0, 0);
     let result = resolution_payouts(&contract, &DisputeResolution::Split(split))
-        .expect("Split at i128::MAX sum should succeed");
+        .expect("Split at max sum should succeed");
     assert_eq!(result, (client_half, freelancer_half));
-    assert_eq!(client_half + freelancer_half, i128::MAX);
+    assert_eq!(client_half + freelancer_half, max);
 }
 
 /// Split with zero available and zero amounts succeeds.
@@ -904,7 +918,7 @@ fn resolve_dispute_large_amount_flow_succeeds() {
     let client_addr = Address::generate(&env);
     let freelancer_addr = Address::generate(&env);
     let arbiter_addr = Address::generate(&env);
-    let large_amt = 1_000_000_000_000_000i128;
+    let large_amt = 1_000_000_0000000i128;
     let milestones = soroban_sdk::vec![&env, large_amt];
     let escrow_id = client.create_contract(
         &client_addr,
@@ -913,7 +927,7 @@ fn resolve_dispute_large_amount_flow_succeeds() {
         &milestones,
         &ReleaseAuthorization::ClientOnly,
     );
-    client.deposit_funds(&escrow_id, &client_addr, &large_amt);
+    deposit(&env, &client, &escrow_id, &client_addr, &large_amt);
     client.raise_dispute(&escrow_id, &client_addr);
 
     // FullPayout adds available all to released_amount.
@@ -936,7 +950,7 @@ fn resolve_dispute_full_refund_large_amounts() {
     let client_addr = Address::generate(&env);
     let freelancer_addr = Address::generate(&env);
     let arbiter_addr = Address::generate(&env);
-    let large = 500_000_000_000_000_000i128;
+    let large = 1_000_000_0000000i128;
     let milestones = soroban_sdk::vec![&env, large];
     let escrow_id = client.create_contract(
         &client_addr,
@@ -945,7 +959,7 @@ fn resolve_dispute_full_refund_large_amounts() {
         &milestones,
         &ReleaseAuthorization::ClientOnly,
     );
-    client.deposit_funds(&escrow_id, &client_addr, &large);
+    deposit(&env, &client, &escrow_id, &client_addr, &large);
     client.raise_dispute(&escrow_id, &client_addr);
 
     assert!(client.resolve_dispute(

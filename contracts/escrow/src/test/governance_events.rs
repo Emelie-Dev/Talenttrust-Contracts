@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use super::register_client;
-use soroban_sdk::testutils::{Address as _, Events};
+use soroban_sdk::testutils::{Address as _, Events, Ledger as _};
 use soroban_sdk::{Address, Env, Symbol, TryFromVal};
 
 #[test]
@@ -10,10 +10,6 @@ fn protocol_fee_bps_change_emits_event() {
     env.mock_all_auths();
 
     let client = register_client(&env);
-
-    let admin = Address::generate(&env);
-    // initialize sets the admin for the contract
-    client.initialize(&admin);
 
     // Change protocol fee bps
     assert!(client.set_protocol_fee_bps(&100u32));
@@ -36,15 +32,20 @@ fn protocol_fee_bps_change_emits_event() {
 #[test]
 fn admin_propose_and_accept_emit_events() {
     let env = Env::default();
+    env.ledger().with_mut(|li| {
+        li.max_entry_ttl = 3_110_400;
+        li.min_persistent_entry_ttl = 3_110_400;
+    });
     env.mock_all_auths();
 
     let client = register_client(&env);
 
-    let admin = Address::generate(&env);
-    client.initialize(&admin);
-
     let next_admin = Address::generate(&env);
     client.propose_governance_admin(&next_admin);
+
+    env.ledger().with_mut(|li| {
+        li.sequence_number += crate::ttl::ADMIN_ROTATION_MIN_DELAY_LEDGERS;
+    });
 
     // Accept requires the proposed admin to authorize — mock_all_auths covers this.
     client.accept_governance_admin();

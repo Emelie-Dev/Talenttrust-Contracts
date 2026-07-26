@@ -12,9 +12,9 @@ use crate::{
     DataKey, Error, Escrow, EscrowArgs, EscrowClient, GovernedParameters, PendingAdminProposal,
     ReadinessChecklist,
 };
-use soroban_sdk::{symbol_short, Address, Env, Symbol};
+use soroban_sdk::{contractimpl, symbol_short, Address, Env, Symbol};
 
-#[soroban_sdk::contractimpl]
+#[contractimpl]
 impl Escrow {
     /// Set the protocol fee in basis points.
     ///
@@ -72,8 +72,8 @@ impl Escrow {
     ///
     /// # Events
     /// `(symbol_short!("admin"), Symbol("proposed"))` → `(admin, proposed, timestamp)`
-    pub(crate) fn propose_governance_admin_impl(env: &Env, proposed: Address) -> bool {
-        Self::require_initialized(env);
+    pub fn propose_governance_admin(env: Env, proposed: Address) -> bool {
+        Self::require_initialized(&env);
 
         let admin: Address = env
             .storage()
@@ -91,7 +91,7 @@ impl Escrow {
         );
 
         env.events().publish(
-            (symbol_short!("admin"), Symbol::new(env, "proposed")),
+            (symbol_short!("admin"), Symbol::new(&env, "proposed")),
             (admin, proposed.clone(), env.ledger().timestamp()),
         );
         true
@@ -101,8 +101,8 @@ impl Escrow {
     ///
     /// # Events
     /// `(symbol_short!("admin"), Symbol("accepted"))` → `(old_admin, new_admin, timestamp)`
-    pub(crate) fn accept_governance_admin_impl(env: &Env) -> bool {
-        Self::require_initialized(env);
+    pub fn accept_governance_admin(env: Env) -> bool {
+        Self::require_initialized(&env);
 
         let pending: PendingAdminProposal = env
             .storage()
@@ -133,7 +133,7 @@ impl Escrow {
         env.storage().persistent().remove(&DataKey::PendingAdmin);
 
         env.events().publish(
-            (symbol_short!("admin"), Symbol::new(env, "accepted")),
+            (symbol_short!("admin"), Symbol::new(&env, "accepted")),
             (old_admin, pending_admin.clone(), env.ledger().timestamp()),
         );
         true
@@ -153,8 +153,8 @@ impl Escrow {
     ///
     /// # Events
     /// `(symbol_short!("admin"), Symbol("cancelled"))` → `(admin, cancelled_proposal, timestamp)`
-    pub(crate) fn cancel_governance_admin_proposal_impl(env: &Env) -> bool {
-        Self::require_initialized(env);
+    pub fn cancel_governance_admin_proposal(env: Env) -> bool {
+        Self::require_initialized(&env);
 
         let admin: Address = env
             .storage()
@@ -172,14 +172,14 @@ impl Escrow {
         env.storage().persistent().remove(&DataKey::PendingAdmin);
 
         env.events().publish(
-            (symbol_short!("admin"), Symbol::new(env, "cancelled")),
+            (symbol_short!("admin"), Symbol::new(&env, "cancelled")),
             (admin, pending.proposed, env.ledger().timestamp()),
         );
         true
     }
 
-    /// Internal: return the currently pending admin address, if any.
-    pub(crate) fn get_pending_governance_admin_impl(env: &Env) -> Option<Address> {
+    /// Return the currently pending admin address, if any.
+    pub fn get_pending_governance_admin(env: Env) -> Option<Address> {
         let proposal: Option<PendingAdminProposal> =
             env.storage().persistent().get(&DataKey::PendingAdmin);
         proposal.map(|p| p.proposed)
@@ -234,6 +234,9 @@ impl Escrow {
         env.storage()
             .persistent()
             .set(&DataKey::GovernedParameters, &params);
+        env.storage()
+            .persistent()
+            .set(&DataKey::ProtocolFeeBps, &protocol_fee_bps);
 
         let mut checklist: ReadinessChecklist = env
             .storage()

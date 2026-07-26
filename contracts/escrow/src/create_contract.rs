@@ -1,8 +1,8 @@
 use crate::{
-    amount_validation, ttl, Contract, ContractStatus, DataKey, EscrowError, GovernedParameters,
-    Milestone, ReleaseAuthorization, Error, MAX_MILESTONES, status_index,
+    amount_validation, ttl, Contract, ContractStatus, DataKey, Escrow, EscrowArgs, EscrowClient,
+    EscrowError, GovernedParameters, Milestone, ReleaseAuthorization, Error, MAX_MILESTONES,
 };
-use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
+use soroban_sdk::{contractimpl, symbol_short, Address, Env, Symbol, Vec};
 
 #[contractimpl]
 impl Escrow {
@@ -118,33 +118,14 @@ impl Escrow {
         let id = next_contract_id(&env);
 
         let freelancer_addr = freelancer.clone();
-
-    let freelancer_addr = freelancer.clone();
-    let contract = Contract {
-        client: client.clone(),
-        freelancer: freelancer.clone(),
-        arbiter,
-        status: ContractStatus::Created,
-        total_deposited: 0,
-        funded_amount: 0,
-        released_amount: 0,
-        refunded_amount: 0,
-        release_authorization,
-        reputation_issued: false,
-    };
-    env.storage()
-        .persistent()
-        .set(&DataKey::Contract(id), &contract);
-
-    let mut milestone_vec: Vec<Milestone> = Vec::new(&env);
-    for (i, amount) in milestones.iter().enumerate() {
-        let deadline = deadlines.as_ref().and_then(|d| d.get(i as u32));
-        milestone_vec.push_back(Milestone {
-            amount,
+        let contract = Contract {
+            client: client.clone(),
+            freelancer: freelancer.clone(),
+            arbiter,
+            status: ContractStatus::Created,
+            total_deposited: 0,
             funded_amount: 0,
-            released: false,
-            refunded: false,
-            work_evidence: None,
+            released_amount: 0,
             refunded_amount: 0,
             release_authorization,
             reputation_issued: false,
@@ -186,12 +167,8 @@ impl Escrow {
         (client, freelancer_addr, env.ledger().timestamp()),
     );
 
-    // Maintain participant and status indexes for paginated readers.
-    status_index::index_new_contract(&env, id, &ContractStatus::Created);
-    status_index::index_participant(&env, id, &contract.client, 0);
-    status_index::index_participant(&env, id, &contract.freelancer, 1);
-
     id
+    }
 }
 
 /// Returns the next available contract ID and asserts it is not already occupied.

@@ -149,7 +149,7 @@ pub fn finalize_contract_impl(env: &Env, contract_id: u32, finalizer: Address) -
     Escrow::require_finalizer_role(&env, &contract, &finalizer);
 
     if contract.status != ContractStatus::Completed && contract.status != ContractStatus::Disputed {
-        env.panic_with_error(EscrowError::InvalidStatusTransition);
+        env.panic_with_error(Error::InvalidStatusTransition);
     }
 
     let record = FinalizationRecord {

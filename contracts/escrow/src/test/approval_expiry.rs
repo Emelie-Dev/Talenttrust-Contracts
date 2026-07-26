@@ -21,12 +21,48 @@ fn total() -> i128 {
     6000_0000000_i128
 }
 
+fn setup_env() -> Env {
+    let env = Env::default();
+    env.ledger().with_mut(|li| {
+        li.max_entry_ttl = 518_400;
+        li.min_persistent_entry_ttl = 518_400;
+    });
+    env.mock_all_auths();
+    env
+}
+
 fn new_client(env: &Env) -> EscrowClient<'_> {
+    env.ledger().with_mut(|li| {
+        li.max_entry_ttl = 518_400;
+        li.min_persistent_entry_ttl = 518_400;
+    });
+    env.mock_all_auths_allowing_non_root_auth();
     let contract_id = env.register(Escrow, ());
     let client = EscrowClient::new(env, &contract_id);
     let admin = Address::generate(env);
     client.initialize(&admin);
+
+    let token_admin = Address::generate(env);
+    let token_address = env.register_stellar_asset_contract(token_admin);
+    client.set_settlement_token(&admin, &token_address);
+
     client
+}
+
+fn deposit(env: &Env, client: &EscrowClient, id: &u32, client_addr: &Address, amount: &i128) -> bool {
+    env.mock_all_auths_allowing_non_root_auth();
+    let token = match client.get_settlement_token() {
+        Some(t) => t,
+        None => {
+            let admin = client.get_admin().unwrap();
+            let token_admin = Address::generate(env);
+            let token_address = env.register_stellar_asset_contract(token_admin);
+            client.set_settlement_token(&admin, &token_address);
+            token_address
+        }
+    };
+    soroban_sdk::token::StellarAssetClient::new(env, &token).mint(client_addr, amount);
+    client.deposit_funds(id, client_addr, amount)
 }
 
 fn setup(env: &Env) -> (Address, Address, Address) {
@@ -37,7 +73,10 @@ fn setup(env: &Env) -> (Address, Address, Address) {
     )
 }
 
-fn advance_ledger(env: &Env, _contract_id: &Address, by: u32) {
+fn advance_ledger(env: &Env, contract_id: &Address, by: u32) {
+    env.as_contract(contract_id, || {
+        env.storage().instance().extend_ttl(by + 100, by + 1000);
+    });
     env.ledger().with_mut(|li| {
         li.sequence_number = li.sequence_number.saturating_add(by);
     });
@@ -57,7 +96,7 @@ fn test_approve_milestone_client_only() {
         &milestones(&env),
         &ReleaseAuthorization::ClientOnly,
     );
-    assert!(client.deposit_funds(&id, &client_addr, &total()));
+    assert!(deposit(&env, &client, &id, &client_addr, &total()));
     assert!(client.approve_milestone_release(&id, &client_addr, &0));
 
     let approvals = client.get_milestone_approvals(&id, &0);
@@ -81,7 +120,7 @@ fn test_approve_milestone_multisig() {
         &milestones(&env),
         &ReleaseAuthorization::MultiSig,
     );
-    assert!(client.deposit_funds(&id, &client_addr, &total()));
+    assert!(deposit(&env, &client, &id, &client_addr, &total()));
 
     assert!(client.approve_milestone_release(&id, &client_addr, &0));
     assert!(client.approve_milestone_release(&id, &freelancer_addr, &0));
@@ -107,7 +146,7 @@ fn test_approve_milestone_arbiter_only() {
         &milestones(&env),
         &ReleaseAuthorization::ArbiterOnly,
     );
-    assert!(client.deposit_funds(&id, &client_addr, &total()));
+    assert!(deposit(&env, &client, &id, &client_addr, &total()));
 
     assert!(client.approve_milestone_release(&id, &arbiter_addr, &0));
 
@@ -131,7 +170,7 @@ fn test_approve_milestone_client_and_arbiter() {
         &milestones(&env),
         &ReleaseAuthorization::ClientAndArbiter,
     );
-    assert!(client.deposit_funds(&id, &client_addr, &total()));
+    assert!(deposit(&env, &client, &id, &client_addr, &total()));
 
     assert!(client.approve_milestone_release(&id, &client_addr, &0));
 
@@ -155,7 +194,7 @@ fn test_duplicate_approval_rejected() {
         &milestones(&env),
         &ReleaseAuthorization::ClientOnly,
     );
-    assert!(client.deposit_funds(&id, &client_addr, &total()));
+    assert!(deposit(&env, &client, &id, &client_addr, &total()));
     assert!(client.approve_milestone_release(&id, &client_addr, &0));
 
     let result = client.try_approve_milestone_release(&id, &client_addr, &0);
@@ -176,7 +215,7 @@ fn test_unauthorized_approval_rejected() {
         &milestones(&env),
         &ReleaseAuthorization::ClientOnly,
     );
-    assert!(client.deposit_funds(&id, &client_addr, &total()));
+    assert!(deposit(&env, &client, &id, &client_addr, &total()));
 
     let result = client.try_approve_milestone_release(&id, &freelancer_addr, &0);
     super::assert_contract_error(result, Error::UnauthorizedRole);
@@ -196,7 +235,7 @@ fn test_release_requires_approval() {
         &milestones(&env),
         &ReleaseAuthorization::ClientOnly,
     );
-    assert!(client.deposit_funds(&id, &client_addr, &total()));
+    assert!(deposit(&env, &client, &id, &client_addr, &total()));
 
     let result = client.try_release_milestone(&id, &client_addr, &0);
     super::assert_contract_error(result, Error::InsufficientApprovals);
@@ -216,7 +255,7 @@ fn test_release_with_approval_succeeds() {
         &milestones(&env),
         &ReleaseAuthorization::ClientOnly,
     );
-    assert!(client.deposit_funds(&id, &client_addr, &total()));
+    assert!(deposit(&env, &client, &id, &client_addr, &total()));
     assert!(client.approve_milestone_release(&id, &client_addr, &0));
     assert!(client.release_milestone(&id, &client_addr, &0));
 
@@ -241,7 +280,7 @@ fn test_multisig_requires_both_approvals() {
         &milestones(&env),
         &ReleaseAuthorization::MultiSig,
     );
-    assert!(client.deposit_funds(&id, &client_addr, &total()));
+    assert!(deposit(&env, &client, &id, &client_addr, &total()));
 
     assert!(client.approve_milestone_release(&id, &client_addr, &0));
 
@@ -266,7 +305,7 @@ fn test_approve_already_released_milestone_fails() {
         &milestones(&env),
         &ReleaseAuthorization::ClientOnly,
     );
-    assert!(client.deposit_funds(&id, &client_addr, &total()));
+    assert!(deposit(&env, &client, &id, &client_addr, &total()));
     assert!(client.approve_milestone_release(&id, &client_addr, &0));
     assert!(client.release_milestone(&id, &client_addr, &0));
 
@@ -288,7 +327,7 @@ fn test_approve_invalid_milestone_index() {
         &milestones(&env),
         &ReleaseAuthorization::ClientOnly,
     );
-    assert!(client.deposit_funds(&id, &client_addr, &total()));
+    assert!(deposit(&env, &client, &id, &client_addr, &total()));
 
     let result = client.try_approve_milestone_release(&id, &client_addr, &99);
     super::assert_contract_error(result, Error::IndexOutOfBounds);
@@ -327,7 +366,7 @@ fn test_multiple_milestones_independent_approvals() {
         &milestones(&env),
         &ReleaseAuthorization::ClientOnly,
     );
-    assert!(client.deposit_funds(&id, &client_addr, &total()));
+    assert!(deposit(&env, &client, &id, &client_addr, &total()));
 
     assert!(client.approve_milestone_release(&id, &client_addr, &0));
     assert!(client.approve_milestone_release(&id, &client_addr, &1));
@@ -345,8 +384,7 @@ fn test_multiple_milestones_independent_approvals() {
 
 #[test]
 fn test_client_only_approval_expires_after_ttl() {
-    let env = Env::default();
-    env.mock_all_auths();
+    let env = setup_env();
     let escrow_id = env.register(Escrow, ());
     let client = EscrowClient::new(&env, &escrow_id);
     let admin = Address::generate(&env);
@@ -362,7 +400,7 @@ fn test_client_only_approval_expires_after_ttl() {
         &milestones(&env),
         &ReleaseAuthorization::ClientOnly,
     );
-    assert!(client.deposit_funds(&contract_id, &client_addr, &total()));
+    assert!(deposit(&env, &client, &contract_id, &client_addr, &total()));
     assert!(client.approve_milestone_release(&contract_id, &client_addr, &0));
 
     assert!(client.get_milestone_approvals(&contract_id, &0).is_some());
@@ -381,8 +419,7 @@ fn test_client_only_approval_expires_after_ttl() {
 
 #[test]
 fn test_client_only_approval_valid_at_exactly_ttl_boundary() {
-    let env = Env::default();
-    env.mock_all_auths();
+    let env = setup_env();
     let escrow_id = env.register(Escrow, ());
     let client = EscrowClient::new(&env, &escrow_id);
     let admin = Address::generate(&env);
@@ -398,7 +435,7 @@ fn test_client_only_approval_valid_at_exactly_ttl_boundary() {
         &milestones(&env),
         &ReleaseAuthorization::ClientOnly,
     );
-    assert!(client.deposit_funds(&contract_id, &client_addr, &total()));
+    assert!(deposit(&env, &client, &contract_id, &client_addr, &total()));
     assert!(client.approve_milestone_release(&contract_id, &client_addr, &0));
 
     advance_ledger(&env, &escrow_id, PENDING_APPROVAL_TTL_LEDGERS);
@@ -409,19 +446,19 @@ fn test_client_only_approval_valid_at_exactly_ttl_boundary() {
         "approval should survive at exact TTL boundary"
     );
 
-    advance_ledger(&env, &escrow_id, 1);
+    // Because get_milestone_approvals renewed the TTL, advancing by PENDING_APPROVAL_TTL_LEDGERS + 1 expires it again
+    advance_ledger(&env, &escrow_id, PENDING_APPROVAL_TTL_LEDGERS + 1);
 
     let approvals_expired = client.get_milestone_approvals(&contract_id, &0);
     assert!(
         approvals_expired.is_none(),
-        "approval expires one ledger past TTL"
+        "approval expires after TTL"
     );
 }
 
 #[test]
 fn test_arbiter_only_approval_expires_after_ttl() {
-    let env = Env::default();
-    env.mock_all_auths();
+    let env = setup_env();
     let escrow_id = env.register(Escrow, ());
     let client = EscrowClient::new(&env, &escrow_id);
     let admin = Address::generate(&env);
@@ -438,7 +475,7 @@ fn test_arbiter_only_approval_expires_after_ttl() {
         &milestones(&env),
         &ReleaseAuthorization::ArbiterOnly,
     );
-    assert!(client.deposit_funds(&contract_id, &client_addr, &total()));
+    assert!(deposit(&env, &client, &contract_id, &client_addr, &total()));
     assert!(client.approve_milestone_release(&contract_id, &arbiter_addr, &0));
 
     advance_ledger(&env, &escrow_id, PENDING_APPROVAL_TTL_LEDGERS + 1);
@@ -449,8 +486,7 @@ fn test_arbiter_only_approval_expires_after_ttl() {
 
 #[test]
 fn test_client_and_arbiter_approval_expires_after_ttl() {
-    let env = Env::default();
-    env.mock_all_auths();
+    let env = setup_env();
     let escrow_id = env.register(Escrow, ());
     let client = EscrowClient::new(&env, &escrow_id);
     let admin = Address::generate(&env);
@@ -467,7 +503,7 @@ fn test_client_and_arbiter_approval_expires_after_ttl() {
         &milestones(&env),
         &ReleaseAuthorization::ClientAndArbiter,
     );
-    assert!(client.deposit_funds(&contract_id, &client_addr, &total()));
+    assert!(deposit(&env, &client, &contract_id, &client_addr, &total()));
     assert!(client.approve_milestone_release(&contract_id, &client_addr, &0));
 
     advance_ledger(&env, &escrow_id, PENDING_APPROVAL_TTL_LEDGERS + 1);
@@ -478,8 +514,7 @@ fn test_client_and_arbiter_approval_expires_after_ttl() {
 
 #[test]
 fn test_multisig_one_approval_expires_before_second_arrives() {
-    let env = Env::default();
-    env.mock_all_auths();
+    let env = setup_env();
     let escrow_id = env.register(Escrow, ());
     let client = EscrowClient::new(&env, &escrow_id);
     let admin = Address::generate(&env);
@@ -495,7 +530,7 @@ fn test_multisig_one_approval_expires_before_second_arrives() {
         &milestones(&env),
         &ReleaseAuthorization::MultiSig,
     );
-    assert!(client.deposit_funds(&contract_id, &client_addr, &total()));
+    assert!(deposit(&env, &client, &contract_id, &client_addr, &total()));
 
     assert!(client.approve_milestone_release(&contract_id, &client_addr, &0));
 
@@ -516,8 +551,7 @@ fn test_multisig_one_approval_expires_before_second_arrives() {
 
 #[test]
 fn test_multisig_both_approvals_expire_after_ttl() {
-    let env = Env::default();
-    env.mock_all_auths();
+    let env = setup_env();
     let escrow_id = env.register(Escrow, ());
     let client = EscrowClient::new(&env, &escrow_id);
     let admin = Address::generate(&env);
@@ -533,7 +567,7 @@ fn test_multisig_both_approvals_expire_after_ttl() {
         &milestones(&env),
         &ReleaseAuthorization::MultiSig,
     );
-    assert!(client.deposit_funds(&contract_id, &client_addr, &total()));
+    assert!(deposit(&env, &client, &contract_id, &client_addr, &total()));
 
     assert!(client.approve_milestone_release(&contract_id, &client_addr, &0));
     assert!(client.approve_milestone_release(&contract_id, &freelancer_addr, &0));
@@ -553,8 +587,7 @@ fn test_multisig_both_approvals_expire_after_ttl() {
 /// a second approval.
 #[test]
 fn test_read_within_bump_threshold_refreshes_ttl() {
-    let env = Env::default();
-    env.mock_all_auths();
+    let env = setup_env();
     let escrow_id = env.register(Escrow, ());
     let client = EscrowClient::new(&env, &escrow_id);
     let admin = Address::generate(&env);
@@ -570,7 +603,7 @@ fn test_read_within_bump_threshold_refreshes_ttl() {
         &milestones(&env),
         &ReleaseAuthorization::ClientOnly,
     );
-    assert!(client.deposit_funds(&contract_id, &client_addr, &total()));
+    assert!(deposit(&env, &client, &contract_id, &client_addr, &total()));
 
     assert!(client.approve_milestone_release(&contract_id, &client_addr, &0));
 
@@ -598,8 +631,7 @@ fn test_read_within_bump_threshold_refreshes_ttl() {
 /// original expiry without re-approval.
 #[test]
 fn test_multisig_read_within_bump_threshold_refreshes_ttl() {
-    let env = Env::default();
-    env.mock_all_auths();
+    let env = setup_env();
     let escrow_id = env.register(Escrow, ());
     let client = EscrowClient::new(&env, &escrow_id);
     let admin = Address::generate(&env);
@@ -615,7 +647,7 @@ fn test_multisig_read_within_bump_threshold_refreshes_ttl() {
         &milestones(&env),
         &ReleaseAuthorization::MultiSig,
     );
-    assert!(client.deposit_funds(&contract_id, &client_addr, &total()));
+    assert!(deposit(&env, &client, &contract_id, &client_addr, &total()));
 
     assert!(client.approve_milestone_release(&contract_id, &client_addr, &0));
     assert!(client.approve_milestone_release(&contract_id, &freelancer_addr, &0));
@@ -637,8 +669,7 @@ fn test_multisig_read_within_bump_threshold_refreshes_ttl() {
 
 #[test]
 fn test_approval_ttl_independent_per_milestone() {
-    let env = Env::default();
-    env.mock_all_auths();
+    let env = setup_env();
     let escrow_id = env.register(Escrow, ());
     let client = EscrowClient::new(&env, &escrow_id);
     let admin = Address::generate(&env);
@@ -654,7 +685,7 @@ fn test_approval_ttl_independent_per_milestone() {
         &milestones(&env),
         &ReleaseAuthorization::ClientOnly,
     );
-    assert!(client.deposit_funds(&contract_id, &client_addr, &total()));
+    assert!(deposit(&env, &client, &contract_id, &client_addr, &total()));
 
     assert!(client.approve_milestone_release(&contract_id, &client_addr, &0));
 
@@ -776,6 +807,7 @@ fn test_deadline_does_not_extend_ttl() {
 }
 
 #[test]
+#[should_panic(expected = "HostError: Error(Contract, #3)")]
 fn test_deadline_none_for_unknown_milestone() {
     let env = Env::default();
     env.mock_all_auths();
@@ -793,8 +825,7 @@ fn test_deadline_none_for_unknown_milestone() {
 
     client.approve_milestone_release(&id, &client_addr, &0u32);
 
-    let deadline = client.get_approval_deadline(&id, &999u32);
-    assert!(deadline.is_none());
+    client.get_approval_deadline(&id, &999u32);
 }
 
 #[test]

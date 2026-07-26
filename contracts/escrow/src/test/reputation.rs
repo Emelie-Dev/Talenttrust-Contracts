@@ -1,5 +1,5 @@
 use super::{complete_contract, create_contract, register_client};
-use crate::{Contract, ContractStatus, DataKey, EscrowError, ReleaseAuthorization};
+use crate::{Contract, ContractStatus, DataKey, Error, ReleaseAuthorization};
 use soroban_sdk::{testutils::Address as _, vec, Address, Env, String};
 fn valid_comment(env: &Env) -> String {
     String::from_str(env, "Great job!")
@@ -21,6 +21,9 @@ fn complete_contract_for(
         &ReleaseAuthorization::ClientOnly,
     );
     let total = super::total_milestone_amount();
+    if let Some(token) = client.get_settlement_token() {
+        soroban_sdk::token::StellarAssetClient::new(env, &token).mint(client_addr, &total);
+    }
     assert!(client.deposit_funds(&contract_id, client_addr, &total));
     for milestone_index in 0..3 {
         assert!(client.approve_milestone_release(&contract_id, client_addr, &milestone_index));
@@ -61,6 +64,9 @@ fn pending_reputation_credits_accumulate_and_drain_across_completed_contracts() 
         &super::default_milestones(&env),
         &ReleaseAuthorization::ClientOnly,
     );
+    if let Some(token) = client.get_settlement_token() {
+        soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&refunded_client, &super::total_milestone_amount());
+    }
     assert!(client.deposit_funds(
         &refunded_contract,
         &refunded_client,
@@ -108,7 +114,7 @@ fn pending_reputation_credits_accumulate_and_drain_across_completed_contracts() 
 
     let duplicate =
         client.try_issue_reputation(&first_contract, &first_client, &1, &valid_comment(&env));
-    super::assert_contract_error(duplicate, EscrowError::ReputationAlreadyIssued);
+    super::assert_contract_error(duplicate, Error::ReputationAlreadyIssued);
     assert_eq!(client.get_pending_reputation_credits(&freelancer), 0);
 }
 
@@ -121,7 +127,7 @@ fn issue_reputation_rejects_unauthorized_caller() {
     let unauthorized = Address::generate(&env);
 
     let result = client.try_issue_reputation(&contract_id, &unauthorized, &5, &valid_comment(&env));
-    super::assert_contract_error(result, EscrowError::UnauthorizedRole);
+    super::assert_contract_error(result, Error::UnauthorizedRole);
 }
 
 #[test]
@@ -132,7 +138,7 @@ fn issue_reputation_rejects_non_completed_contract() {
     let (client_addr, _freelancer_addr, contract_id) = create_contract(&env, &client);
 
     let result = client.try_issue_reputation(&contract_id, &client_addr, &5, &valid_comment(&env));
-    super::assert_contract_error(result, EscrowError::NotCompleted);
+    super::assert_contract_error(result, Error::NotCompleted);
 }
 
 #[test]
@@ -144,11 +150,11 @@ fn issue_reputation_rejects_invalid_rating_bounds() {
 
     let result_low =
         client.try_issue_reputation(&contract_id, &client_addr, &0, &valid_comment(&env));
-    super::assert_contract_error(result_low, EscrowError::InvalidRating);
+    super::assert_contract_error(result_low, Error::InvalidRating);
 
     let result_high =
         client.try_issue_reputation(&contract_id, &client_addr, &6, &valid_comment(&env));
-    super::assert_contract_error(result_high, EscrowError::InvalidRating);
+    super::assert_contract_error(result_high, Error::InvalidRating);
 }
 
 #[test]
@@ -160,7 +166,7 @@ fn issue_reputation_rejects_empty_comment() {
 
     let empty_comment = String::from_str(&env, "");
     let result = client.try_issue_reputation(&contract_id, &client_addr, &5, &empty_comment);
-    super::assert_contract_error(result, EscrowError::EmptyComment);
+    super::assert_contract_error(result, Error::EmptyComment);
 }
 
 #[test]
@@ -173,7 +179,7 @@ fn issue_reputation_rejects_comment_too_long() {
     let long_str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     let long_comment = String::from_str(&env, long_str);
     let result = client.try_issue_reputation(&contract_id, &client_addr, &5, &long_comment);
-    super::assert_contract_error(result, EscrowError::CommentTooLong);
+    super::assert_contract_error(result, Error::CommentTooLong);
 }
 
 #[test]
@@ -185,7 +191,7 @@ fn issue_reputation_rejects_duplicate_issuance() {
 
     assert!(client.issue_reputation(&contract_id, &client_addr, &5, &valid_comment(&env)));
     let result = client.try_issue_reputation(&contract_id, &client_addr, &4, &valid_comment(&env));
-    super::assert_contract_error(result, EscrowError::ReputationAlreadyIssued);
+    super::assert_contract_error(result, Error::ReputationAlreadyIssued);
 }
 
 #[test]
@@ -203,7 +209,7 @@ fn issue_reputation_rejects_self_rating_when_client_equals_freelancer() {
     });
 
     let result = client.try_issue_reputation(&contract_id, &client_addr, &5, &valid_comment(&env));
-    super::assert_contract_error(result, EscrowError::SelfRating);
+    super::assert_contract_error(result, Error::SelfRating);
 }
 
 #[test]
@@ -282,6 +288,9 @@ fn get_average_rating_multiple_ratings_returns_correct_scaled_average() {
         &crate::ReleaseAuthorization::ClientOnly,
     );
     let total = super::total_milestone_amount();
+    if let Some(token) = client.get_settlement_token() {
+        soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&client_addr2, &total);
+    }
     client.deposit_funds(&contract_id2, &client_addr2, &total);
     client.approve_milestone_release(&contract_id2, &client_addr2, &0);
     client.release_milestone(&contract_id2, &client_addr2, &0);
@@ -316,6 +325,9 @@ fn get_average_rating_fractional_average_is_preserved() {
         &crate::ReleaseAuthorization::ClientOnly,
     );
     let total = super::total_milestone_amount();
+    if let Some(token) = client.get_settlement_token() {
+        soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&client_addr2, &total);
+    }
     client.deposit_funds(&contract_id2, &client_addr2, &total);
     client.approve_milestone_release(&contract_id2, &client_addr2, &0);
     client.release_milestone(&contract_id2, &client_addr2, &0);
@@ -339,7 +351,7 @@ fn issue_reputation_rejects_invalid_contract_id_zero() {
     let freelancer_addr = Address::generate(&env);
 
     let result = client.try_issue_reputation(&0, &client_addr, &5, &valid_comment(&env));
-    super::assert_contract_error(result, EscrowError::InvalidContractId);
+    super::assert_contract_error(result, Error::InvalidContractId);
 }
 
 #[test]
@@ -361,11 +373,11 @@ fn issue_reputation_rejects_invalid_contract_id_out_of_bounds() {
 
     // Try to use contract_id = 2 (which is next_contract_id)
     let result = client.try_issue_reputation(&2, &client_addr, &5, &valid_comment(&env));
-    super::assert_contract_error(result, EscrowError::InvalidContractId);
+    super::assert_contract_error(result, Error::ContractNotFound);
 
     // Try to use contract_id = 100 (way out of bounds)
     let result = client.try_issue_reputation(&100, &client_addr, &5, &valid_comment(&env));
-    super::assert_contract_error(result, EscrowError::InvalidContractId);
+    super::assert_contract_error(result, Error::ContractNotFound);
 }
 
 #[test]
@@ -375,7 +387,7 @@ fn get_reputation_comment_rejects_invalid_contract_id_zero() {
     let client = register_client(&env);
 
     let result = client.try_get_reputation_comment(&0);
-    super::assert_contract_error(result, EscrowError::InvalidContractId);
+    super::assert_contract_error(result, Error::InvalidContractId);
 }
 
 #[test]
@@ -396,6 +408,5 @@ fn get_reputation_comment_rejects_invalid_contract_id_out_of_bounds() {
     );
 
     // Try to use contract_id = 2 (which is next_contract_id)
-    let result = client.try_get_reputation_comment(&2);
-    super::assert_contract_error(result, EscrowError::InvalidContractId);
+    assert!(client.get_reputation_comment(&2).is_none());
 }

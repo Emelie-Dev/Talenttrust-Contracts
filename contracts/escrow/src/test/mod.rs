@@ -1,7 +1,11 @@
 #![cfg(test)]
 #![allow(dead_code)]
 
-use soroban_sdk::{testutils::Address as _, token::StellarAssetClient, vec, Address, Env, Vec};
+use soroban_sdk::{
+    testutils::{Address as _, Ledger as _},
+    token::StellarAssetClient,
+    vec, Address, Env, Vec,
+};
 
 use crate::{
     Contract, ContractStatus, Escrow, EscrowClient, EscrowError, Milestone, ReleaseAuthorization,
@@ -9,14 +13,13 @@ use crate::{
 
 // --- Submodules ---
 mod approval_expiry;
+mod authorization_matrix_validation;
 mod cancel_contract;
 mod client_migration;
-mod contract_events;
 mod create_contract_bounds;
 mod deposit;
 mod dispute;
 mod emergency_controls;
-mod events_comprehensive;
 mod governance_events;
 mod input_sanitization_amounts;
 mod input_sanitization_identities;
@@ -209,7 +212,7 @@ impl Default for EscrowFixtureBuilder {
 
 pub fn setup() -> (Env, Address, Address) {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     let client_addr = Address::generate(&env);
     let freelancer_addr = Address::generate(&env);
     (env, client_addr, freelancer_addr)
@@ -228,13 +231,17 @@ pub fn create_default_contract(
     freelancer_addr: &Address,
 ) -> u32 {
     let milestones = vec![env, MILESTONE_ONE, MILESTONE_TWO, MILESTONE_THREE];
-    client.create_contract(
+    let id = client.create_contract(
         client_addr,
         freelancer_addr,
         &None,
         &milestones,
         &ReleaseAuthorization::ClientOnly,
-    )
+    );
+    if let Some(token) = client.get_settlement_token() {
+        StellarAssetClient::new(env, &token).mint(client_addr, &1_000_000_000_000_000_i128);
+    }
+    id
 }
 
 /// Assert contract accounting fields match expected values.
@@ -252,11 +259,17 @@ pub fn assert_contract_state(
 }
 
 pub fn register_client(env: &Env) -> EscrowClient<'_> {
+    env.ledger().with_mut(|li| {
+        li.max_entry_ttl = 518_400;
+        li.min_persistent_entry_ttl = 518_400;
+    });
     let id = env.register(Escrow, ());
     let client = EscrowClient::new(env, &id);
     let admin = Address::generate(env);
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
     client.initialize(&admin);
+    let token = env.register_stellar_asset_contract(admin.clone());
+    client.bind_settlement_token(&admin, &token);
     client
 }
 
@@ -286,6 +299,9 @@ pub fn complete_contract(env: &Env, client: &EscrowClient) -> (Address, Address,
         &ReleaseAuthorization::ClientOnly,
     );
     let total = total_milestone_amount();
+    if let Some(token) = client.get_settlement_token() {
+        StellarAssetClient::new(env, &token).mint(&client_addr, &total);
+    }
     client.deposit_funds(&contract_id, &client_addr, &total);
     for milestone_index in 0..3u32 {
         client.approve_milestone_release(&contract_id, &client_addr, &milestone_index);
@@ -310,6 +326,9 @@ pub fn create_contract_with_arbiter(
         &default_milestones(env),
         &ReleaseAuthorization::ClientOnly,
     );
+    if let Some(token) = client.get_settlement_token() {
+        StellarAssetClient::new(env, &token).mint(&client_addr, &1_000_000_000_000_000_i128);
+    }
     (client_addr, freelancer_addr, arbiter_addr, contract_id)
 }
 
@@ -325,6 +344,9 @@ pub fn create_contract(env: &Env, client: &EscrowClient) -> (Address, Address, u
         &milestones,
         &ReleaseAuthorization::ClientOnly,
     );
+    if let Some(token) = client.get_settlement_token() {
+        StellarAssetClient::new(env, &token).mint(&client_addr, &1_000_000_000_000_000_i128);
+    }
     (client_addr, freelancer_addr, id)
 }
 
