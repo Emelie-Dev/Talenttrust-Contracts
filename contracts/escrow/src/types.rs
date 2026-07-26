@@ -147,9 +147,8 @@ pub enum DataKey {
     AccumulatedProtocolFees,
     GovernedParameters,
     ReadinessChecklist,
-    // Configurable limits
-    MaxMilestones,
-    MaxEscrowStroops,
+    /// Admin-configurable upper bound on single-contract storage size (bytes).
+    StorageLimit,
     // Finalization
     Finalization(u32),
     // Settlement token
@@ -235,8 +234,11 @@ pub enum Error {
     EscrowCapExceeded = 51,
     SettlementTokenNotConfigured = 52,
     MilestoneNotOverdue = 53,
-    /// The contract ID is out of valid bounds.
-    InvalidContractId = 54,
+    /// The requested storage limit falls outside the permitted range.
+    ///
+    /// The storage limit must be between [`MIN_STORAGE_LIMIT`] (1) and
+    /// [`MAX_STORAGE_LIMIT`] (the compile-time hard cap) inclusive.
+    StorageLimitOutOfRange = 54,
 }
 
 #[contracttype]

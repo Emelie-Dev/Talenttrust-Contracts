@@ -175,6 +175,17 @@ pub struct MainnetReadinessInfo {
     pub max_escrow_total_stroops: i128,
 }
 
+// ── Admin-configurable storage limit constants ─────────────────────────────
+/// Minimum value accepted by [`Escrow::set_storage_limit`] (1 byte).
+pub const MIN_STORAGE_LIMIT: u32 = 1;
+/// Maximum value accepted by [`Escrow::set_storage_limit`] (1 000 000 bytes).
+pub const MAX_STORAGE_LIMIT: u32 = 1_000_000;
+/// Default storage limit (65 536 bytes = 64 KiB) when no admin override is set.
+///
+/// Preserves pre-#901 behaviour for deployments that have not called
+/// [`Escrow::set_storage_limit`].
+pub const DEFAULT_STORAGE_LIMIT: u32 = 65_536;
+
 #[contract]
 pub struct Escrow;
 
