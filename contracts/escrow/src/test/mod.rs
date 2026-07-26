@@ -8,6 +8,7 @@ use crate::{
 };
 
 // --- Submodules ---
+mod accounting_invariants;
 mod approval_expiry;
 mod cancel_contract;
 mod client_migration;
@@ -24,6 +25,7 @@ mod refund;
 mod release;
 mod release_authorization;
 mod reputation;
+mod resolution_payouts_prop;
 mod security;
 mod ttl_tests;
 
