@@ -81,8 +81,8 @@ pub use migration::PendingClientMigration;
 pub use ttl::{ADMIN_ROTATION_MIN_DELAY_LEDGERS, PENDING_MIGRATION_TTL_LEDGERS};
 
 pub use types::{
-    BatchContractResult, Contract, ContractBounds, ContractItem, ContractStatus, ContractSummary,
-    DataKey, DepositMode, DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone,
+    ArbiterApprovalKey, Contract, ContractBounds, ContractStatus, ContractSummary, DataKey,
+    DepositMode, DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone,
     MilestoneApprovals, MilestoneEntry, MilestoneSummary, PendingAdminProposal, ReadinessChecklist,
     ReleaseAuthorization, Reputation, SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION,
 };
@@ -1341,7 +1341,10 @@ impl Escrow {
         contract_id: u32,
         milestone_index: u32,
     ) -> Option<MilestoneApprovals> {
-        let approval_key = DataKey::MilestoneApprovals(contract_id, milestone_index);
+        if milestone_index >= MAX_MILESTONES {
+            env.panic_with_error(Error::IndexOutOfBounds);
+        }
+        let approval_key = approvals::arbiter_approval_storage_key(contract_id, milestone_index);
         let approvals = env.storage().temporary().get(&approval_key);
         if approvals.is_some() {
             env.storage().temporary().extend_ttl(
@@ -1354,7 +1357,10 @@ impl Escrow {
     }
 
     pub fn get_approval_deadline(env: Env, contract_id: u32, milestone_index: u32) -> Option<u32> {
-        let approval_key = DataKey::MilestoneApprovals(contract_id, milestone_index);
+        if milestone_index >= MAX_MILESTONES {
+            env.panic_with_error(Error::IndexOutOfBounds);
+        }
+        let approval_key = approvals::arbiter_approval_storage_key(contract_id, milestone_index);
         if !env.storage().temporary().has(&approval_key) {
             return None;
         }
