@@ -24,16 +24,12 @@
 
 #![cfg(test)]
 
+use crate::dispute::{final_status_after_resolution, resolution_payouts};
 use crate::{
     Contract, ContractStatus, DisputeConfig, DisputeResolution, DisputeSplit, Error, Escrow,
     EscrowClient, ReleaseAuthorization,
 };
 use soroban_sdk::{testutils::Address as _, token::StellarAssetClient, vec, Address, Env};
-
-use crate::dispute::{
-    final_status_after_resolution, resolution_payouts, PARTIAL_REFUND_DENOMINATOR,
-    PARTIAL_REFUND_FREELANCER_SHARE_NUMERATOR,
-};
 
 // ---------------------------------------------------------------------------
 // Test helpers

@@ -1,21 +1,39 @@
-use soroban_sdk::{contracterror, contracttype, Address, Env, String, Val, Vec};
+use soroban_sdk::{contracterror, contracttype, Address, BytesN, String, Vec};
 
 // ── Indexer summary types ────────────────────────────────────────────────────
 
 #[allow(dead_code)]
 pub const CONTRACT_SUMMARY_SCHEMA_VERSION: u32 = 1;
 
-use crate::milestones::{MilestoneSummary, ReleaseAuthorization};
+/// Current on-ledger layout version for per-contract dispute metadata.
+///
+/// Bump this when introducing a new `DisputeMetadata` layout. Older layouts are
+/// upgraded on read by `dispute::load_dispute_metadata`.
+pub const DISPUTE_STORAGE_VERSION: u32 = 1;
 
-/// Lightweight milestone entry returned by the paginated milestones view.
+/// Legacy (v0) dispute metadata layout without an embedded schema version.
 ///
-/// Carries only the fields needed for a UI listing: zero-based `index`,
-/// a compact `status` code, and the milestone `amount` in stroops.
-///
-/// Status codes:
-/// - `0` - Pending (not yet released or refunded)
-/// - `1` - Released
-/// - `2` - Refunded
+/// Retained solely so migrate-on-read can decode pre-versioned records and
+/// rewrite them as [`DisputeMetadata`].
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DisputeMetadataV0 {
+    pub raised_by: Address,
+    pub reason_hash: BytesN<32>,
+    pub raised_at: u64,
+}
+
+/// Versioned dispute metadata stored under [`DataKey::Dispute`].
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DisputeMetadata {
+    /// Must equal [`DISPUTE_STORAGE_VERSION`] after a successful write/migration.
+    pub schema_version: u32,
+    pub raised_by: Address,
+    pub reason_hash: BytesN<32>,
+    pub raised_at: u64,
+}
+
 #[contracttype]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MilestoneEntry {
@@ -225,8 +243,9 @@ pub enum DataKey {
     MaxEscrowStroops,
     // Settlement storage
     SettlementToken,
-    // Admin-configurable settlement limit (max single milestone amount in stroops)
-    SettlementLimit,
+    // Disputes: versioned metadata + per-contract layout marker
+    Dispute(u32),
+    DisputeStorageVersion(u32),
 }
 
 /// Canonical contract error type for all entrypoint-facing errors.
