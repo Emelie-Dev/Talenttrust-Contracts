@@ -90,6 +90,8 @@ pub use types::{
 pub const MAX_MILESTONES: u32 = 10;
 pub const MAX_SINGLE_AMOUNT_STROOPS: i128 = crate::amount_validation::MAX_SINGLE_AMOUNT_STROOPS;
 pub const MAX_TOTAL_ESCROW_STROOPS: i128 = MAX_SINGLE_AMOUNT_STROOPS;
+/// Maximum number of items in a batch approval request.
+pub const MAX_BATCH_APPROVALS: u32 = 10;
 
 #[contract]
 pub struct Escrow;
@@ -171,6 +173,8 @@ pub enum EscrowError {
     EmptyComment = 42,
     /// Reputation feedback comment exceeded the 200-character maximum.
     CommentTooLong = 43,
+    /// The batch approval vector exceeds the maximum allowed cap.
+    BatchCapExceeded = 44,
 }
 
 impl Escrow {
@@ -613,6 +617,54 @@ impl Escrow {
         Self::require_not_finalized(&env, contract_id);
         approvals::approve_milestone(&env, contract_id, milestone_index, &caller)
             .unwrap_or_else(|e| env.panic_with_error(e))
+    }
+
+    /// Batch variant of [`approve_milestone_release`](Self::approve_milestone_release)
+    /// that accepts a bounded vector of milestone indices.
+    ///
+    /// If the vector length exceeds [`MAX_BATCH_APPROVALS`], the call is rejected
+    /// with [`EscrowError::BatchCapExceeded`]. Per-item semantics are preserved:
+    /// each milestone index goes through the same authorization logic as the
+    /// single-entrypoint, and events are emitted per item.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `contract_id` - The contract ID
+    /// * `caller` - The address of the caller (must be authorized)
+    /// * `milestone_indices` - Bounded vector of milestone indices to approve
+    ///
+    /// # Errors
+    /// * `BatchCapExceeded` - If `milestone_indices` length exceeds the cap
+    /// * All errors from [`approve_milestone_release`](Self::approve_milestone_release)
+    ///
+    /// # Events
+    /// Emits `("approve", contract_id)` with payload
+    /// `(caller, milestone_index, timestamp)` for each successfully approved milestone.
+    pub fn approve_milestone_release_batch(
+        env: Env,
+        contract_id: u32,
+        caller: Address,
+        milestone_indices: Vec<u32>,
+    ) -> bool {
+        Self::require_not_paused(&env);
+        Self::require_not_finalized(&env, contract_id);
+
+        if milestone_indices.len() > MAX_BATCH_APPROVALS {
+            env.panic_with_error(EscrowError::BatchCapExceeded);
+        }
+
+        for i in 0..milestone_indices.len() {
+            let milestone_index = milestone_indices.get(i).unwrap();
+            approvals::approve_milestone(&env, contract_id, milestone_index, &caller)
+                .unwrap_or_else(|e| env.panic_with_error(e));
+
+            env.events().publish(
+                (symbol_short!("approve"), contract_id),
+                (caller.clone(), milestone_index, env.ledger().timestamp()),
+            );
+        }
+
+        true
     }
 
     /// Grants exactly one pending reputation credit to the freelancer.
