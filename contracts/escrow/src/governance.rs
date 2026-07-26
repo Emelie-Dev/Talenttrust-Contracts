@@ -9,12 +9,11 @@
 
 use crate::ttl::ADMIN_ROTATION_MIN_DELAY_LEDGERS;
 use crate::{
-    DataKey, Error, Escrow, EscrowArgs, EscrowClient, GovernedParameters, PendingAdminProposal,
-    ReadinessChecklist,
+    DataKey, Escrow, EscrowError, GovernedParameters,
+    PendingAdminProposal, ReadinessChecklist,
 };
 use soroban_sdk::{symbol_short, Address, Env, Symbol};
 
-#[soroban_sdk::contractimpl]
 impl Escrow {
     /// Set the protocol fee in basis points.
     ///
@@ -35,7 +34,7 @@ impl Escrow {
             .storage()
             .persistent()
             .get(&DataKey::Admin)
-            .unwrap_or_else(|| env.panic_with_error(Error::NotInitialized));
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::NotInitialized));
         admin.require_auth();
 
         let old_bps: u32 = env
@@ -79,7 +78,7 @@ impl Escrow {
             .storage()
             .persistent()
             .get(&DataKey::Admin)
-            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
         admin.require_auth();
 
         env.storage().persistent().set(
@@ -108,14 +107,14 @@ impl Escrow {
             .storage()
             .persistent()
             .get(&DataKey::PendingAdmin)
-            .unwrap_or_else(|| env.panic_with_error(Error::InvalidState));
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::InvalidState));
 
         let elapsed = env
             .ledger()
             .sequence()
             .saturating_sub(pending.proposed_at_ledger);
         if elapsed < ADMIN_ROTATION_MIN_DELAY_LEDGERS {
-            env.panic_with_error(Error::TimelockNotElapsed);
+            env.panic_with_error(EscrowError::TimelockNotElapsed);
         }
 
         let pending_admin = pending.proposed;
@@ -125,7 +124,7 @@ impl Escrow {
             .storage()
             .persistent()
             .get(&DataKey::Admin)
-            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
 
         env.storage()
             .persistent()
@@ -145,11 +144,11 @@ impl Escrow {
     /// cancel, and the contract must be initialized. On success the pending
     /// proposal is removed so the previously proposed address can no longer call
     /// [`Escrow::accept_governance_admin`] — a subsequent accept panics with
-    /// [`Error::InvalidState`].
+    /// [`EscrowError::InvalidState`].
     ///
     /// # Errors
-    /// * [`Error::NotInitialized`] — `initialize` has not been called.
-    /// * [`Error::InvalidState`] — there is no pending proposal to cancel.
+    /// * [`EscrowError::NotInitialized`] — `initialize` has not been called.
+    /// * [`EscrowError::InvalidState`] — there is no pending proposal to cancel.
     ///
     /// # Events
     /// `(symbol_short!("admin"), Symbol("cancelled"))` → `(admin, cancelled_proposal, timestamp)`
@@ -160,14 +159,14 @@ impl Escrow {
             .storage()
             .persistent()
             .get(&DataKey::Admin)
-            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
         admin.require_auth();
 
         let pending: PendingAdminProposal = env
             .storage()
             .persistent()
             .get(&DataKey::PendingAdmin)
-            .unwrap_or_else(|| env.panic_with_error(Error::InvalidState));
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::InvalidState));
 
         env.storage().persistent().remove(&DataKey::PendingAdmin);
 
@@ -209,22 +208,22 @@ impl Escrow {
             .get::<_, bool>(&crate::DataKey::Initialized)
             .unwrap_or(false)
         {
-            env.panic_with_error(Error::NotInitialized);
+            env.panic_with_error(EscrowError::NotInitialized);
         }
 
         let stored_admin: Address = env
             .storage()
             .persistent()
             .get(&DataKey::Admin)
-            .unwrap_or_else(|| env.panic_with_error(Error::NotInitialized));
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::NotInitialized));
 
         if admin != stored_admin {
-            env.panic_with_error(Error::UnauthorizedRole);
+            env.panic_with_error(EscrowError::UnauthorizedRole);
         }
         admin.require_auth();
 
         if protocol_fee_bps > 10_000 {
-            env.panic_with_error(Error::InvalidProtocolParameters);
+            env.panic_with_error(EscrowError::InvalidProtocolParameters);
         }
 
         let params = GovernedParameters {

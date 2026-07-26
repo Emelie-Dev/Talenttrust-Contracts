@@ -11,8 +11,9 @@
 
 use crate::ttl::{PENDING_APPROVAL_BUMP_THRESHOLD, PENDING_APPROVAL_TTL_LEDGERS};
 use crate::types::{
-    Contract, ContractStatus, DataKey, Error, Milestone, MilestoneApprovals, ReleaseAuthorization,
+    Contract, ContractStatus, DataKey, Milestone, MilestoneApprovals, ReleaseAuthorization,
 };
+use crate::Error;
 use soroban_sdk::{Address, Env, Vec};
 
 /// Approves a milestone for release by the caller.

@@ -11,7 +11,7 @@
 //! `contracts/escrow/src/lib.rs`.
 
 use crate::{
-    safe_add_amounts, Contract, ContractStatus, DisputeResolution, Error, Escrow,
+    safe_add_amounts, Contract, ContractStatus, DisputeResolution, Escrow, EscrowError,
     MAX_SINGLE_AMOUNT_STROOPS,
 };
 
@@ -27,7 +27,7 @@ use crate::{
 pub fn resolution_payouts(
     contract: &Contract,
     resolution: &DisputeResolution,
-) -> Result<(i128, i128), Error> {
+) -> Result<(i128, i128), EscrowError> {
     let available = crate::checked_available_balance(
         contract.funded_amount,
         contract.released_amount,
@@ -40,26 +40,26 @@ pub fn resolution_payouts(
             let freelancer_payout = available
                 .checked_mul(30)
                 .and_then(|value| value.checked_div(100))
-                .ok_or(Error::PotentialOverflow)?;
+                .ok_or(EscrowError::PotentialOverflow)?;
             Ok((available - freelancer_payout, freelancer_payout))
         }
         DisputeResolution::FullPayout => Ok((0, available)),
         DisputeResolution::Split(split) => {
             if split.client_amount < 0 || split.freelancer_amount < 0 {
-                return Err(Error::InvalidDisputeSplit);
+                return Err(EscrowError::InvalidDisputeSplit);
             }
             if split.client_amount > MAX_SINGLE_AMOUNT_STROOPS
                 || split.freelancer_amount > MAX_SINGLE_AMOUNT_STROOPS
             {
-                return Err(Error::InvalidDisputeSplit);
+                return Err(EscrowError::InvalidDisputeSplit);
             }
             if split.client_amount > available || split.freelancer_amount > available {
-                return Err(Error::InvalidDisputeSplit);
+                return Err(EscrowError::InvalidDisputeSplit);
             }
             let total = safe_add_amounts(split.client_amount, split.freelancer_amount)
-                .ok_or(Error::PotentialOverflow)?;
+                .ok_or(EscrowError::PotentialOverflow)?;
             if total > available || total != available {
-                return Err(Error::InvalidDisputeSplit);
+                return Err(EscrowError::InvalidDisputeSplit);
             }
             Ok((split.client_amount, split.freelancer_amount))
         }
