@@ -59,6 +59,21 @@ pub struct ContractBounds {
 
 // ─── Storage keys ──────────────────────────────────────────────────────────────
 
+/// Storage key variants for the escrow contract.
+///
+/// This enum defines all persistent and temporary storage keys used by the contract.
+/// The layout follows an append-only-safe pattern: new variants are added at the end,
+/// and old variants are never reused or removed (ensuring forward compatibility).
+///
+/// **Release state source of truth:**
+/// Milestone release state is tracked exclusively via `Milestone.released` boolean
+/// in the milestone vector stored under `DataKey::Contract(u32)`. There is no
+/// separate `MilestoneReleased` key; the milestone vector is the canonical store.
+///
+/// **Approval state storage:**
+/// Temporary storage under `MilestoneApprovals(contract_id, milestone_index)` holds
+/// the approval flags for a milestone release, with TTL-based expiry for fail-closed
+/// semantics.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DataKey {
@@ -70,7 +85,6 @@ pub enum DataKey {
     // Contract storage
     Contract(u32),
     NextContractId,
-    MilestoneReleased(u32, u32),
     MilestoneApprovals(u32, u32),
     // Reputation
     ReputationIssued(u32),
