@@ -43,7 +43,7 @@ impl Escrow {
 
         let contract = Self::require_contract_mutable(&env, contract_id);
         if current_client != contract.client {
-            env.panic_with_error(EscrowError::UnauthorizedRole);
+            env.panic_with_error(Error::UnauthorizedRole);
         }
         if new_client == contract.client || new_client == contract.freelancer {
             env.panic_with_error(EscrowError::InvalidParticipant);
@@ -90,22 +90,20 @@ impl Escrow {
             .unwrap_or_else(|| env.panic_with_error(EscrowError::InvalidState));
 
         if pending.proposed_client != new_client {
-            env.panic_with_error(EscrowError::UnauthorizedRole);
+            env.panic_with_error(Error::UnauthorizedRole);
         }
-        if pending.current_client != contract.client {
-            env.panic_with_error(EscrowError::InvalidState);
-        }
-
+        let old_client = contract.client.clone();
         contract.client = new_client.clone();
+
         env.storage()
             .persistent()
             .set(&DataKey::Contract(contract_id), &contract);
 
-        remove_transient(env, &key);
+        env.storage().temporary().remove(&key);
 
         env.events().publish(
-            (Symbol::new(env, "client_migration_accepted"), contract_id),
-            (pending.current_client, new_client, env.ledger().timestamp()),
+            (Symbol::new(&env, "client_migration_accepted"), contract_id),
+            (old_client, new_client, env.ledger().timestamp()),
         );
         true
     }

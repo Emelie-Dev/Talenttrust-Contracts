@@ -149,7 +149,7 @@ pub enum DataKey {
     Admin,
     Paused,
     Emergency,
-    StorageVersion,
+    SettlementToken,
     // Contract storage
     Contract(u32),
     ContractSchemaVersion(u32),
@@ -157,6 +157,7 @@ pub enum DataKey {
     Milestones(u32),
     MilestoneReleased(u32, u32),
     MilestoneApprovals(u32, u32),
+    Finalization(u32),
     // Reputation
     ReputationIssued(u32),
     PendingReputationCredits(ReputationKey),
@@ -237,17 +238,31 @@ pub enum Error {
     AccountingInvariantViolated = 44,
     PotentialOverflow = 45,
     AlreadyFinalized = 46,
-    AlreadyCancelled = 50,
+    /// The work evidence string exceeds the maximum length limit.
     EvidenceTooLong = 47,
     TimelockNotElapsed = 48,
     InvalidProtocolParameters = 49,
+    /// The contract has already been cancelled.
+    AlreadyCancelled = 50,
+    /// The escrow cap would be exceeded by this operation.
     EscrowCapExceeded = 51,
     SettlementTokenNotConfigured = 52,
     MilestoneNotOverdue = 53,
-    /// No safe rollback is available for the contract's current state.
-    RollbackNotAllowed = 54,
-    /// Contract or milestone state changed after the rollback point was recorded.
-    RollbackStateChanged = 55,
+    /// The contract ID is out of valid bounds.
+    InvalidContractId = 54,
+    /// The limit value is out of the valid allowed range.
+    LimitOutOfRange = 55,
+}
+
+impl Error {
+    pub const TotalCapExceeded: Error = Error::EscrowCapExceeded;
+    pub const TooManyMilestones: Error = Error::LimitOutOfRange;
+    pub const ContractCancelled: Error = Error::AlreadyCancelled;
+    pub const ContractRefunded: Error = Error::AlreadyRefunded;
+    pub const SettlementTokenAlreadyBound: Error = Error::AlreadyInitialized;
+    pub const InvalidSettlementToken: Error = Error::SettlementTokenNotConfigured;
+    pub const SettlementTokenIsSelf: Error = Error::SettlementTokenNotConfigured;
+    pub const SettlementTokenIsAdmin: Error = Error::SettlementTokenNotConfigured;
 }
 
 #[contracttype]

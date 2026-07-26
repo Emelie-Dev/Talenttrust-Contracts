@@ -1,7 +1,10 @@
 pub use crate::Escrow;
 use crate::{
+    amount_validation, ttl, Contract, ContractStatus, DataKey, Escrow, EscrowArgs, EscrowClient,
+    EscrowError, GovernedParameters, Milestone, ReleaseAuthorization, Error, MAX_MILESTONES,
     amount_validation, ttl, Contract, ContractStatus, DataKey, Error, Escrow, EscrowArgs,
-    EscrowClient, EscrowError, Milestone, ReleaseAuthorization, MAX_MILESTONES,
+    EscrowClient, EscrowError, GovernedParameters, Milestone, ReleaseAuthorization, MAX_MILESTONES,
+
 };
 use soroban_sdk::{contractimpl, symbol_short, Address, Env, Vec};
 
@@ -128,7 +131,9 @@ pub fn execute_create_contract(
             (client, freelancer_addr, env.ledger().timestamp()),
         );
 
-    id
+        id
+
+    }
 }
 
 /// Returns the next available contract ID and asserts it is not already occupied.
