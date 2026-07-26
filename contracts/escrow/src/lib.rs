@@ -2887,6 +2887,14 @@ impl Escrow {
     }
 }
 
+/// Property-based invariant tests are compiled only for native test builds, never wasm.
+#[cfg(test)]
+mod proptest;
+
+/// Fuzz harness tests are compiled only for native test builds, never wasm.
+#[cfg(test)]
+mod fuzz_test;
+
 /// Test fixtures and suites are compiled only for native test builds, never wasm.
 #[cfg(test)]
 mod test;
