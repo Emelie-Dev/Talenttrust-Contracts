@@ -790,6 +790,291 @@ impl Escrow {
         true
     }
 
+    /// Releases multiple milestones in a single bounded batch call.
+    ///
+    /// Accepts a vector of milestone indices and releases each one sequentially,
+    /// emitting a per-item `mlstn_rls` event for every successful release.
+    /// The batch is capped at [`MAX_BATCH_RELEASE`] items; exceeding the cap
+    /// panics with `TooManyMilestones` before any state is mutated.
+    ///
+    /// Per-item semantics are preserved: each milestone undergoes the full
+    /// single-release validation (pause gate, auth, state checks, approval
+    /// checks, funding checks, fee computation, token transfer). The caller
+    /// is authenticated once at the top; individual auth checks are not
+    /// repeated per item.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `contract_id` - The escrow contract ID
+    /// * `caller` - The address initiating the batch release (must be authorized)
+    /// * `milestone_indices` - Vector of zero-based milestone indices to release
+    ///
+    /// # Returns
+    /// `true` when all requested milestones were released successfully.
+    ///
+    /// # Errors
+    /// * `TooManyMilestones` - If `milestone_indices.len() > MAX_BATCH_RELEASE`
+    /// * `EmptyMilestones` - If `milestone_indices` is empty
+    /// * `DuplicateMilestoneInRefund` - If duplicate indices appear in the batch
+    /// * `ContractNotFound` - If `contract_id` does not exist
+    /// * `ContractPaused` / `EmergencyActive` - Pause/emergency gate
+    /// * `InvalidState` - If contract is not in `Funded` state
+    /// * `UnauthorizedRole` - If `caller` is not authorized under the release mode
+    /// * `InsufficientApprovals` - If required approvals are missing
+    /// * `MilestoneAlreadyReleased` - If any target milestone is already released
+    /// * `AlreadyRefunded` - If any target milestone was already refunded
+    /// * `IndexOutOfBounds` - If any index exceeds the milestone count
+    ///
+    /// # Security
+    /// - Fail-closed: the first validation failure panics the entire batch
+    /// - The cap prevents unbounded computation per transaction
+    /// - Duplicate detection prevents double-releases in the same batch
+    ///
+    /// # Events
+    /// Emits one `mlstn_rls` event per successfully released milestone, and
+    /// `ctrct_cmp` / `ctrct_st` if the batch completes the contract.
+    pub fn release_milestones_batch(
+        env: Env,
+        contract_id: u32,
+        caller: Address,
+        milestone_indices: Vec<u32>,
+    ) -> bool {
+        Self::require_not_paused(&env);
+        caller.require_auth();
+
+        if milestone_indices.is_empty() {
+            env.panic_with_error(EscrowError::EmptyMilestones);
+        }
+
+        if milestone_indices.len() > MAX_BATCH_RELEASE {
+            env.panic_with_error(EscrowError::TooManyMilestones);
+        }
+
+        // Duplicate detection
+        let len = milestone_indices.len();
+        for i in 0..len {
+            for j in (i + 1)..len {
+                if milestone_indices.get(i).unwrap() == milestone_indices.get(j).unwrap() {
+                    env.panic_with_error(EscrowError::DuplicateMilestoneInRefund);
+                }
+            }
+        }
+
+        let mut contract: Contract = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Contract(contract_id))
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
+
+        ttl::extend_contract_ttl(&env, contract_id);
+        Self::require_not_finalized(&env, contract_id);
+
+        if contract.status != ContractStatus::Funded {
+            env.panic_with_error(Error::InvalidState);
+        }
+
+        // Role authorization check (same logic as single release)
+        let is_client = caller == contract.client;
+        let is_freelancer = caller == contract.freelancer;
+        let is_arbiter = contract.arbiter.as_ref() == Some(&caller);
+
+        match contract.release_authorization {
+            ReleaseAuthorization::ClientOnly => {
+                if !is_client {
+                    env.panic_with_error(EscrowError::UnauthorizedRole);
+                }
+            }
+            ReleaseAuthorization::ArbiterOnly => {
+                if !is_arbiter {
+                    env.panic_with_error(EscrowError::UnauthorizedRole);
+                }
+            }
+            ReleaseAuthorization::ClientAndArbiter => {
+                if !is_client && !is_arbiter {
+                    env.panic_with_error(EscrowError::UnauthorizedRole);
+                }
+            }
+            ReleaseAuthorization::MultiSig => {
+                if !is_client && !is_freelancer {
+                    env.panic_with_error(EscrowError::UnauthorizedRole);
+                }
+            }
+        }
+
+        let mut milestones: Vec<Milestone> = ttl::load_milestones(&env, contract_id);
+
+        let token = Self::read_settlement_token(&env)
+            .unwrap_or_else(|| env.panic_with_error(Error::SettlementTokenNotConfigured));
+        let token_client = token::Client::new(&env, &token);
+        let fee_bps = Self::read_protocol_fee_bps(&env);
+        let mut accumulated_fees: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::AccumulatedProtocolFees)
+            .unwrap_or(0);
+
+        let mut all_released_flag = false;
+
+        for idx in 0..milestone_indices.len() {
+            let milestone_index = milestone_indices.get(idx).unwrap();
+
+            if milestone_index >= milestones.len() {
+                env.panic_with_error(Error::IndexOutOfBounds);
+            }
+
+            let mut milestone = milestones.get(milestone_index).unwrap().clone();
+
+            if milestone.released {
+                env.panic_with_error(Error::MilestoneAlreadyReleased);
+            }
+
+            if milestone.refunded {
+                env.panic_with_error(EscrowError::AlreadyRefunded);
+            }
+
+            approvals::check_approvals(&env, &contract, contract_id, milestone_index)
+                .unwrap_or_else(|e| env.panic_with_error(e));
+
+            let available = crate::checked_available_balance(
+                contract.funded_amount,
+                contract.released_amount,
+                contract.refunded_amount,
+            )
+            .unwrap_or_else(|e| env.panic_with_error(e));
+
+            // Subtract accumulated fees from available balance
+            let available_after_fees = available
+                .checked_sub(accumulated_fees)
+                .unwrap_or_else(|| env.panic_with_error(EscrowError::AccountingInvariantViolated));
+
+            let gross_amount = milestone.amount;
+
+            if available_after_fees < gross_amount {
+                env.panic_with_error(EscrowError::InsufficientFunds);
+            }
+
+            let protocol_fee: i128 = if Self::is_initialized(&env) && fee_bps > 0 {
+                Self::calculate_protocol_fee(&env, gross_amount, fee_bps)
+            } else {
+                0
+            };
+
+            let net_amount = gross_amount
+                .checked_sub(protocol_fee)
+                .unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
+
+            token_client.transfer(
+                &env.current_contract_address(),
+                &contract.freelancer,
+                &net_amount,
+            );
+
+            if protocol_fee > 0 {
+                accumulated_fees = accumulated_fees
+                    .checked_add(protocol_fee)
+                    .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
+            }
+
+            milestone.released = true;
+            milestone.funded_amount = gross_amount;
+            milestones.set(milestone_index, milestone.clone());
+
+            contract.released_amount = contract
+                .released_amount
+                .checked_add(net_amount)
+                .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
+
+            let invariant_sum = contract
+                .released_amount
+                .checked_add(contract.refunded_amount)
+                .and_then(|v| v.checked_add(accumulated_fees))
+                .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
+            if invariant_sum > contract.funded_amount {
+                env.panic_with_error(EscrowError::AccountingInvariantViolated);
+            }
+
+            approvals::clear_approvals(&env, contract_id, milestone_index);
+
+            env.events().publish(
+                (symbol_short!("mlstn_rls"), contract_id),
+                (
+                    milestone_index,
+                    gross_amount,
+                    protocol_fee,
+                    contract.released_amount,
+                    caller.clone(),
+                    env.ledger().timestamp(),
+                ),
+            );
+        }
+
+        // Persist accumulated fees
+        if accumulated_fees > 0 {
+            env.storage()
+                .persistent()
+                .set(&DataKey::AccumulatedProtocolFees, &accumulated_fees);
+        }
+
+        // Check if all milestones are now released or refunded
+        let all_released = milestones.iter().all(|m| m.released || m.refunded);
+        let old_status = contract.status;
+        if all_released {
+            contract.status = ContractStatus::Completed;
+            all_released_flag = true;
+            Self::grant_pending_reputation_credit(&env, &contract.freelancer);
+        }
+
+        ttl::store_milestones(&env, contract_id, &milestones);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Contract(contract_id), &contract);
+        ttl::extend_contract_ttl(&env, contract_id);
+
+        if all_released_flag {
+            env.events().publish(
+                (symbol_short!("ctrct_cmp"), contract_id),
+                (caller.clone(), env.ledger().timestamp()),
+            );
+            env.events().publish(
+                (symbol_short!("ctrct_st"), contract_id),
+                (
+                    old_status as u32,
+                    ContractStatus::Completed as u32,
+                    contract.funded_amount,
+                    contract.released_amount,
+                    contract.refunded_amount,
+                    env.ledger().timestamp(),
+                ),
+            );
+        }
+
+        true
+    }
+
+    /// Checks if a specific milestone is overdue based on its deadline.
+    ///
+    /// A milestone is considered overdue if:
+    /// - It has a deadline set (Some value)
+    /// - The current time is strictly greater than the deadline (now > deadline)
+    /// - The milestone has not been released
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `contract_id` - The contract ID
+    /// * `milestone_index` - The index of the milestone to check
+    ///
+    /// # Returns
+    /// `true` if the milestone is overdue, `false` otherwise
+    ///
+    /// # Note
+    /// - Returns `false` if milestone has no deadline (None)
+    /// - Returns `false` if milestone is already released
+    /// - Boundary condition: at exactly the deadline (now == deadline), returns `false`
+    ///   because the deadline hasn't passed yet (uses strictly > comparison)
+    ///
+    /// # Security
+    /// Uses `now_seconds(&env)` which is the single source of truth for ledger time.
+    /// Time cannot be manipulated by contract callers.
     pub fn is_milestone_overdue(env: Env, contract_id: u32, milestone_index: u32) -> bool {
         let contract: Contract = match env
             .storage()
