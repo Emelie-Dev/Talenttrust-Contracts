@@ -207,7 +207,7 @@ impl Escrow {
     /// [`DataKey::SettlementToken`] all subsequent money-flow entrypoints
     /// (`deposit_funds`, `release_milestone`, `refund_unreleased_milestones`,
     /// `cancel_contract`, `withdraw_protocol_fees`) read that address to execute SAC
-    /// `transfer` calls.  A second call with any token address is rejected with
+    /// `transfer` calls. A second call with any token address is rejected with
     /// `SettlementTokenAlreadyBound`.
     ///
     /// # Pre-bind probe (issue #723)
@@ -231,11 +231,11 @@ impl Escrow {
     /// All downstream money-flow entrypoints (`deposit_funds`, `release_milestone`,
     /// `cancel_contract`, `refund_unreleased_milestones`) follow strict
     /// **state-before-transfer** (Checks-Effects-Interactions) ordering: contract
-    /// state is finalized *before* any `token::Client::transfer` call.  A
+    /// state is finalized *before* any `token::Client::transfer` call. A
     /// malicious token contract that re-enters the escrow during a transfer will
     /// observe the already-mutated state and cannot double-spend or front-run
-    /// the operation.  The probe itself performs no state mutation Ã¢â‚¬â€ it only
-    /// reads the token balance Ã¢â‚¬â€ so it cannot be used as a reentrancy vector.
+    /// the operation. The probe itself performs no state mutation — it only
+    /// reads the token balance — so it cannot be used as a reentrancy vector.
     ///
     /// See [`docs/escrow/sac-custody.md`](../../../docs/escrow/sac-custody.md) for the
     /// full custody model, accounting invariant, and lifecycle sequence diagram.
@@ -245,6 +245,9 @@ impl Escrow {
     /// * `admin` - The admin address (must match stored admin)
     /// * `token` - The SAC token address
     ///
+    /// # Returns
+    /// * `bool` - `true` on successful settlement token binding
+    ///
     /// # Errors
     /// * `NotInitialized` if `initialize` has not been called
     /// * `ContractPaused` if the contract is paused
@@ -253,6 +256,13 @@ impl Escrow {
     /// * `InvalidSettlementToken` if the probe call to `token::Client::balance` panics
     /// * `SettlementTokenIsSelf` if `token == env.current_contract_address()`
     /// * `SettlementTokenIsAdmin` if `token == stored_admin`
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let bound = client.bind_settlement_token(&admin, &usdc_token_address);
+    /// assert!(bound);
+    /// ```
     ///
     /// # Events
     /// On a successful, authorized bind this publishes a settlement bind event
@@ -324,11 +334,55 @@ impl Escrow {
         true
     }
 
+    /// Deprecated thin delegate for [`bind_settlement_token`](Self::bind_settlement_token).
+    ///
+    /// Retained for backward compatibility with external callers that used the historical API name.
+    /// Delegates directly to [`bind_settlement_token`](Self::bind_settlement_token) and inherits
+    /// every security guard (`SettlementTokenAlreadyBound`, admin auth check, SAC interface probe,
+    /// self/admin validation) and event emission.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `admin` - The admin address (must match stored admin)
+    /// * `token` - The SAC token address
+    ///
+    /// # Returns
+    /// * `bool` - `true` on successful settlement token binding
+    ///
+    /// # Errors
+    /// * `NotInitialized` if `initialize` has not been called
+    /// * `UnauthorizedRole` if `admin` is not the stored admin
+    /// * `SettlementTokenAlreadyBound` if a token is already bound
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let bound = client.set_settlement_token(&admin, &usdc_token_address);
+    /// assert!(bound);
+    /// ```
+    ///
+    /// # Deprecated
+    /// Use [`bind_settlement_token`](Self::bind_settlement_token) instead.
     #[deprecated(note = "Use bind_settlement_token instead.")]
     pub fn set_settlement_token(env: Env, admin: Address, token: Address) -> bool {
         Self::bind_settlement_token(env, admin, token)
     }
 
+    /// Returns the bound settlement token, or `None` if no token has been bound.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    ///
+    /// # Returns
+    /// * `Option<Address>` - `Some(Address)` with the bound SAC token address, or `None` if unbound
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// if let Some(token_address) = client.get_settlement_token() {
+    ///     // Process bound token address
+    /// }
+    /// ```
     pub fn get_settlement_token(env: Env) -> Option<Address> {
         Self::read_settlement_token(&env)
     }
@@ -345,9 +399,20 @@ impl Escrow {
     /// Read-only and auth-free: it performs no state mutation (no TTL write is
     /// needed for the simple binding key).
     ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    ///
     /// # Returns
     /// * `true` if a settlement token is bound
     /// * `false` if no settlement token has been bound yet
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// if client.is_settlement_token_bound() {
+    ///     // Safe to make deposits
+    /// }
+    /// ```
     pub fn is_settlement_token_bound(env: Env) -> bool {
         Self::read_settlement_token(&env).is_some()
     }
@@ -360,6 +425,23 @@ impl Escrow {
     /// protocol-fee, and governance operations. All escrow lifecycle operations
     /// (create, deposit, release, refund, cancel) call `require_initialized`
     /// so that these safety rails are always bound before money can move.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `admin` - The admin address initializing the escrow contract
+    ///
+    /// # Returns
+    /// * `bool` - `true` on successful initialization
+    ///
+    /// # Errors
+    /// * `AlreadyInitialized` - If `initialize` has already been called
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let initialized = client.initialize(&admin);
+    /// assert!(initialized);
+    /// ```
     pub fn initialize(env: Env, admin: Address) -> bool {
         if env
             .storage()
@@ -396,58 +478,99 @@ impl Escrow {
         true
     }
 
+    /// Returns the stored governance admin address.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    ///
+    /// # Returns
+    /// * `Option<Address>` - `Some(Address)` of the admin, or `None` if uninitialized
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let admin = client.get_admin();
+    /// ```
     pub fn get_admin(env: Env) -> Option<Address> {
         env.storage().persistent().get(&DataKey::Admin)
     }
 
-    /// Creates a new escrow contract with the specified client, freelancer, and milestone amounts.
+    /// Returns the protocol-wide hard-coded bounds used by validation paths.
+    ///
+    /// Callers and off-chain indexers should query this endpoint to discover
+    /// the limits enforced by `create_contract` without relying on hard-coded
+    /// constants:
+    ///
+    /// - `max_milestones`: maximum number of milestones per contract.
+    /// - `max_single_milestone_stroops`: maximum amount for any single milestone.
+    /// - `max_total_escrow_stroops`: maximum sum of all milestone amounts.
+    /// - `max_fee_bps`: protocol fee ceiling in basis points (10 000 = 100 %).
+    ///
+    /// These are compile-time constants — the return value never changes
+    /// between calls on the same contract binary. The function is read-only
+    /// and requires no authorization.
     ///
     /// # Arguments
-    /// * `env` - The contract environment
-    /// * `client` - The address of the client funding the contract
-    /// * `freelancer` - The address of the freelancer performing the work
-    /// * `arbiter` - Optional arbiter address for dispute resolution
-    /// * `milestones` - Vector of milestone amounts (in stroops)
-    /// * `release_authorization` - Authorization mode for milestone releases
+    /// * `_env` - The Soroban environment
     ///
     /// # Returns
-    /// The unique contract ID
+    /// A [`ContractBounds`] value containing only limit fields. Unlike
+    /// [`get_contract_summary`], this type carries no per-contract participant
+    /// or accounting data and its schema version tracks the limits API only.
     ///
-    /// # Errors
-    /// * `InvalidParticipants` - If client and freelancer are the same address
-    /// * `EmptyMilestones` - If no milestones are provided
-    /// * `InvalidMilestoneAmount` - If any milestone amount is <= 0
-    pub fn validate_contract_id_bounds(env: &Env, contract_id: u32) {
-        if contract_id == 0 {
-            env.panic_with_error(EscrowError::ContractNotFound);
-        }
-        let next_id: u32 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::NextContractId)
-            .unwrap_or(1);
-        if contract_id >= next_id {
-            env.panic_with_error(EscrowError::ContractNotFound);
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let bounds = client.get_bounds();
+    /// assert_eq!(bounds.max_milestones, 10);
+    /// ```
+    pub fn get_bounds(_env: Env) -> ContractBounds {
+        ContractBounds {
+            max_milestones: MAX_MILESTONES,
+            max_single_milestone_stroops: MAX_SINGLE_AMOUNT_STROOPS,
+            max_total_escrow_stroops: MAX_TOTAL_ESCROW_STROOPS,
+            max_fee_bps: 10_000,
         }
     }
 
-    pub fn create_contract(
-        env: Env,
-        client: Address,
-        freelancer: Address,
-        arbiter: Option<Address>,
-        milestones: Vec<i128>,
-        release_authorization: ReleaseAuthorization,
-    ) -> u32 {
-        create_contract::execute_create_contract(
-            env,
-            client,
-            freelancer,
-            arbiter,
-            milestones,
-            release_authorization,
-        )
+    /// Returns the current mainnet readiness checklist.
+    ///
+    /// The checklist tracks critical configuration steps that must be completed
+    /// before the escrow contract is considered ready for mainnet production:
+    ///
+    /// - **`initialized`**: Flipped to `true` when `initialize` completes successfully.
+    ///   Ensures that an admin has been bound to the contract.
+    /// - **`governed_params_set`**: Flipped to `true` when governance/protocol parameters
+    ///   (such as fees and maximum caps) are configured. Flipped during `initialize_protocol_governance`
+    ///   or parameter updates.
+    /// - **`emergency_controls_enabled`**: Flipped to `true` when emergency pause controls are exercised
+    ///   for the first time (via `activate_emergency_pause`). This verifies the operator has functioning
+    ///   emergency access.
+    ///
+    /// # Implications for a Clean Deploy
+    /// Activating the emergency pause to flip the `emergency_controls_enabled` flag leaves the contract
+    /// in a paused state. To complete a clean deploy and allow normal operations, the operator must
+    /// subsequently call `resolve_emergency` to unpause the contract.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    ///
+    /// # Returns
+    /// * `ReadinessChecklist` - Struct containing setup readiness booleans
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let readiness = client.get_mainnet_readiness_info();
+    /// assert!(readiness.initialized);
+    /// ```
+    pub fn get_mainnet_readiness_info(env: Env) -> ReadinessChecklist {
+        env.storage()
+            .persistent()
+            .get(&DataKey::ReadinessChecklist)
+            .unwrap_or_default()
     }
+
     /// Pull the settlement-token deposit from the client into the escrow contract address.
     ///
     /// Executes `SAC::transfer(from: client, to: escrow_address, amount)` and advances
@@ -473,6 +596,13 @@ impl Escrow {
     /// * `ContractNotFound` - If contract doesn't exist
     /// * `InvalidState` - If contract is not in Created state
     /// * `UnauthorizedRole` - If caller is not the client
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let deposited = client.deposit_funds(&1, &client_address, &1_000_0000000);
+    /// assert!(deposited);
+    /// ```
     pub fn deposit_funds(env: Env, contract_id: u32, caller: Address, amount: i128) -> bool {
         Self::require_initialized(&env);
         Self::require_not_paused(&env);
@@ -561,12 +691,27 @@ impl Escrow {
     /// contract is `Completed` or `Disputed`. Once finalized, future
     /// contract-specific mutations fail with `AlreadyFinalized`.
     ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `contract_id` - The contract ID to finalize
+    /// * `finalizer` - The address of the finalizer (client, freelancer, or arbiter)
+    ///
+    /// # Returns
+    /// * `bool` - `true` if finalized successfully
+    ///
     /// # Errors
     /// - `ContractPaused` when pause or emergency controls are active.
     /// - `ContractNotFound` when `contract_id` is unknown.
     /// - `AlreadyFinalized` when a close record already exists.
     /// - `UnauthorizedRole` when `finalizer` is not a contract participant.
     /// - `InvalidStatusTransition` unless status is `Completed` or `Disputed`.
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let finalized = client.finalize_contract(&1, &client_address);
+    /// assert!(finalized);
+    /// ```
     pub fn finalize_contract(env: Env, contract_id: u32, finalizer: Address) -> bool {
         finalize::finalize_contract_impl(&env, contract_id, finalizer)
     }
@@ -577,6 +722,21 @@ impl Escrow {
     }
 
     /// Return immutable close metadata for `contract_id`, if it has been finalized.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `contract_id` - The contract ID
+    ///
+    /// # Returns
+    /// * `Option<FinalizationRecord>` - `Some(record)` if finalized, `None` otherwise
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// if let Some(record) = client.get_finalization_record(&1) {
+    ///     // Process finalization record
+    /// }
+    /// ```
     pub fn get_finalization_record(
         env: Env,
         contract_id: u32,
@@ -608,6 +768,27 @@ impl Escrow {
     /// The current client must authorize the call. The proposed client address
     /// must not be the freelancer or the current client. The pending migration
     /// is stored in temporary storage with TTL.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `contract_id` - The contract ID
+    /// * `current_client` - The address of the current client
+    /// * `new_client` - The proposed new client address
+    ///
+    /// # Returns
+    /// * `bool` - `true` if migration proposed successfully
+    ///
+    /// # Errors
+    /// * `ContractPaused` - If paused or in emergency mode
+    /// * `UnauthorizedRole` - If `current_client` is not the stored client
+    /// * `InvalidParticipant` - If `new_client` is current client or freelancer
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let proposed = client.propose_client_migration(&1, &current_client_address, &new_client_address);
+    /// assert!(proposed);
+    /// ```
     pub fn propose_client_migration(
         env: Env,
         contract_id: u32,
@@ -618,15 +799,77 @@ impl Escrow {
         migration::propose_client_migration_impl(&env, contract_id, current_client, new_client)
     }
 
+    /// Accept a live pending client migration and update the contract.
+    ///
+    /// Canonical public entrypoint; delegates to `accept_client_migration_impl`.
+    /// Only the proposed client address may authorize acceptance.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `contract_id` - The contract ID
+    /// * `new_client` - The proposed new client address accepting migration
+    ///
+    /// # Returns
+    /// * `bool` - `true` if migration accepted successfully
+    ///
+    /// # Errors
+    /// * `ContractPaused` - If paused or in emergency mode
+    /// * `UnauthorizedRole` - If caller is not `new_client`
+    /// * `InvalidState` - If no live pending migration exists
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let accepted = client.accept_client_migration(&1, &new_client_address);
+    /// assert!(accepted);
+    /// ```
     pub fn accept_client_migration(env: Env, contract_id: u32, new_client: Address) -> bool {
         Self::require_not_paused(&env);
         migration::accept_client_migration_impl(&env, contract_id, new_client)
     }
 
+    /// Return true if a live pending client migration exists.
+    ///
+    /// Canonical public entrypoint; delegates to `has_pending_client_migration_impl`.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `contract_id` - The contract ID
+    ///
+    /// # Returns
+    /// * `bool` - `true` if a pending migration exists, `false` otherwise
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// if client.has_pending_client_migration(&1) {
+    ///     // Pending migration active
+    /// }
+    /// ```
     pub fn has_pending_client_migration(env: Env, contract_id: u32) -> bool {
         migration::has_pending_client_migration_impl(&env, contract_id)
     }
 
+    /// Return the live pending client migration record.
+    ///
+    /// Canonical public entrypoint; delegates to `get_pending_client_migration_impl`.
+    /// Panics with `InvalidState` when no live pending migration exists.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `contract_id` - The contract ID
+    ///
+    /// # Returns
+    /// * `PendingClientMigration` - Record containing migration details
+    ///
+    /// # Errors
+    /// * `InvalidState` - If no pending migration exists
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let pending = client.get_pending_client_migration(&1);
+    /// ```
     pub fn get_pending_client_migration(env: Env, contract_id: u32) -> PendingClientMigration {
         migration::get_pending_client_migration_impl(&env, contract_id)
     }
@@ -739,6 +982,15 @@ impl Escrow {
     /// - `ClientAndArbiter` Ã¢â‚¬â€ client or arbiter (one is enough)
     /// - `MultiSig` Ã¢â‚¬â€ both client and freelancer must approve
     ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `contract_id` - The contract ID
+    /// * `caller` - The address granting approval
+    /// * `milestone_index` - The zero-based milestone index
+    ///
+    /// # Returns
+    /// * `bool` - `true` if approval was recorded
+    ///
     /// # Errors
     /// * `ContractPaused` - If the contract is paused while not in emergency mode
     /// * `EmergencyActive` - If the contract is in an active emergency pause
@@ -750,6 +1002,13 @@ impl Escrow {
     ///   and approval staging so no approval state mutates while the contract is frozen.
     ///
     /// See `docs/escrow/approvals-and-release.md` for the full flow.
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let approved = client.approve_milestone_release(&1, &client_address, &0);
+    /// assert!(approved);
+    /// ```
     pub fn approve_milestone_release(
         env: Env,
         contract_id: u32,
@@ -876,6 +1135,13 @@ impl Escrow {
     /// - Requires valid approvals that haven't expired
     /// - Approvals are cleared after successful release
     /// - Fail-closed: missing or expired approvals prevent release
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let released = client.release_milestone(&1, &client_address, &0);
+    /// assert!(released);
+    /// ```
     ///
     /// # Events
     /// Emits `("mlstn_rls", contract_id)` with payload
@@ -1128,6 +1394,77 @@ impl Escrow {
         true
     }
 
+    /// Checks if a specific milestone is overdue based on its deadline.
+    ///
+    /// A milestone is considered overdue if:
+    /// - It has a deadline set (Some value)
+    /// - The current time is strictly greater than the deadline (now > deadline)
+    /// - The milestone has not been released
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `contract_id` - The contract ID
+    /// * `milestone_index` - The index of the milestone to check
+    ///
+    /// # Returns
+    /// `true` if the milestone is overdue, `false` otherwise
+    ///
+    /// # Note
+    /// - Returns `false` if milestone has no deadline (None)
+    /// - Returns `false` if milestone is already released
+    /// - Boundary condition: at exactly the deadline (now == deadline), returns `false`
+    ///   because the deadline hasn't passed yet (uses strictly > comparison)
+    ///
+    /// # Security
+    /// Uses `now_seconds(&env)` which is the single source of truth for ledger time.
+    /// Time cannot be manipulated by contract callers.
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let overdue = client.is_milestone_overdue(&1, &0);
+    /// ```
+    pub fn is_milestone_overdue(env: Env, contract_id: u32, milestone_index: u32) -> bool {
+        let contract: Contract = match env
+            .storage()
+            .persistent()
+            .get(&DataKey::Contract(contract_id))
+        {
+            Some(c) => c,
+            None => return false, // Contract not found, not overdue
+        };
+
+        let milestone_key = Symbol::new(&env, "milestones");
+        let milestones: Vec<Milestone> = match env
+            .storage()
+            .persistent()
+            .get(&(DataKey::Contract(contract_id), milestone_key))
+        {
+            Some(m) => m,
+            None => return false, // No milestones, not overdue
+        };
+
+        if milestone_index >= milestones.len() {
+            return false; // Index out of bounds, not overdue
+        }
+
+        let milestone = milestones.get(milestone_index).unwrap();
+
+        // Return false if already released
+        if milestone.released {
+            return false;
+        }
+
+        // Return false if no deadline set
+        match milestone.deadline {
+            None => false,
+            Some(deadline) => {
+                // Overdue if now > deadline (strictly greater)
+                now_seconds(&env) > deadline
+            }
+        }
+    }
+
     /// Refunds unreleased milestones back to the client.
     ///
     /// # Arguments
@@ -1148,6 +1485,13 @@ impl Escrow {
     /// * `InsufficientFunds` - If contract doesn't have enough balance to refund
     /// * `AlreadyFinalized` - If a finalization record already exists for this contract
     /// * `InvalidState` - If contract status is not Created, Funded, or Disputed
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let indices = soroban_sdk::vec![&env, 0u32];
+    /// let refunded_total = client.refund_unreleased_milestones(&1, &indices);
+    /// ```
     pub fn refund_unreleased_milestones(
         env: Env,
         contract_id: u32,
@@ -1297,6 +1641,270 @@ impl Escrow {
         total_refund_amount
     }
 
+    /// Checks whether a contract with the given ID exists in storage.
+    ///
+    /// This is a cheap, non-panicking existence probe that returns `true` if
+    /// the contract record is present and `false` otherwise. Unlike `get_contract`,
+    /// this function does **not** panic with `ContractNotFound` for missing IDs,
+    /// making it safe for indexers and clients iterating over ID ranges.
+    ///
+    /// # Security
+    /// This is a read-only operation that does **not** extend the contract's TTL.
+    /// Probing for contract existence cannot be abused to keep entries alive.
+    /// Only actual contract operations (reads/writes) extend TTL.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `contract_id` - The contract ID to check
+    ///
+    /// # Returns
+    /// * `true` if the contract exists
+    /// * `false` if the contract does not exist
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// if client.contract_exists(&1) {
+    ///     let contract = client.get_contract(&1);
+    /// }
+    /// ```
+    pub fn contract_exists(env: Env, contract_id: u32) -> bool {
+        env.storage()
+            .persistent()
+            .has(&DataKey::Contract(contract_id))
+    }
+
+    /// Retrieves contract information.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `contract_id` - The contract ID
+    ///
+    /// # Returns
+    /// * `Contract` - The escrow contract struct
+    ///
+    /// # Errors
+    /// * `ContractNotFound` - If contract does not exist
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let contract = client.get_contract(&1);
+    /// ```
+    pub fn get_contract(env: Env, contract_id: u32) -> Contract {
+        let contract = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Contract(contract_id))
+            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
+
+        // Extend TTL on contract read
+        ttl::extend_contract_ttl(&env, contract_id);
+        contract
+    }
+
+    /// Returns the next contract ID to be allocated (the high-water mark).
+    ///
+    /// This reader returns the current value of `NextContractId`, which represents
+    /// the next ID that will be assigned when `create_contract` is called.
+    /// Indexers can use this to determine the allocation high-water mark and
+    /// safely iterate over the allocated ID range `[1, get_next_contract_id() - 1]`.
+    ///
+    /// # Security
+    /// This is a read-only operation that does not mutate contract state or extend TTL.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    ///
+    /// # Returns
+    /// The next contract ID to be allocated (always ≥ 1)
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let next_id = client.get_next_contract_id();
+    /// for id in 1..next_id {
+    ///     if client.contract_exists(&id) {
+    ///         let contract = client.get_contract(&id);
+    ///     }
+    /// }
+    /// ```
+    pub fn get_next_contract_id(env: Env) -> u32 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::NextContractId)
+            .unwrap_or(1)
+    }
+
+    /// Returns a structured summary of the contract and its milestones.
+    ///
+    /// Extends contract and milestone TTL on read without requiring caller auth.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `contract_id` - The contract ID
+    ///
+    /// # Returns
+    /// The detailed `ContractSummary` for off-chain consumption
+    ///
+    /// # Errors
+    /// * `ContractNotFound` - If contract doesn't exist
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let summary = client.get_contract_summary(&1);
+    /// assert_eq!(summary.schema_version, 1);
+    /// ```
+    pub fn get_contract_summary(env: Env, contract_id: u32) -> ContractSummary {
+        let contract: Contract = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Contract(contract_id))
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
+
+        // Extend TTL on contract and milestones read
+        ttl::extend_contract_and_milestones_ttl(&env, contract_id);
+
+        let milestones = ttl::load_milestones(&env, contract_id);
+        let total_amount: i128 =
+            crate::amount_validation::accumulate_amounts(milestones.iter().map(|m| m.amount))
+                .unwrap_or_else(|_| env.panic_with_error(EscrowError::PotentialOverflow));
+        let released_milestone_count = milestones.iter().filter(|m| m.released).count() as u32;
+
+        let mut milestone_summaries = Vec::new(&env);
+        for (idx, m) in milestones.iter().enumerate() {
+            milestone_summaries.push_back(MilestoneSummary {
+                index: idx as u32,
+                amount: m.amount,
+                released: m.released,
+                refunded: m.refunded,
+            });
+        }
+
+        let reputation_issued = env
+            .storage()
+            .persistent()
+            .get::<_, bool>(&DataKey::ReputationIssued(contract_id))
+            .unwrap_or(contract.reputation_issued);
+
+        let refundable_balance =
+            contract.funded_amount - contract.released_amount - contract.refunded_amount;
+
+        ContractSummary {
+            schema_version: CONTRACT_SUMMARY_SCHEMA_VERSION,
+            client: contract.client,
+            freelancer: contract.freelancer,
+            arbiter: contract.arbiter,
+            status: contract.status,
+            reputation_issued,
+            total_amount,
+            funded_amount: contract.funded_amount,
+            released_amount: contract.released_amount,
+            refundable_balance,
+            released_milestone_count,
+            milestones: milestone_summaries,
+        }
+    }
+
+    /// Retrieves all milestones for a contract.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `contract_id` - The contract ID
+    ///
+    /// # Returns
+    /// * `Vec<Milestone>` - Vector of milestone items
+    ///
+    /// # Errors
+    /// * `ContractNotFound` - If contract milestones do not exist
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let milestones = client.get_milestones(&1);
+    /// ```
+    pub fn get_milestones(env: Env, contract_id: u32) -> Vec<Milestone> {
+        let milestone_key = Symbol::new(&env, "milestones");
+        let milestones = env
+            .storage()
+            .persistent()
+            .get(&(DataKey::Contract(contract_id), milestone_key))
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
+        ttl::extend_milestone_ttl(&env, contract_id);
+        milestones
+    }
+
+    /// Retrieves a single milestone by index for a contract.
+    ///
+    /// This is the bounds-checked single-item counterpart to
+    /// `get_milestones`. Off-chain callers that only need one milestone's
+    /// state (amount, funded/released/refunded flags, deadline, work evidence)
+    /// can avoid fetching and decoding the full `Vec<Milestone>`.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `contract_id` - The contract ID
+    /// * `milestone_index` - The zero-based index of the milestone to read
+    ///
+    /// # Returns
+    /// * `Some(Milestone)` if `milestone_index` is in bounds
+    /// * `None` if `milestone_index` is out of bounds
+    ///
+    /// # Panics
+    /// Panics with `ContractNotFound` if the contract's milestones were never
+    /// allocated (i.e. the contract id is unknown), matching
+    /// `get_milestones`.
+    ///
+    /// # Side effects
+    /// Extends the milestones vector TTL on a successful read, consistent with
+    /// `get_milestones`. Auth-free and otherwise non-mutating.
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// if let Some(milestone) = client.get_milestone(&1, &0) {
+    ///     // Process milestone 0
+    /// }
+    /// ```
+    pub fn get_milestone(env: Env, contract_id: u32, milestone_index: u32) -> Option<Milestone> {
+        let milestone_key = Symbol::new(&env, "milestones");
+        let milestones: Vec<Milestone> = env
+            .storage()
+            .persistent()
+            .get(&(DataKey::Contract(contract_id), milestone_key))
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
+        ttl::extend_milestone_ttl(&env, contract_id);
+        milestones.get(milestone_index)
+    }
+
+    /// Returns funded minus released minus refunded for `contract_id`.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `contract_id` - The contract ID
+    ///
+    /// # Returns
+    /// * `i128` - Remaining refundable balance in stroops
+    ///
+    /// # Errors
+    /// * `ContractNotFound` - If contract does not exist
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let balance = client.get_refundable_balance(&1);
+    /// ```
+    pub fn get_refundable_balance(env: Env, contract_id: u32) -> i128 {
+        let contract: Contract = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Contract(contract_id))
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
+        ttl::extend_contract_ttl(&env, contract_id);
+        contract.funded_amount - contract.released_amount - contract.refunded_amount
+    }
+
     /// Retrieves approval status for a milestone.
     ///
     /// Returns `None` when no approval record exists or when the TTL has
@@ -1314,6 +1922,22 @@ impl Escrow {
     /// storage access and TTL bump behavior.
     ///
     /// See `approve_milestone_release` and `docs/escrow/authorization.md`.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `contract_id` - The contract ID
+    /// * `milestone_index` - The zero-based milestone index
+    ///
+    /// # Returns
+    /// * `Option<MilestoneApprovals>` - `Some(MilestoneApprovals)` if present, `None` if non-existent or expired
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// if let Some(approvals) = client.get_milestone_approvals(&1, &0) {
+    ///     assert!(approvals.client_approved);
+    /// }
+    /// ```
     pub fn get_milestone_approvals(
         env: Env,
         contract_id: u32,
@@ -1322,6 +1946,27 @@ impl Escrow {
         Self::get_milestone_approvals_impl(&env, contract_id, milestone_index)
     }
 
+    /// Retrieves approval status for a milestone.
+    ///
+    /// Returns ledgers remaining, computed against ttl::compute_expiry.
+    /// `None` when no live approval exists,
+    /// distinguishing "never approved" from "approved and evicted".
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `contract_id` - The contract ID
+    /// * `milestone_index` - The zero-based milestone index
+    ///
+    /// # Returns
+    /// * `Option<u32>` - `Some(ledger_expiry)` if approval exists, `None` otherwise
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// if let Some(deadline) = client.get_approval_deadline(&1, &0) {
+    ///     // Process deadline ledger
+    /// }
+    /// ```
     pub fn get_approval_deadline(env: Env, contract_id: u32, milestone_index: u32) -> Option<u32> {
         Self::get_approval_deadline_impl(&env, contract_id, milestone_index)
     }
@@ -1332,6 +1977,23 @@ impl Escrow {
     ///
     /// Requires the stored admin's authorization. While paused, all mutating
     /// entrypoints panic with `ContractPaused`. Read-only queries are never blocked.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    ///
+    /// # Returns
+    /// * `bool` - `true` if paused successfully
+    ///
+    /// # Errors
+    /// * `NotInitialized` - If contract is uninitialized
+    /// * `UnauthorizedRole` - If caller is not admin
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let paused = client.pause();
+    /// assert!(paused);
+    /// ```
     ///
     /// # Events
     /// Emits `("paused", timestamp)` with `(admin,)` payload.
@@ -1350,6 +2012,24 @@ impl Escrow {
     ///
     /// Blocked while `Emergency` is active Ã¢â‚¬â€ use `resolve_emergency` instead.
     /// Requires the stored admin's authorization.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    ///
+    /// # Returns
+    /// * `bool` - `true` if unpaused successfully
+    ///
+    /// # Errors
+    /// * `NotInitialized` - If contract is uninitialized
+    /// * `EmergencyActive` - If emergency controls are currently active
+    /// * `UnauthorizedRole` - If caller is not admin
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let unpaused = client.unpause();
+    /// assert!(unpaused);
+    /// ```
     ///
     /// # Events
     /// Emits `("unpaused", timestamp)` with `(admin,)` payload.
@@ -1374,6 +2054,21 @@ impl Escrow {
         true
     }
 
+    /// Returns `true` if the contract is currently paused.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    ///
+    /// # Returns
+    /// * `bool` - `true` if paused, `false` otherwise
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// if client.is_paused() {
+    ///     // Contract is currently paused
+    /// }
+    /// ```
     pub fn is_paused(env: Env) -> bool {
         env.storage()
             .persistent()
@@ -1388,6 +2083,23 @@ impl Escrow {
     /// Requires the stored admin's authorization. While emergency is active,
     /// all mutating entrypoints panic with `EmergencyActive` or `ContractPaused`,
     /// and `unpause` is blocked.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    ///
+    /// # Returns
+    /// * `bool` - `true` if emergency pause activated
+    ///
+    /// # Errors
+    /// * `NotInitialized` - If contract is uninitialized
+    /// * `UnauthorizedRole` - If caller is not admin
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let activated = client.activate_emergency_pause();
+    /// assert!(activated);
+    /// ```
     ///
     /// # Events
     /// Emits `("emergency", "activated")` with `(admin, timestamp)` payload.
@@ -1436,6 +2148,31 @@ impl Escrow {
         true
     }
 
+    /// Resolve emergency, clearing both `Emergency` and `Paused` flags.
+    ///
+    /// Requires the stored admin's authorization. After resolution, all
+    /// operations resume normally.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    ///
+    /// # Returns
+    /// * `bool` - `true` if emergency resolved
+    ///
+    /// # Errors
+    /// * `NotInitialized` - If contract is uninitialized
+    /// * `UnauthorizedRole` - If caller is not admin
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let resolved = client.resolve_emergency();
+    /// assert!(resolved);
+    /// ```
+    ///
+    /// # Events
+    /// Emits `("emergency", "resolved")` with `(admin, timestamp)` payload.
+    /// Sets `emergency_controls_enabled` in the readiness checklist.
     pub fn resolve_emergency(env: Env) -> bool {
         Self::require_initialized(&env);
         let admin: Address = env
@@ -1466,6 +2203,21 @@ impl Escrow {
         true
     }
 
+    /// Returns `true` if emergency mode is active.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    ///
+    /// # Returns
+    /// * `bool` - `true` if emergency mode is active, `false` otherwise
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// if client.is_emergency() {
+    ///     // Emergency mode active
+    /// }
+    /// ```
     pub fn is_emergency(env: Env) -> bool {
         env.storage()
             .persistent()
@@ -1484,6 +2236,14 @@ impl Escrow {
     /// marked `Cancelled`. A zero-funded cancellation does not invoke a token
     /// transfer and leaves unrelated contracts' escrowed token balances intact.
     ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `contract_id` - The contract ID to cancel
+    /// * `client` - Address of client canceling contract
+    ///
+    /// # Returns
+    /// * `bool` - `true` if canceled successfully
+    ///
     /// # Errors
     /// * `ContractPaused` - If the contract is paused while not in emergency mode.
     /// * `EmergencyActive` - If the contract is in an active emergency pause.
@@ -1491,6 +2251,13 @@ impl Escrow {
     /// * `UnauthorizedRole` - If the caller is not the stored client.
     /// * `AlreadyCancelled` - If the contract was already cancelled.
     /// * `InvalidStatusTransition` - If the contract is not `Created`/`Funded` or has already released funds.
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let cancelled = client.cancel_contract(&1, &client_address);
+    /// assert!(cancelled);
+    /// ```
     pub fn cancel_contract(env: Env, contract_id: u32, client: Address) -> bool {
         Self::require_not_paused(&env);
         // Load contract, extend TTL, and assert not finalized via shared helper.
@@ -1551,6 +2318,16 @@ impl Escrow {
     /// `String::len()` returns the UTF-8 byte length, a multi-byte character (e.g.
     /// a 3-byte emoji) counts as 3 toward the limit. ASCII characters are 1 byte each.
     ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `contract_id` - The contract ID
+    /// * `caller` - Address of client issuing reputation
+    /// * `rating` - Rating integer between 1 and 5 (inclusive)
+    /// * `comment` - Feedback string (1-200 bytes)
+    ///
+    /// # Returns
+    /// * `bool` - `true` if reputation issued successfully
+    ///
     /// # Errors
     /// * `ContractPaused` - If the contract is paused while not in emergency mode
     /// * `EmergencyActive` - If the contract is in an active emergency pause
@@ -1568,6 +2345,14 @@ impl Escrow {
     /// * Pause/emergency gate runs BEFORE contract state read so paused
     ///   contracts cannot have reputation mutated while paused.
     /// * The 200-byte cap prevents unbounded on-chain storage growth.
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let comment = soroban_sdk::String::from_str(&env, "Great work!");
+    /// let issued = client.issue_reputation(&1, &client_address, &5, &comment);
+    /// assert!(issued);
+    /// ```
     pub fn issue_reputation(
         env: Env,
         contract_id: u32,
@@ -1668,6 +2453,21 @@ impl Escrow {
 
     /// Returns the written feedback provided by the client when reputation was issued.
     /// Returns `None` if reputation has not been issued for this contract.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `contract_id` - The contract ID
+    ///
+    /// # Returns
+    /// * `Option<String>` - `Some(String)` with comment feedback if issued, `None` otherwise
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// if let Some(comment) = client.get_reputation_comment(&1) {
+    ///     // Process feedback string
+    /// }
+    /// ```
     pub fn get_reputation_comment(env: Env, contract_id: u32) -> Option<String> {
         Self::validate_contract_id_bounds(&env, contract_id);
         let comment_key = DataKey::ReputationComment(contract_id);
@@ -1682,6 +2482,22 @@ impl Escrow {
         comment
     }
 
+    /// Returns overall reputation aggregate metrics for an address.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `address` - Address of the freelancer to query
+    ///
+    /// # Returns
+    /// * `Option<Reputation>` - `Some(Reputation)` if record exists, `None` otherwise
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// if let Some(rep) = client.get_reputation(&freelancer_address) {
+    ///     assert_eq!(rep.completed_contracts, 1);
+    /// }
+    /// ```
     pub fn get_reputation(env: Env, address: Address) -> Option<types::Reputation> {
         reputation_migration::read_reputation_with_migration(&env, &address)
     }
@@ -1693,10 +2509,25 @@ impl Escrow {
     /// `result = total_rating * 10_000 / completed_contracts`
     ///
     /// A raw rating of 5 on a single contract returns `50_000` (5.0000 on a
-    /// 1Ã¢â‚¬â€œ5 scale).  Clients divide by `10_000` to recover the decimal value.
+    /// 1–5 scale). Clients divide by `10_000` to recover the decimal value.
     ///
     /// Checked arithmetic is used throughout; division by zero is impossible
     /// because `None` is returned whenever `completed_contracts == 0`.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `address` - Address of the freelancer to query
+    ///
+    /// # Returns
+    /// * `Option<i128>` - `Some(average_rating_bps)` if completed contracts > 0, `None` otherwise
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// if let Some(avg_bps) = client.get_average_rating(&freelancer_address) {
+    ///     let avg_decimal = avg_bps as f64 / 10_000.0;
+    /// }
+    /// ```
     pub fn get_average_rating(env: Env, address: Address) -> Option<i128> {
         /// Basis-point scaling factor (Ãƒâ€”10 000 preserves four decimal places).
         const SCALE: i128 = 10_000;
@@ -1715,6 +2546,24 @@ impl Escrow {
             .and_then(|scaled| scaled.checked_div(rep.completed_contracts))
     }
 
+    /// Returns the number of completed contracts awaiting a reputation rating.
+    ///
+    /// This value increments once per completed contract and decrements once
+    /// per successful `issue_reputation` call. Refunded contracts do not accrue
+    /// pending reputation credits.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `address` - Address of the freelancer to query
+    ///
+    /// # Returns
+    /// * `i128` - Number of pending reputation credits
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let credits = client.get_pending_reputation_credits(&freelancer_address);
+    /// ```
     pub fn get_pending_reputation_credits(env: Env, address: Address) -> i128 {
         env.storage()
             .persistent()
@@ -1768,22 +2617,34 @@ impl Escrow {
     /// refunded. Evidence may be overwritten before release.
     ///
     /// # Arguments
+    /// * `env` - The Soroban environment
     /// * `contract_id` - The escrow contract to update
     /// * `caller`      - Must equal the stored `freelancer`; requires auth
     /// * `milestone_index` - Zero-based index of the milestone
     /// * `evidence`    - Deliverable reference; max 256 bytes
     ///
+    /// # Returns
+    /// * `bool` - `true` if work evidence was recorded successfully
+    ///
     /// # Errors
-    /// * `NotInitialized`     Ã¢â‚¬â€ `initialize` has not been called
-    /// * `ContractPaused` / `EmergencyActive` Ã¢â‚¬â€ pause/emergency gate
-    /// * `ContractNotFound`   Ã¢â‚¬â€ unknown `contract_id`
-    /// * `AlreadyFinalized`   Ã¢â‚¬â€ contract has been finalized
-    /// * `UnauthorizedRole`   Ã¢â‚¬â€ `caller` is not the freelancer
-    /// * `InvalidState`       Ã¢â‚¬â€ contract is not `Funded`
-    /// * `IndexOutOfBounds`   Ã¢â‚¬â€ `milestone_index` exceeds milestone count
-    /// * `MilestoneAlreadyReleased` Ã¢â‚¬â€ milestone is already released
-    /// * `AlreadyRefunded`    Ã¢â‚¬â€ milestone has been refunded
-    /// * `EvidenceTooLong`    Ã¢â‚¬â€ evidence string exceeds 256 bytes
+    /// * `NotInitialized`     — `initialize` has not been called
+    /// * `ContractPaused` / `EmergencyActive` — pause/emergency gate
+    /// * `ContractNotFound`   — unknown `contract_id`
+    /// * `AlreadyFinalized`   — contract has been finalized
+    /// * `UnauthorizedRole`   — `caller` is not the freelancer
+    /// * `InvalidState`       — contract is not `Funded`
+    /// * `IndexOutOfBounds`   — `milestone_index` exceeds milestone count
+    /// * `MilestoneAlreadyReleased` — milestone is already released
+    /// * `AlreadyRefunded`    — milestone has been refunded
+    /// * `EvidenceTooLong`    — evidence string exceeds 256 bytes
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let cid = soroban_sdk::String::from_str(&env, "ipfs://Qm...");
+    /// let submitted = client.submit_work_evidence(&1, &freelancer_address, &0, &cid);
+    /// assert!(submitted);
+    /// ```
     pub fn submit_work_evidence(
         env: Env,
         contract_id: u32,
@@ -1854,6 +2715,32 @@ impl Escrow {
         true
     }
 
+    /// Returns the work evidence for a single milestone, or `None` if the
+    /// milestone index is out of bounds or no evidence was submitted.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `contract_id` - The escrow contract ID
+    /// * `milestone_index` - Zero-based index of the milestone
+    ///
+    /// # Returns
+    /// `Some(String)` with the evidence reference if it exists,
+    /// `None` when the index is out of bounds or the milestone has no evidence.
+    ///
+    /// # Panics
+    /// Panics with `ContractNotFound` if `contract_id` was never allocated.
+    ///
+    /// # TTL
+    /// Extends the milestones vector's persistent TTL on read,
+    /// consistent with `get_milestones`.
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// if let Some(evidence) = client.get_work_evidence(&1, &0) {
+    ///     // Process evidence string
+    /// }
+    /// ```
     pub fn get_work_evidence(env: Env, contract_id: u32, milestone_index: u32) -> Option<String> {
         let milestones: Vec<Milestone> = env
             .storage()
@@ -1883,11 +2770,20 @@ impl Escrow {
     /// The balance defaults to `0` when no fees have accrued. This public
     /// reader requires no authorization and does not mutate contract state.
     ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    ///
     /// # Returns
     /// The fees currently available for protocol withdrawal.
     ///
     /// See [`docs/escrow/protocol-fees.md`](../../../docs/escrow/protocol-fees.md) for
     /// storage details and the full withdrawal flow.
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let fees = client.get_accumulated_protocol_fees();
+    /// ```
     pub fn get_accumulated_protocol_fees(env: Env) -> i128 {
         env.storage()
             .persistent()
@@ -1897,7 +2793,7 @@ impl Escrow {
 
     /// Drains accrued protocol fees from the escrow contract to a treasury address.
     ///
-    /// Executes `SAC::transfer(from: escrow_address, to: treasury, amount)`.  Protocol
+    /// Executes `SAC::transfer(from: escrow_address, to: treasury, amount)`. Protocol
     /// fees accumulate in `DataKey::AccumulatedProtocolFees` as each milestone is
     /// released; they remain commingled with the escrow's SAC balance until this
     /// entrypoint is called.
@@ -1922,6 +2818,24 @@ impl Escrow {
     /// * `env` - The contract environment
     /// * `amount` - The amount of fees to withdraw
     /// * `to` - The destination address for the withdrawn fees
+    ///
+    /// # Returns
+    /// * `bool` - `true` if fees withdrawn successfully
+    ///
+    /// # Errors
+    /// * `NotInitialized` - If contract uninitialized
+    /// * `ContractPaused` - If paused or in emergency mode
+    /// * `UnauthorizedRole` - If caller is not admin
+    /// * `AmountMustBePositive` - If amount <= 0
+    /// * `InsufficientAccumulatedFees` - If withdrawal amount exceeds accumulated fees
+    /// * `SettlementTokenNotConfigured` - If no settlement token is bound
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let withdrawn = client.withdraw_protocol_fees(&50_0000000, &treasury_address);
+    /// assert!(withdrawn);
+    /// ```
     pub fn withdraw_protocol_fees(env: Env, amount: i128, to: Address) -> bool {
         Self::require_initialized(&env);
 
@@ -1986,6 +2900,25 @@ impl Escrow {
         true
     }
 
+    /// Returns the ledger sequence at which the pending admin proposal was made.
+    ///
+    /// Returns `None` if there is no pending proposal. This allows off-chain
+    /// indexers and governance dashboards to compute the remaining timelock
+    /// before the proposal can be accepted via `accept_governance_admin`.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    ///
+    /// # Returns
+    /// * `Option<u32>` - `Some(ledger_sequence)` if a proposal is active, `None` otherwise
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// if let Some(proposed_at) = client.get_pending_admin_proposed_at() {
+    ///     // Calculate timelock remaining
+    /// }
+    /// ```
     pub fn get_pending_admin_proposed_at(env: Env) -> Option<u32> {
         let proposal: Option<PendingAdminProposal> =
             env.storage().persistent().get(&DataKey::PendingAdmin);
@@ -2010,7 +2943,7 @@ impl Escrow {
     /// Uses integer **floor division**: `fee = amount * fee_bps / 10_000`.
     /// The result always rounds down Ã¢â‚¬â€ it never rounds up Ã¢â‚¬â€ so the freelancer
     /// receives at least `amount - fee` stroops and the protocol receives at most
-    /// the floored value.  Callers must ensure `fee <= amount` holds; this is
+    /// the floored value. Callers must ensure `fee <= amount` holds; this is
     /// guaranteed for any `fee_bps` in `[0, 10_000]` and a non-negative `amount`.
     ///
     /// # Basis-point unit
@@ -2026,8 +2959,14 @@ impl Escrow {
     ///
     /// # Panics
     /// Panics with `PotentialOverflow` (error code 28) if `amount * fee_bps`
-    /// overflows `i128`.  Callers should keep `amount` well below `i128::MAX /
+    /// overflows `i128`. Callers should keep `amount` well below `i128::MAX /
     /// fee_bps` to avoid this guard.
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let fee = Escrow::calculate_protocol_fee(&env, 100_0000000, 250); // 2.5% fee
+    /// assert_eq!(fee, 2_5000000);
+    /// ```
     pub fn calculate_protocol_fee(env: &Env, amount: i128, fee_bps: u32) -> i128 {
         if fee_bps == 0 {
             return 0;
@@ -2092,6 +3031,13 @@ impl Escrow {
     /// - Requires arbiter assignment for resolution
     /// - Blocks milestone releases while disputed
     /// - Respects pause and emergency controls
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let opened = client.raise_dispute(&1, &client_address);
+    /// assert!(opened);
+    /// ```
     pub fn raise_dispute(env: Env, contract_id: u32, caller: Address) -> bool {
         /// Gate: contract must have been initialized so pause and emergency rails
         /// are always in scope before any state mutation can occur.
@@ -2165,6 +3111,13 @@ impl Escrow {
     /// - Updates released_amount and refunded_amount atomically
     /// - Emits dispute resolution event for indexers
     /// - Sets final contract status based on resolution outcome
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let resolved = client.resolve_dispute(&1, &arbiter_address, &DisputeResolution::FullPayout);
+    /// assert!(resolved);
+    /// ```
     pub fn resolve_dispute(
         env: Env,
         contract_id: u32,

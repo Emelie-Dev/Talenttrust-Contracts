@@ -28,10 +28,23 @@ impl Escrow {
     /// See [`docs/escrow/protocol-fees.md`](../../../docs/escrow/protocol-fees.md) for
     /// the basis-point model, fee formula, accrual storage, and withdrawal flow.
     ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `new_bps` - Fee rate in basis points (0 to 10 000)
+    ///
+    /// # Returns
+    /// * `bool` - `true` if set successfully
+    ///
     /// # Errors
-    /// * `NotInitialized` - if `initialize` has not been called
-    /// * `UnauthorizedRole` - if the caller is not the stored admin
-    /// * `InvalidProtocolParameters` - if `new_bps > 10_000`
+    /// * `NotInitialized` - If contract is uninitialized
+    /// * `UnauthorizedRole` - If caller is not admin
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let set = client.set_protocol_fee_bps(&250); // 2.5%
+    /// assert!(set);
+    /// ```
     ///
     /// # Events
     /// `(Symbol("protocol_fee_bps"),)` → `(old_bps, new_bps, admin, timestamp)`
@@ -66,8 +79,37 @@ impl Escrow {
         true
     }
 
+    /// Returns the stored governance admin address.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    ///
+    /// # Returns
+    /// * `Option<Address>` - `Some(Address)` of current admin, `None` if uninitialized
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let admin = client.get_governance_admin();
+    /// ```
+    pub fn get_governance_admin(env: Env) -> Option<Address> {
+        env.storage().persistent().get(&DataKey::Admin)
+    }
+
     /// Returns the current protocol fee in basis points.
-    pub(crate) fn get_protocol_fee_bps_impl(env: Env) -> u32 {
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    ///
+    /// # Returns
+    /// * `u32` - Protocol fee rate in basis points (0 if unset)
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let fee_bps = client.get_protocol_fee_bps();
+    /// ```
+    pub fn get_protocol_fee_bps(env: Env) -> u32 {
         env.storage()
             .persistent()
             .get::<_, u32>(&DataKey::ProtocolFeeBps)
@@ -248,7 +290,28 @@ impl Escrow {
     ///
     /// See [`docs/escrow/protocol-fees.md`](../../../docs/escrow/protocol-fees.md) for
     /// the full basis-point model and fee lifecycle.
-    pub(crate) fn set_governed_params_impl(
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `admin` - The admin address updating parameters
+    /// * `protocol_fee_bps` - New fee in basis points
+    /// * `max_escrow_total_stroops` - Maximum total escrow capacity in stroops
+    ///
+    /// # Returns
+    /// * `bool` - `true` if parameters set successfully
+    ///
+    /// # Errors
+    /// * `NotInitialized` - If contract uninitialized
+    /// * `UnauthorizedRole` - If caller is not admin
+    /// * `InvalidProtocolParameters` - If `protocol_fee_bps > 10_000`
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let set = client.set_governed_params(&admin, &200, &1_000_000_0000000);
+    /// assert!(set);
+    /// ```
+    pub fn set_governed_params(
         env: Env,
         admin: Address,
         protocol_fee_bps: u32,
@@ -304,146 +367,20 @@ impl Escrow {
 
     /// Retrieve the current governed parameters.
     ///
-    /// Returns a [`GovernedParameters`] value populated from storage when
-    /// `set_governed_params` has been called, or from the same default
-    /// constants the enforcement code uses when storage is empty.
+    /// # Arguments
+    /// * `env` - The Soroban environment
     ///
-    /// The defaults match what the enforcement paths apply when no
-    /// governance parameters have been configured:
-    /// - `protocol_fee_bps`: `0` (no protocol fee withheld on release)
-    /// - `max_escrow_total_stroops`: `i128::MAX` (no effective cap)
+    /// # Returns
+    /// * `Option<GovernedParameters>` - `Some(GovernedParameters)` if set, `None` otherwise
     ///
-    /// Callers that need to distinguish "governance has not written" from
-    /// "governance wrote values that happen to match defaults" should use
-    /// [`is_governed_params_set`](Self::is_governed_params_set) which
-    /// checks whether `set_governed_params` has ever succeeded.
-    pub fn get_governed_parameters(env: Env) -> GovernedParameters {
-        env.storage()
-            .persistent()
-            .get::<_, GovernedParameters>(&DataKey::GovernedParameters)
-            .unwrap_or(GovernedParameters {
-                protocol_fee_bps: 0,
-                max_escrow_total_stroops: i128::MAX,
-            })
-    }
-
-    /// Returns `true` if `set_governed_params` has ever been called
-    /// successfully, `false` otherwise.
-    ///
-    /// This lets integrators distinguish between "governance wrote defaults"
-    /// and "governance has not written anything yet". The underlying flag
-    /// is the `governed_params_set` field of the [`ReadinessChecklist`]
-    /// stored under [`DataKey::ReadinessChecklist`].
-    pub fn is_governed_params_set(env: Env) -> bool {
-        env.storage()
-            .persistent()
-            .get::<_, crate::ReadinessChecklist>(&DataKey::ReadinessChecklist)
-            .map(|c| c.governed_params_set)
-            .unwrap_or(false)
-    }
-
-    /// Set the admin-configurable per-contract storage limit (in bytes).
-    ///
-    /// Admin-gated: the stored admin (under [`DataKey::Admin`]) must authorize the
-    /// call and the contract must be initialized.
-    ///
-    /// The `new_limit` must be within the range `[MIN_STORAGE_LIMIT,
-    /// MAX_STORAGE_LIMIT]` (1 – 1 000 000 bytes inclusive).  Values outside this
-    /// range are rejected with [`Error::StorageLimitOutOfRange`].  The default
-    /// value — applied whenever no admin has overridden the limit — is
-    /// `DEFAULT_STORAGE_LIMIT` (64 KB = 65 536 bytes), which preserves the
-    /// behaviour that existed before this entrypoint was introduced.
-    ///
-    /// # Errors
-    /// * [`Error::NotInitialized`] — `initialize` has not been called.
-    /// * [`Error::UnauthorizedRole`] — `admin` is not the stored admin.
-    /// * [`Error::StorageLimitOutOfRange`] — `new_limit < MIN_STORAGE_LIMIT` or
-    ///   `new_limit > MAX_STORAGE_LIMIT`.
-    ///
-    /// # Events
-    /// `(Symbol("storage_limit"),)` → `(old_limit, new_limit, admin, timestamp)`
-    pub fn set_storage_limit(env: Env, admin: Address, new_limit: u32) -> bool {
-        Self::require_initialized(&env);
-
-        let stored_admin: Address = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Admin)
-            .unwrap_or_else(|| env.panic_with_error(Error::NotInitialized));
-
-        if admin != stored_admin {
-            env.panic_with_error(Error::UnauthorizedRole);
-        }
-        admin.require_auth();
-
-        if new_limit < crate::MIN_STORAGE_LIMIT || new_limit > crate::MAX_STORAGE_LIMIT {
-            env.panic_with_error(Error::StorageLimitOutOfRange);
-        }
-
-        let old_limit: u32 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::StorageLimit)
-            .unwrap_or(crate::DEFAULT_STORAGE_LIMIT);
-
-        env.storage()
-            .persistent()
-            .set(&DataKey::StorageLimit, &new_limit);
-
-        env.events().publish(
-            (Symbol::new(&env, "storage_limit"),),
-            (old_limit, new_limit, admin, env.ledger().timestamp()),
-        );
-
-        true
-    }
-
-    /// Return the current per-contract storage limit in bytes.
-    ///
-    /// Returns [`DEFAULT_STORAGE_LIMIT`] when no admin has overridden the value.
-    /// Read-only and auth-free.
-    pub fn get_storage_limit(env: Env) -> u32 {
-        env.storage()
-            .persistent()
-            .get(&DataKey::StorageLimit)
-            .unwrap_or(crate::DEFAULT_STORAGE_LIMIT)
-    }
-
-    /// Read-only view returning the disputes configuration values without mutating storage.
-    /// Returns sensible default values before initialization or if unconfigured.
-    pub fn get_disputes_config(env: Env) -> DisputeConfig {
-        env.storage()
-            .persistent()
-            .get(&DataKey::DisputeConfigKey)
-            .unwrap_or_default()
-    }
-
-    /// Read-only view alias returning disputes configuration values without mutating storage.
-    pub fn get_dispute_config(env: Env) -> DisputeConfig {
-        Self::get_disputes_config(env)
-    }
-
-    /// Admin-gated entrypoint to update disputes configuration.
-    pub fn set_disputes_config(
-        env: Env,
-        freelancer_share_bps: u32,
-        client_share_bps: u32,
-    ) -> bool {
-        Self::require_initialized(&env);
-        let admin: Address = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Admin)
-            .unwrap_or_else(|| env.panic_with_error(Error::NotInitialized));
-        admin.require_auth();
-
-        let config = DisputeConfig {
-            partial_refund_freelancer_bps: freelancer_share_bps,
-            partial_refund_client_bps: client_share_bps,
-        };
-        env.storage()
-            .persistent()
-            .set(&DataKey::DisputeConfigKey, &config);
-        true
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// if let Some(params) = client.get_governed_parameters() {
+    ///     assert_eq!(params.protocol_fee_bps, 200);
+    /// }
+    /// ```
+    pub fn get_governed_parameters(env: Env) -> Option<GovernedParameters> {
+        env.storage().persistent().get(&DataKey::GovernedParameters)
     }
 }

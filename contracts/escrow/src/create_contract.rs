@@ -6,25 +6,45 @@ use crate::{
 use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
 
 impl Escrow {
-    pub(crate) fn next_contract_id(env: &Env) -> u32 {
-        let id: u32 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::NextContractId)
-            .unwrap_or(1);
-
-        if env
-            .storage()
-            .persistent()
-            .get::<_, Contract>(&DataKey::Contract(id))
-            .is_some()
-        {
-            env.panic_with_error(EscrowError::ContractIdCollision);
-        }
-
-        id
-    }
-
+    /// Creates a new escrow contract with the specified client, freelancer, and milestone amounts.
+    ///
+    /// This is the single canonical creation path. It enforces:
+    /// - Distinct client and freelancer addresses
+    /// - Arbiter presence when required by the release authorization mode
+    /// - Arbiter distinctness from client and freelancer
+    /// - At least one milestone with all amounts strictly positive
+    /// - The `MAX_MILESTONES` cap
+    /// - The governed total-escrow cap (falls back to `i128::MAX` when unset)
+    /// - No contract-id collision or overflow
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `client` - The address of the client funding the contract
+    /// * `freelancer` - The address of the freelancer performing the work
+    /// * `arbiter` - Optional arbiter address for dispute resolution
+    /// * `milestones` - Vector of milestone amounts (in stroops)
+    /// * `release_authorization` - Authorization mode for milestone releases
+    ///
+    /// # Returns
+    /// The unique contract ID assigned to the new escrow.
+    ///
+    /// # Errors
+    /// * `InvalidParticipant`   - If client and freelancer are the same address
+    /// * `EmptyMilestones`      - If no milestones are provided
+    /// * `InvalidMilestoneAmount` - If any milestone amount is <= 0
+    /// * `MissingArbiter`       - If arbiter is required but not provided
+    /// * `InvalidArbiter`       - If arbiter is same as client or freelancer
+    /// * `TooManyMilestones`    - If the number of milestones exceeds `MAX_MILESTONES`
+    /// * `TotalCapExceeded`     - If the sum of milestone amounts exceeds the governed cap
+    /// * `ContractIdOverflow`   - If the next id would exceed `u32::MAX`
+    /// * `ContractIdCollision`  - If the allocated id slot is already occupied
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let milestones = soroban_sdk::vec![&env, 500_0000000];
+    /// let id = client.create_contract(&client_addr, &freelancer_addr, &None, &milestones, &ReleaseAuthorization::ClientOnly);
+    /// assert_eq!(id, 1);
+    /// ```
     pub fn create_contract(
         env: Env,
         client: Address,

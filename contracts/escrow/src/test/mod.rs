@@ -37,7 +37,7 @@ mod release_authorization;
 mod reputation;
 mod rollback;
 mod security;
-mod simulate_release;
+mod rustdoc_examples;
 mod ttl_tests;
 
 // --- Shared constants ---
