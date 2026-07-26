@@ -11,10 +11,10 @@
 
 use crate::storage;
 use crate::ttl::{PENDING_APPROVAL_BUMP_THRESHOLD, PENDING_APPROVAL_TTL_LEDGERS};
-use crate::{
-    Contract, ContractStatus, DataKey, Error, Milestone, MilestoneApprovals, ReleaseAuthorization,
+use crate::types::{
+    Contract, ContractStatus, DataKey, Milestone, MilestoneApprovals, ReleaseAuthorization,
 };
-use crate::authorization;
+use crate::Error;
 use soroban_sdk::{Address, Env, Vec};
 
 pub(crate) fn arbiter_approval_storage_key(contract_id: u32, milestone_index: u32) -> DataKey {

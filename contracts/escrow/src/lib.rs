@@ -1,23 +1,17 @@
 //! TalentTrust escrow contract for milestone-based freelancer payments.
 //!
-//! The crate root exposes the Soroban contract struct and still owns the
-//! entrypoints that don't warrant their own module: initialization,
-//! settlement-token binding, reads, reputation, work evidence, and protocol
-//! fee withdrawal. The escrow money-movement logic itself — releasing a
-//! milestone, refunding it, cancelling a contract, and raising/resolving a
-//! dispute — lives in dedicated modules (`release`, `refund`, `dispute`),
-//! each contributing its own `#[contractimpl]` block to this same contract.
-//! Supporting modules keep reusable validation, storage, governance, and
-//! lifecycle helpers close to the paths that use them.
+//! The crate root exposes the Soroban contract and still owns several public
+//! entrypoints directly: initialization, settlement-token binding, deposits,
+//! milestone release/refund/cancel flows, reputation, work evidence, protocol
+//! fee withdrawal, and dispute entrypoints. Supporting modules keep reusable
+//! validation, storage, governance, and lifecycle helpers close to the paths
+//! that use them.
 //!
 //! ## Escrow source tree map
 //!
 //! | Source | Responsibility | Storage keys owned or touched |
 //! | --- | --- | --- |
-//! | `lib.rs` | Contract wrapper plus root entrypoints for setup, custody, reads, reputation, work evidence, pause/emergency, and fee withdrawal. | `DataKey::Initialized`, `Admin`, `SettlementToken`, `Paused`, `Emergency`, `ReadinessChecklist`, `Contract(id)`, `(Contract(id), "milestones")`, `MilestoneApprovals`, `AccumulatedProtocolFees`, `ReputationIssued`, `PendingReputationCredits`, `Reputation`, `ReputationComment` |
-//! | `release` | `release_milestone` and `is_milestone_overdue` — the freelancer payout path, protocol-fee accrual, and milestone-deadline check. | `DataKey::Contract(id)`, `(Contract(id), "milestones")`, `AccumulatedProtocolFees`. |
-//! | `refund` | `refund_unreleased_milestones` and `cancel_contract` — the client refund paths. | `DataKey::Contract(id)`, `(Contract(id), "milestones")`. |
-//! | `dispute` | `raise_dispute` / `resolve_dispute` entrypoints plus the pure dispute payout arithmetic and final-status selection they use. | `DataKey::Contract(contract_id)`. |
+//! | `lib.rs` | Contract wrapper plus root entrypoints for setup, custody, money movement, reads, reputation, work evidence, pause/emergency, fee withdrawal, and dispute orchestration. | `DataKey::Initialized`, `Admin`, `SettlementToken`, `Paused`, `Emergency`, `ReadinessChecklist`, `Contract(id)`, `(Contract(id), "milestones")`, `MilestoneApprovals`, `AccumulatedProtocolFees`, `ReputationIssued`, `PendingReputationCredits`, `Reputation`, `ReputationComment` |
 //! | `amount_validation` | Stateless validation and checked arithmetic for stroop amounts and milestone totals. | None directly; callers write validated amounts to `Contract(id)` and milestone vectors. |
 //! | `approvals` | Temporary milestone release approvals and release-authorization checks. | Temporary `DataKey::MilestoneApprovals(contract_id, milestone_index)`; reads `Contract(id)` and `(Contract(id), "milestones")`. |
 //! | `deposit` | Deposit preflight and post-transfer accounting used by `deposit_funds`. | `DataKey::Contract(contract_id)` and `(DataKey::Contract(contract_id), "milestones")`. |
@@ -102,100 +96,21 @@ pub use ttl::{
 pub use milestones::{Milestone, MilestoneApprovals, MilestoneSummary, ReleaseAuthorization};
 pub use types::{
     Contract, ContractBounds, ContractStatus, ContractSummary, DataKey, DepositMode,
-    DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone, MilestoneApprovals,
+    DisputeResolution, DisputeSplit, EscrowError, GovernedParameters, Milestone, MilestoneApprovals,
     MilestoneSummary, PendingAdminProposal, ReadinessChecklist, ReleaseAuthorization, Reputation,
     SimulatedRelease, SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION,
 };
 
-// Re-export types, constants, and helpers from the contracts module so that
-// external consumers and sibling modules can access them via `crate::`.
-pub use contracts::{
-    EscrowContractData, MainnetReadinessInfo, ReputationRecord, DEFAULT_MAX_MILESTONES,
-    DEFAULT_MAX_TOTAL_ESCROW_STROOPS, MAINNET_MAX_TOTAL_ESCROW_PER_CONTRACT_STROOPS,
-    MAINNET_PROTOCOL_VERSION, MAX_MAX_MILESTONES, MAX_MILESTONES, MAX_TOTAL_ESCROW_STROOPS,
-    MIN_MAX_ESCROW_STROOPS, MIN_MAX_MILESTONES, PAGE_CEILING,
-};
+type Error = EscrowError;
+
+// Maximum bounds constants - re-export from amount_validation for API visibility
+pub const MAX_MILESTONES: u32 = 10;
+pub const MAX_SINGLE_AMOUNT_STROOPS: i128 = crate::amount_validation::MAX_SINGLE_AMOUNT_STROOPS;
+pub const MAX_TOTAL_ESCROW_STROOPS: i128 = MAX_SINGLE_AMOUNT_STROOPS;
 
 #[contract]
 pub struct Escrow;
 
-
-/// Governance-level errors for admin-gated operations.
-#[contracterror]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(u32)]
-pub enum EscrowError {
-    InvalidParticipant = 1,
-    EmptyMilestones = 2,
-    InvalidMilestoneAmount = 3,
-    InvalidDepositAmount = 4,
-    InvalidMilestone = 5,
-    ContractNotFound = 6,
-    EmptyRefundRequest = 7,
-    DuplicateMilestoneInRefund = 8,
-    AlreadyReleased = 9,
-    AlreadyRefunded = 10,
-    InsufficientFunds = 11,
-    AlreadyInitialized = 12,
-    InsufficientAccumulatedFees = 13,
-    /// Returned by lifecycle entrypoints when `initialize` has not been called.
-    ///
-    /// All money-flow operations require initialization so the admin-controlled
-    /// safety rails (pause, emergency controls, protocol fees) are always in
-    /// scope before any funds can move.
-    NotInitialized = 14,
-    UnauthorizedRole = 15,
-    ContractPaused = 16,
-    EmergencyActive = 17,
-    InvalidState = 18,
-    InvalidRating = 19,
-    SelfRating = 20,
-    ReputationAlreadyIssued = 21,
-    NotCompleted = 22,
-    FreelancerMismatch = 23,
-    InvalidStatusTransition = 24,
-    ArbiterRequired = 25,
-    InvalidDisputeSplit = 26,
-    AccountingInvariantViolated = 27,
-    PotentialOverflow = 28,
-    AlreadyFinalized = 29,
-    AmountMustBePositive = 30,
-    /// No settlement token has been bound for custody transfers.
-    SettlementTokenNotConfigured = 31,
-    /// A settlement token has already been bound.
-    SettlementTokenAlreadyBound = 32,
-    /// The sum of milestone amounts exceeded the configured maximum or overflowed.
-    TotalCapExceeded = 33,
-    /// Too many milestones were provided.
-    TooManyMilestones = 34,
-    /// An arbiter was required by the release authorization mode but not provided.
-    MissingArbiter = 35,
-    /// The provided arbiter is invalid (same as client or freelancer).
-    InvalidArbiter = 36,
-    /// Contract is cancelled and must not accept further value-moving operations.
-    ContractCancelled = 37,
-    /// Contract has been refunded and is terminal for value-moving operations.
-    ContractRefunded = 38,
-    /// The address supplied as settlement token is not a valid token contract.
-    /// The pre-bind probe called `token::Client::balance` against the escrow
-    /// contract address and the call panicked Ã¢â‚¬â€ the address does not implement
-    /// the SAC token interface.
-    InvalidSettlementToken = 39,
-    /// The address supplied as settlement token is the escrow contract itself.
-    /// Binding self would create a circular custody reference and brick all
-    /// transfer paths.
-    SettlementTokenIsSelf = 40,
-    /// The address supplied as settlement token is the escrow admin.
-    /// Binding the admin as the custody asset conflates governance authority
-    /// with the settlement token role.
-    SettlementTokenIsAdmin = 41,
-    /// Reputation feedback comment was empty.
-    EmptyComment = 42,
-    /// Reputation feedback comment exceeded the 200-character maximum.
-    CommentTooLong = 43,
-    /// Rollback is not allowed in the current contract state.
-    RollbackNotAllowed = 54,
-}
 
 impl Escrow {
     pub(crate) fn validate_contract_id_bounds(env: &Env, contract_id: u32) {
@@ -1751,6 +1666,8 @@ impl Escrow {
         true
     }
 
+    /// Returns the written feedback provided by the client when reputation was issued.
+    /// Returns `None` if reputation has not been issued for this contract.
     pub fn get_reputation_comment(env: Env, contract_id: u32) -> Option<String> {
         Self::validate_contract_id_bounds(&env, contract_id);
         let comment_key = DataKey::ReputationComment(contract_id);

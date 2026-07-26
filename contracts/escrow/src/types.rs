@@ -221,10 +221,11 @@ pub enum DataKey {
 }
 
 /// Canonical contract error type for all entrypoint-facing errors.
-#[contracterror]
+#[contracterror(export = false)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
-pub enum Error {
+pub enum EscrowError {
+    /// The specified milestone index is out of bounds.
     IndexOutOfBounds = 3,
     AlreadyReleased = 4,
     EmptyRefundRequest = 6,
@@ -276,21 +277,32 @@ pub enum Error {
     EscrowCapExceeded = 51,
     SettlementTokenNotConfigured = 52,
     MilestoneNotOverdue = 53,
-    /// The contract ID is out of valid bounds.
-    InvalidContractId = 54,
-    /// The limit value is out of the valid allowed range.
-    LimitOutOfRange = 55,
-}
-
-impl Error {
-    pub const TotalCapExceeded: Error = Error::EscrowCapExceeded;
-    pub const TooManyMilestones: Error = Error::LimitOutOfRange;
-    pub const ContractCancelled: Error = Error::AlreadyCancelled;
-    pub const ContractRefunded: Error = Error::AlreadyRefunded;
-    pub const SettlementTokenAlreadyBound: Error = Error::AlreadyInitialized;
-    pub const InvalidSettlementToken: Error = Error::SettlementTokenNotConfigured;
-    pub const SettlementTokenIsSelf: Error = Error::SettlementTokenNotConfigured;
-    pub const SettlementTokenIsAdmin: Error = Error::SettlementTokenNotConfigured;
+    /// The total milestone amount exceeds the configured cap.
+    TotalCapExceeded = 54,
+    /// Too many milestones were provided.
+    TooManyMilestones = 55,
+    /// The contract has been cancelled.
+    ContractCancelled = 56,
+    /// The contract has been refunded.
+    ContractRefunded = 57,
+    /// A settlement token has already been bound.
+    SettlementTokenAlreadyBound = 58,
+    /// The settlement token is the escrow contract itself.
+    SettlementTokenIsSelf = 59,
+    /// The settlement token is the escrow admin.
+    SettlementTokenIsAdmin = 60,
+    /// The batch item limit has been exceeded.
+    BatchItemLimitExceeded = 61,
+    /// Escrow balance is insufficient for the operation.
+    InsufficientEscrowBalance = 62,
+    /// The milestone was not found.
+    MilestoneNotFound = 63,
+    /// An exact deposit amount is required.
+    ExactDepositRequired = 64,
+    /// The funding amount exceeds the required amount.
+    FundingExceedsRequired = 65,
+    /// The total exceeds the maximum escrow amount.
+    TotalExceedsMaxEscrow = 66,
 }
 
 #[contracttype]
@@ -432,36 +444,7 @@ pub struct Reputation {
     pub last_rating: i128,
 }
 
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ReputationBatchItem {
-    pub contract_id: u32,
-    pub rating: u32,
-    pub comment: String,
-}
-
-/// A single contract creation request within a batch.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ContractItem {
-    pub client: Address,
-    pub freelancer: Address,
-    pub arbiter: Option<Address>,
-    pub milestones: Vec<i128>,
-    pub release_authorization: ReleaseAuthorization,
-}
-
-/// The result for a single item in a batch creation call.
-///
-/// On success, `contract_id` holds the assigned ID. On failure, `error_code`
-/// holds the Soroban error code that would have been raised.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct BatchContractResult {
-    pub index: u32,
-    pub contract_id: Option<u32>,
-    pub error_code: Option<u32>,
-}
+// ── Dispute Resolution ───────────────────────────────────────────────────────
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]

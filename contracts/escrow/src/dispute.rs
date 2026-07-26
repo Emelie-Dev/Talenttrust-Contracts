@@ -7,11 +7,11 @@
 //! `resolve_dispute` are the root entrypoints that own authentication, the
 //! `Disputed` status transition, and writes to `DataKey::Contract(contract_id)`.
 
-use soroban_sdk::{contractimpl, symbol_short, Address, Env};
+use soroban_sdk::{symbol_short, Address, Env};
 
 use crate::{
-    safe_add_amounts, Contract, ContractStatus, DataKey, DisputeConfig, DisputeResolution,
-    DisputeSplit, Error,
+    amount_validation, safe_add_amounts, Contract, ContractStatus, DisputeResolution, DisputeSplit,
+    EscrowError, MAX_SINGLE_AMOUNT_STROOPS,
 };
 
 // ---------------------------------------------------------------------------
@@ -105,39 +105,40 @@ pub fn set_dispute_config(env: &Env, config: DisputeConfig) -> bool {
 pub fn resolution_payouts(
     contract: &Contract,
     resolution: &DisputeResolution,
-) -> Result<(i128, i128), Error> {
-    let available = contract
-        .funded_amount
-        .checked_sub(contract.released_amount)
-        .and_then(|value| value.checked_sub(contract.refunded_amount))
-        .ok_or(Error::AccountingInvariantViolated)?;
-    if available < 0 {
-        return Err(Error::AccountingInvariantViolated);
-    }
+) -> Result<(i128, i128), EscrowError> {
+    let available = amount_validation::checked_available_balance(
+        contract.funded_amount,
+        contract.released_amount,
+        contract.refunded_amount,
+    )?;
 
     match resolution {
         DisputeResolution::FullRefund => Ok((available, 0)),
         DisputeResolution::PartialRefund => {
             // freelancer gets floor(available * NUMERATOR / DENOMINATOR), client gets remainder
             let freelancer_payout = available
-                .checked_mul(PARTIAL_REFUND_FREELANCER_SHARE_NUMERATOR)
-                .and_then(|value| value.checked_div(PARTIAL_REFUND_DENOMINATOR))
-                .ok_or(Error::PotentialOverflow)?;
+                .checked_mul(30)
+                .and_then(|value| value.checked_div(100))
+                .ok_or(EscrowError::PotentialOverflow)?;
             Ok((available - freelancer_payout, freelancer_payout))
         }
         DisputeResolution::FullPayout => Ok((0, available)),
         DisputeResolution::Split(split) => {
             if split.client_amount < 0 || split.freelancer_amount < 0 {
-                return Err(Error::InvalidDisputeSplit);
+                return Err(EscrowError::InvalidDisputeSplit);
             }
-            // Issue #572: Reject split resolution whose components are individually within but jointly exceed balance
+            if split.client_amount > MAX_SINGLE_AMOUNT_STROOPS
+                || split.freelancer_amount > MAX_SINGLE_AMOUNT_STROOPS
+            {
+                return Err(EscrowError::InvalidDisputeSplit);
+            }
             if split.client_amount > available || split.freelancer_amount > available {
-                return Err(Error::InvalidDisputeSplit);
+                return Err(EscrowError::InvalidDisputeSplit);
             }
             let total = safe_add_amounts(split.client_amount, split.freelancer_amount)
-                .ok_or(Error::PotentialOverflow)?;
+                .ok_or(EscrowError::PotentialOverflow)?;
             if total > available || total != available {
-                return Err(Error::InvalidDisputeSplit);
+                return Err(EscrowError::InvalidDisputeSplit);
             }
             Ok((split.client_amount, split.freelancer_amount))
         }
@@ -189,4 +190,3 @@ pub fn final_status_after_resolution(contract: &Contract) -> ContractStatus {
         ContractStatus::Completed
     }
 }
-

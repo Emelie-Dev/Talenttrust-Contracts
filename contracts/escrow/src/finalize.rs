@@ -1,15 +1,15 @@
 use soroban_sdk::{contracttype, symbol_short, Address, Env, Vec};
 
 use crate::{
-    safe_subtract_amounts, storage, Contract, ContractStatus, ContractSummary, DataKey, Error,
-    Escrow, EscrowError, Milestone, MilestoneSummary, CONTRACT_SUMMARY_SCHEMA_VERSION,
+    safe_subtract_amounts, Contract, ContractStatus, ContractSummary, DataKey, Escrow, EscrowError,
+    Milestone, MilestoneSummary, CONTRACT_SUMMARY_SCHEMA_VERSION,
 };
 
 /// Immutable metadata written when an escrow contract is closed.
 ///
 /// The record is stored once under `DataKey::Finalization(contract_id)`.
 /// After it exists, all contract-specific mutating entrypoints reject with
-/// `Error::AlreadyFinalized`.
+/// `EscrowError::AlreadyFinalized`.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FinalizationRecord {
@@ -27,7 +27,10 @@ impl Escrow {
     }
 
     fn load_contract_for_finalization(env: &Env, contract_id: u32) -> Contract {
-        storage::load_contract(env, contract_id)
+        env.storage()
+            .persistent()
+            .get::<_, Contract>(&DataKey::Contract(contract_id))
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound))
     }
 
     pub(crate) fn is_finalized(env: &Env, contract_id: u32) -> bool {
@@ -35,80 +38,46 @@ impl Escrow {
     }
 
     pub(crate) fn require_not_finalized(env: &Env, contract_id: u32) {
-        storage::require_not_finalized(env, contract_id);
-    }
-
-    /// Load a contract from persistent storage, extend its TTL, and assert it
-    /// has not been finalized.
-    ///
-    /// This is the canonical shared precondition for every state-changing
-    /// entrypoint that operates on an existing escrow contract:
-    ///
-    /// 1. **Load** — reads `DataKey::Contract(contract_id)` from persistent
-    ///    storage.  Panics with [`Error::ContractNotFound`] when the key is
-    ///    absent.
-    /// 2. **Extend TTL** — calls [`ttl::extend_contract_ttl`] so that active
-    ///    contracts are not evicted from ledger state while they are being
-    ///    mutated.
-    /// 3. **Finalization guard** — calls [`Self::require_not_finalized`], which
-    ///    panics with [`Error::AlreadyFinalized`] when a
-    ///    [`DataKey::Finalization`] record exists for the contract.
-    ///
-    /// Callers that do **not** need the finalization check (currently only
-    /// `issue_reputation`) should call [`ttl::extend_contract_ttl`] and the
-    /// storage `get` directly instead of using this helper.
-    ///
-    /// # Errors
-    /// * [`Error::ContractNotFound`]  — `contract_id` is not in storage.
-    /// * [`Error::AlreadyFinalized`]  — the contract has been finalized.
-    pub(crate) fn load_and_check_contract(env: &Env, contract_id: u32) -> Contract {
-        let contract: Contract = env
-            .storage()
-            .persistent()
-            .get(&crate::DataKey::Contract(contract_id))
-            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
-        crate::ttl::extend_contract_ttl(env, contract_id);
-        Self::require_not_finalized(env, contract_id);
-        contract
+        if Self::is_finalized(env, contract_id) {
+            env.panic_with_error(EscrowError::AlreadyFinalized);
+        }
     }
 
     pub(crate) fn require_not_paused(env: &Env) {
-        storage::require_not_paused(env);
-    }
-
-    /// Load a contract for mutation, applying storage precondition checks.
-    ///
-    /// This helper combines three essential preconditions into a single call:
-    /// 1. Verifies contract operations are not paused or in emergency mode
-    /// 2. Loads the contract from persistent storage
-    /// 3. Verifies the contract has not been finalized (immutable)
-    ///
-    /// # Arguments
-    /// * `env` - The contract environment
-    /// * `contract_id` - The contract ID to load
-    ///
-    /// # Panics
-    /// - `ContractPaused` if the contract is paused
-    /// - `EmergencyActive` if emergency mode is active
-    /// - `ContractNotFound` if no contract exists for this ID
-    /// - `AlreadyFinalized` if the contract has been finalized
-    ///
-    /// # Returns
-    /// The loaded `Contract` if all preconditions pass
-    pub(crate) fn require_contract_mutable(env: &Env, contract_id: u32) -> Contract {
-        Self::require_not_paused(env);
-        let contract = Self::load_contract_for_finalization(env, contract_id);
-        Self::require_not_finalized(env, contract_id);
-        contract
+        if env
+            .storage()
+            .persistent()
+            .get::<_, bool>(&DataKey::Paused)
+            .unwrap_or(false)
+        {
+            env.panic_with_error(EscrowError::ContractPaused);
+        }
+        if env
+            .storage()
+            .persistent()
+            .get::<_, bool>(&DataKey::Emergency)
+            .unwrap_or(false)
+        {
+            env.panic_with_error(EscrowError::EmergencyActive);
+        }
     }
 
     fn require_finalizer_role(env: &Env, contract: &Contract, finalizer: &Address) {
-        // A finalizer must be one of the three contract participants
-        authorization::require_participant(env, finalizer, contract);
+        let is_client = *finalizer == contract.client;
+        let is_freelancer = *finalizer == contract.freelancer;
+        let is_arbiter = contract.arbiter.clone().is_some_and(|a| a == *finalizer);
+        if !is_client && !is_freelancer && !is_arbiter {
+            env.panic_with_error(EscrowError::UnauthorizedRole);
+        }
     }
 
     fn summarize_contract(env: &Env, contract_id: u32, contract: &Contract) -> ContractSummary {
-        let milestones: Vec<Milestone> = storage::load_milestones(env, contract_id);
+        let milestone_key = Symbol::new(env, "milestones");
+        let milestones: Vec<Milestone> = env
+            .storage()
+            .persistent()
+            .get(&(DataKey::Contract(contract_id), milestone_key))
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
 
         let mut total_amount: i128 = 0;
         let mut released_milestone_count: u32 = 0;

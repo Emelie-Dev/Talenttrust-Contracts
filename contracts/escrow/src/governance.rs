@@ -9,12 +9,11 @@
 
 use crate::ttl::ADMIN_ROTATION_MIN_DELAY_LEDGERS;
 use crate::{
-    DataKey, DisputeConfig, Error, Escrow, EscrowArgs, EscrowClient, GovernedParameters,
+    DataKey, Escrow, EscrowError, GovernedParameters,
     PendingAdminProposal, ReadinessChecklist,
 };
 use soroban_sdk::{contractimpl, symbol_short, Address, Env, Symbol};
 
-#[contractimpl]
 impl Escrow {
     /// Set the protocol fee in basis points.
     ///
@@ -197,11 +196,11 @@ impl Escrow {
     /// cancel, and the contract must be initialized. On success the pending
     /// proposal is removed so the previously proposed address can no longer call
     /// [`Escrow::accept_governance_admin`] — a subsequent accept panics with
-    /// [`Error::InvalidState`].
+    /// [`EscrowError::InvalidState`].
     ///
     /// # Errors
-    /// * [`Error::NotInitialized`] — `initialize` has not been called.
-    /// * [`Error::InvalidState`] — there is no pending proposal to cancel.
+    /// * [`EscrowError::NotInitialized`] — `initialize` has not been called.
+    /// * [`EscrowError::InvalidState`] — there is no pending proposal to cancel.
     ///
     /// # Events
     /// `(symbol_short!("admin"), Symbol("cancelled"))` → `(admin, cancelled_proposal, timestamp)`
