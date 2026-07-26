@@ -29,7 +29,7 @@ use soroban_sdk::{testutils::Address as _, vec, Address, Env, Vec};
 
 use crate::{
     ContractBounds, Escrow, EscrowClient, EscrowError, ReleaseAuthorization, MAX_MILESTONES,
-    MAX_SINGLE_AMOUNT_STROOPS, MAX_TOTAL_ESCROW_STROOPS,
+    MAX_SINGLE_AMOUNT_STROOPS, MAX_TOTAL_ESCROW_STROOPS, DEFAULT_MAX_DISPUTES,
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -175,6 +175,7 @@ fn get_bounds_all_fields_are_positive() {
         "max_total_escrow_stroops must be > 0"
     );
     assert!(bounds.max_fee_bps > 0, "max_fee_bps must be > 0");
+    assert!(bounds.max_disputes > 0, "max_disputes must be > 0");
 }
 
 /// `max_fee_bps` must not exceed 10_000 — higher values would imply a fee
@@ -188,6 +189,62 @@ fn get_bounds_fee_bps_does_not_exceed_100_percent() {
         bounds.max_fee_bps <= 10_000,
         "max_fee_bps must not exceed 10_000 (100 %)"
     );
+}
+
+/// `max_disputes` must be strictly positive — zero or negative would be
+/// a nonsensical protocol configuration (no disputes allowed or invalid).
+#[test]
+fn get_bounds_max_disputes_is_positive() {
+    let (env, cid) = setup();
+    let client = EscrowClient::new(&env, &cid);
+    let bounds = client.get_bounds();
+    assert!(bounds.max_disputes > 0, "max_disputes must be > 0");
+}
+
+/// `max_disputes` defaults to DEFAULT_MAX_DISPUTES before any admin
+/// override is stored.
+#[test]
+fn get_bounds_max_disputes_default_before_admin_set() {
+    let (env, cid) = setup();
+    let client = EscrowClient::new(&env, &cid);
+    let bounds = client.get_bounds();
+    assert_eq!(bounds.max_disputes, DEFAULT_MAX_DISPUTES);
+}
+
+/// `get_bounds` `max_disputes` is consistent with `raise_dispute`:
+/// exactly `max_disputes` disputes must be accepted.
+#[test]
+fn get_bounds_max_disputes_matches_raise_dispute_acceptance() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let id = env.register(Escrow, ());
+    let client = EscrowClient::new(&env, &id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+    client.set_max_disputes(&3);
+
+    let (client_addr, freelancer_addr, arbiter_addr, contract_id) =
+        super::create_contract_with_arbiter(&env, &client);
+    assert!(client.deposit_funds(&contract_id, &client_addr, &100_i128));
+
+    // 3 disputes within the limit — all accepted.
+    assert!(client.raise_dispute(&contract_id, &client_addr));
+    assert!(client.resolve_dispute(
+        &contract_id,
+        &arbiter_addr,
+        &crate::DisputeResolution::FullRefund,
+    ));
+    assert!(client.deposit_funds(&contract_id, &client_addr, &100_i128));
+
+    assert!(client.raise_dispute(&contract_id, &client_addr));
+    assert!(client.resolve_dispute(
+        &contract_id,
+        &arbiter_addr,
+        &crate::DisputeResolution::FullRefund,
+    ));
+    assert!(client.deposit_funds(&contract_id, &client_addr, &100_i128));
+
+    assert!(client.raise_dispute(&contract_id, &client_addr));
 }
 
 /// `get_bounds` result must not contain any per-contract participant data.
@@ -205,11 +262,13 @@ fn get_bounds_result_type_has_no_participant_fields() {
         max_single_milestone_stroops,
         max_total_escrow_stroops,
         max_fee_bps,
+        max_disputes,
     } = bounds;
     assert!(max_milestones > 0);
     assert!(max_single_milestone_stroops > 0);
     assert!(max_total_escrow_stroops > 0);
     assert!(max_fee_bps > 0);
+    assert!(max_disputes > 0, "max_disputes must be > 0");
 }
 
 /// `get_bounds` should be consistent with `create_contract` behavior:
