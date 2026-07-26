@@ -21,7 +21,7 @@ mod contract_schema_migration;
 mod create_contract_bounds;
 mod deposit;
 mod dispute;
-mod configurable_disputes_limit;
+mod dispute_proptest;
 mod emergency_controls;
 mod events_overflow;
 mod input_sanitization_amounts;

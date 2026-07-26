@@ -71,7 +71,7 @@ fn deposit(env: &Env, client: &EscrowClient, id: &u32, client_addr: &Address, am
 ///
 /// `funded` is stored in both `total_deposited` and `funded_amount` so the
 /// helper reflects a freshly-funded contract with no prior releases.
-fn payout_contract(env: &Env, funded: i128, released: i128, refunded: i128) -> Contract {
+pub fn payout_contract(env: &Env, funded: i128, released: i128, refunded: i128) -> Contract {
     Contract {
         client: Address::generate(env),
         freelancer: Address::generate(env),
