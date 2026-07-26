@@ -602,7 +602,7 @@ treated as roadmap text, not live integration guidance.
 
 Participants can approve milestone items prior to fund distribution payouts. If an authorization mistake is discovered prior to complete disbursement release configurations, the approving party can rescind authority.
 
-#### `revoke_approval(contract_id: Address, caller: Address, milestone_index: u32)`
+#### `revoke_milestone_approval(contract_id: u32, caller: Address, milestone_index: u32) -> bool`
 - **Authorization Required:** `caller.require_auth()`
-- **Behavior:** Explicitly removes individual state flags (`client_approved` | `freelancer_approved` | `arbiter_approved`). When all structural components drop to `false`, temporary records are scrubbed entirely to maximize gas savings.
-- **Errors raised:** `Error::MilestoneAlreadyReleased`, `Error::ApprovalRecordNotFound`.
+- **Behavior:** Explicitly removes the caller's own approval flag (`client_approved` | `freelancer_approved` | `arbiter_approved`). Other parties' flags are left intact. When all three flags become `false`, the temporary record is removed entirely to maximize gas savings.
+- **Errors raised:** `Error::ContractNotFound`, `Error::IndexOutOfBounds`, `Error::MilestoneAlreadyReleased`, `Error::UnauthorizedRole`, `Error::InsufficientApprovals` (when no approval record exists or the caller has not approved).
