@@ -13,6 +13,7 @@ mod approval_expiry;
 mod batch_release;
 mod cancel_contract;
 mod client_migration;
+mod contract_schema_migration;
 mod create_contract_bounds;
 mod deposit;
 mod dispute;

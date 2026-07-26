@@ -1,7 +1,8 @@
 pub use crate::Escrow;
 use crate::{
-    amount_validation, ttl, Contract, ContractStatus, DataKey, EscrowError, GovernedParameters,
-    Milestone, ReleaseAuthorization, Error, MAX_MILESTONES,
+    amount_validation, ttl, Contract, ContractStatus, DataKey, Error, Escrow, EscrowArgs,
+    EscrowClient, EscrowError, GovernedParameters, Milestone, ReleaseAuthorization,
+    CONTRACT_STORAGE_SCHEMA_VERSION, MAX_MILESTONES,
 };
 use soroban_sdk::{contractimpl, symbol_short, Address, Env, Vec};
 
@@ -78,22 +79,29 @@ pub fn execute_create_contract(
 
         let freelancer_addr = freelancer.clone();
 
-    let freelancer_addr = freelancer.clone();
-    let contract = Contract {
-        client: client.clone(),
-        freelancer: freelancer.clone(),
-        arbiter,
-        status: ContractStatus::Created,
-        total_deposited: 0,
-        funded_amount: 0,
-        released_amount: 0,
-        refunded_amount: 0,
-        release_authorization,
-        reputation_issued: false,
-    };
-    env.storage()
-        .persistent()
-        .set(&DataKey::Contract(id), &contract);
+        // Construct the contract with all required fields, initialising accounting
+        // counters to zero and reputation_issued to false.
+        let contract = Contract {
+            client: client.clone(),
+            freelancer: freelancer.clone(),
+            arbiter,
+            status: ContractStatus::Created,
+            total_deposited: 0,
+            funded_amount: 0,
+            released_amount: 0,
+            refunded_amount: 0,
+            release_authorization,
+            reputation_issued: false,
+        };
+        env.storage()
+            .persistent()
+            .set(&DataKey::Contract(id), &contract);
+        // New contracts are always written in the current layout, so stamp the
+        // schema version marker now and skip the migration-on-read path.
+        env.storage().persistent().set(
+            &DataKey::ContractSchemaVersion(id),
+            &CONTRACT_STORAGE_SCHEMA_VERSION,
+        );
 
         // Build and persist the milestone vector.
         let mut milestone_vec: Vec<Milestone> = Vec::new(&env);

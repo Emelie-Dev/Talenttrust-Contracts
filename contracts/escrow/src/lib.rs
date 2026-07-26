@@ -83,11 +83,10 @@ pub use storage::{initialize_storage_version, ESCROW_STORAGE_VERSION};
 pub use ttl::{ADMIN_ROTATION_MIN_DELAY_LEDGERS, PENDING_MIGRATION_TTL_LEDGERS};
 
 pub use types::{
-    Contract, ContractBounds, ContractStatus, ContractSummary, DataKey, DepositMode,
-    DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone,
-    MilestoneEntry, MilestoneSummary, PendingAdminProposal, ReadinessChecklist,
-    ReleaseAuthorization, Reputation, SplitAmounts, StorageKey,
-    CONTRACT_SUMMARY_SCHEMA_VERSION,
+    Contract, ContractBounds, ContractStatus, ContractSummary, ContractV1, DataKey, DepositMode,
+    DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone, MilestoneApprovals,
+    MilestoneSummary, PendingAdminProposal, ReadinessChecklist, ReleaseAuthorization, Reputation,
+    SplitAmounts, CONTRACT_STORAGE_SCHEMA_VERSION, CONTRACT_SUMMARY_SCHEMA_VERSION,
 };
 
 /// Default maximum number of milestones allowed per contract.
@@ -1332,13 +1331,13 @@ impl Escrow {
             .has(&DataKey::Contract(contract_id))
     }
 
+    /// Retrieves contract information.
+    ///
+    /// Transparently upgrades records still stored in a pre-`reputation_issued`
+    /// legacy layout (schema version 1) to the current [`Contract`] layout on
+    /// read; see `migration::migrate_contract_storage`.
     pub fn get_contract(env: Env, contract_id: u32) -> Contract {
-        storage::ensure_storage_version(&env);
-        let contract = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Contract(contract_id))
-            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
+        let contract = Self::load_contract(&env, contract_id);
 
         ttl::extend_contract_ttl(&env, contract_id);
         contract
