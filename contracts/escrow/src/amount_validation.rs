@@ -247,6 +247,19 @@ pub fn accumulate_amounts<I: IntoIterator<Item = i128>>(
     Ok(total)
 }
 
+
+/// Returns the remaining balance available in the contract.
+/// This helper is re-exported by lib.rs.
+pub fn checked_available_balance(
+    total_deposited: i128,
+    total_committed: i128,
+) -> Result<i128, crate::EscrowError> {
+    total_deposited
+        .checked_sub(total_committed)
+        .ok_or(crate::EscrowError::PotentialOverflow)
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
