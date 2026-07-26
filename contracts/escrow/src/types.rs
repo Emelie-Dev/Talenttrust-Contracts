@@ -75,6 +75,8 @@ pub enum DataKey {
     Finalization(u32),
     // Settlement token
     SettlementToken,
+    // State migration
+    State,
 }
 
 #[contracterror]
@@ -272,4 +274,23 @@ impl DisputeResolution {
             Self::Split(_) => 3,
         }
     }
+}
+
+// ── State Migration Types ────────────────────────────────────────────────────
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StateV1 {
+    pub client: Address,
+    pub freelancer: Address,
+    pub milestones: Vec<i128>,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StateV2 {
+    pub client: Address,
+    pub freelancer: Address,
+    pub milestones: Vec<i128>,
+    pub status: ContractStatus,
 }
