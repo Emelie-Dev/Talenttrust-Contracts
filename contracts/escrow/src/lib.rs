@@ -2816,61 +2816,76 @@ impl Escrow {
         true
     }
 
-    /// Returns the written feedback the client provided when issuing reputation.
+    /// Simulates `issue_reputation` and returns the projected reputation outcome
+    /// without writing storage or emitting events.
     ///
-    /// The comment is stored under [`DataKey::ReputationComment`]`(contract_id)`.
-    /// Reading the value also bumps its TTL so it remains accessible for the
-    /// standard persistent-storage window.
+    /// Runs the exact same validation as `issue_reputation` (pause/emergency
+    /// gate, caller/role checks, rating/comment bounds, contract status,
+    /// duplicate-issuance and self-rating checks) so a caller can preview
+    /// whether a call would succeed and what the resulting reputation record
+    /// would look like. Does not require `caller` authorization, since no
+    /// state is mutated.
     ///
-    /// # Arguments
-    ///
-    /// * `env` – The Soroban execution environment.
-    /// * `contract_id` – Numeric ID of the escrow contract to query.
-    ///
-    /// # Returns
-    ///
-    /// * `Some(comment)` – The UTF-8 string written by the client.
-    /// * `None` – Reputation has not yet been issued for this contract, or the
-    ///   entry has expired from storage.
-    ///
-    /// No authorisation is required; this is a read-only query.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use soroban_sdk::{testutils::Address as _, vec, Address, Env, String};
-    /// # use escrow::{Escrow, EscrowClient, ReleaseAuthorization};
-    /// let env = Env::default();
-    /// env.mock_all_auths();
-    ///
-    /// let escrow_id = env.register(Escrow, ());
-    /// let escrow = EscrowClient::new(&env, &escrow_id);
-    /// escrow.initialize(&Address::generate(&env));
-    ///
-    /// let client_addr = Address::generate(&env);
-    /// let freelancer_addr = Address::generate(&env);
-    /// let milestones = vec![&env, 200_0000000_i128, 400_0000000_i128, 600_0000000_i128];
-    /// let contract_id = escrow.create_contract(
-    ///     &client_addr, &freelancer_addr, &None, &milestones,
-    ///     &ReleaseAuthorization::ClientOnly,
-    /// );
-    ///
-    /// // Before reputation is issued the comment is absent.
-    /// assert!(escrow.get_reputation_comment(&contract_id).is_none());
-    ///
-    /// // Complete the contract and issue reputation.
-    /// escrow.deposit_funds(&contract_id, &client_addr, &1_200_0000000_i128);
-    /// for idx in 0_u32..3 {
-    ///     escrow.approve_milestone_release(&contract_id, &client_addr, &idx);
-    ///     escrow.release_milestone(&contract_id, &client_addr, &idx);
-    /// }
-    /// let comment = String::from_str(&env, "Excellent work!");
-    /// escrow.issue_reputation(&contract_id, &client_addr, &5, &comment);
-    ///
-    /// // Now the comment is readable.
-    /// let stored = escrow.get_reputation_comment(&contract_id).unwrap();
-    /// assert_eq!(stored, comment);
-    /// ```
+    /// # Errors
+    /// Same as `issue_reputation`.
+    pub fn simulate_issue_reputation(
+        env: Env,
+        contract_id: u32,
+        caller: Address,
+        rating: u32,
+        comment: String,
+    ) -> types::Reputation {
+        Self::require_not_paused(&env);
+        let contract: Contract = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Contract(contract_id))
+            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
+
+        if caller != contract.client {
+            env.panic_with_error(Error::UnauthorizedRole);
+        }
+
+        if rating < 1 || rating > 5 {
+            env.panic_with_error(Error::InvalidRating);
+        }
+
+        if comment.len() == 0 {
+            env.panic_with_error(Error::EmptyComment);
+        }
+
+        if comment.len() > 200 {
+            env.panic_with_error(Error::CommentTooLong);
+        }
+
+        if contract.status != ContractStatus::Completed {
+            env.panic_with_error(Error::NotCompleted);
+        }
+
+        if contract.reputation_issued {
+            env.panic_with_error(Error::ReputationAlreadyIssued);
+        }
+        if contract.client == contract.freelancer {
+            env.panic_with_error(Error::SelfRating);
+        }
+
+        let pending_key = DataKey::PendingReputationCredits(contract.freelancer.clone());
+        let pending: i128 = env.storage().persistent().get(&pending_key).unwrap_or(0);
+        if pending <= 0 {
+            env.panic_with_error(Error::InvalidState);
+        }
+
+        let rep_key = DataKey::Reputation(contract.freelancer.clone());
+        let mut rep: types::Reputation =
+            env.storage().persistent().get(&rep_key).unwrap_or_default();
+        rep.completed_contracts += 1;
+        rep.total_rating += rating as i128;
+        rep.last_rating = rating as i128;
+        rep
+    }
+
+    /// Returns the written feedback provided by the client when reputation was issued.
+    /// Returns `None` if reputation has not been issued for this contract.
     pub fn get_reputation_comment(env: Env, contract_id: u32) -> Option<String> {
         Self::validate_contract_id_bounds(&env, contract_id);
         let comment_key = DataKey::ReputationComment(contract_id);
