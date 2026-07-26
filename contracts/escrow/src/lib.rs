@@ -87,7 +87,7 @@ pub use types::{
     Contract, ContractBounds, ContractStatus, ContractSummary, ContractV1, DataKey, DepositMode,
     DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone, MilestoneApprovals,
     MilestoneSummary, PendingAdminProposal, ReadinessChecklist, ReleaseAuthorization, Reputation,
-    SplitAmounts, StateV1, StateV2, CONTRACT_SUMMARY_SCHEMA_VERSION, CURRENT_MILESTONE_VERSION,
+    SettlementState, SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION,
 };
 
 /// Default maximum number of milestones allowed per contract.
@@ -416,6 +416,30 @@ impl Escrow {
         Self::read_settlement_token(&env).is_some()
     }
 
+    /// Returns the current bounded settlement state.
+    ///
+    /// This auth-free reader uses stored values only and does not extend TTL or
+    /// mutate storage. Before settlement is configured it returns the default,
+    /// with no token and zero accrued fees.
+    pub fn get_settlement_state(env: Env) -> SettlementState {
+        SettlementState {
+            token: Self::read_settlement_token(&env),
+            accumulated_protocol_fees: env
+                .storage()
+                .persistent()
+                .get(&DataKey::AccumulatedProtocolFees)
+                .unwrap_or(0),
+        }
+    }
+
+    // ── Initialization ───────────────────────────────────────────────────────
+
+    /// Initializes the escrow contract with the operational admin.
+    ///
+    /// Single-use. Stores the admin address that controls pause, emergency,
+    /// protocol-fee, and governance operations. All escrow lifecycle operations
+    /// (create, deposit, release, refund, cancel) call `require_initialized`
+    /// so that these safety rails are always bound before money can move.
     pub fn initialize(env: Env, admin: Address) -> bool {
         if env
             .storage()
@@ -3033,6 +3057,3 @@ impl Escrow {
 
 #[cfg(test)]
 mod test;
-
-#[cfg(test)]
-mod migration_test;
