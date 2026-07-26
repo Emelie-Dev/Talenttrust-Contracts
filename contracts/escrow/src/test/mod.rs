@@ -11,7 +11,6 @@ use crate::{
 mod approval_expiry;
 mod cancel_contract;
 mod client_migration;
-mod contract_events;
 mod contracts_page;
 mod create_contract_bounds;
 mod deposit;

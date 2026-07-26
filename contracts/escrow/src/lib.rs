@@ -81,11 +81,10 @@ pub use ttl::{ADMIN_ROTATION_MIN_DELAY_LEDGERS, PENDING_MIGRATION_TTL_LEDGERS};
 // `DisputeResolution` and `DisputeSplit` are defined once in `types.rs` and
 // re-exported here; `dispute.rs` uses them via `crate::DisputeResolution`.
 pub use types::{
-    Contract, ContractBounds, ContractEntry, ContractStatus, ContractSummary, DataKey,
-    DepositMode, DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone,
-    MilestoneApprovals, MilestoneEntry, MilestoneSummary, PendingAdminProposal,
-    ReadinessChecklist, ReleaseAuthorization, Reputation, SplitAmounts,
-    CONTRACT_SUMMARY_SCHEMA_VERSION,
+    Contract, ContractBounds, ContractEntry, ContractStatus, ContractSummary, DataKey, DepositMode,
+    DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone, MilestoneApprovals,
+    MilestoneEntry, MilestoneSummary, PendingAdminProposal, ReadinessChecklist,
+    ReleaseAuthorization, Reputation, SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION,
 };
 
 /// Default maximum number of milestones allowed per contract.
@@ -99,6 +98,11 @@ pub const MAX_MILESTONES: u32 = DEFAULT_MAX_MILESTONES;
 
 /// Backward-compatible alias for the default max escrow stroops.
 pub const MAX_TOTAL_ESCROW_STROOPS: i128 = DEFAULT_MAX_TOTAL_ESCROW_STROOPS;
+
+/// Maximum amount allowed for a single milestone, in stroops. Brought into
+/// crate-root scope from `amount_validation` because `get_bounds` reads it
+/// directly; without this re-export the crate does not compile.
+pub const MAX_SINGLE_AMOUNT_STROOPS: i128 = crate::amount_validation::MAX_SINGLE_AMOUNT_STROOPS;
 
 /// Absolute minimum for the max milestones setting.
 pub const MIN_MAX_MILESTONES: u32 = 1;
@@ -134,14 +138,6 @@ pub struct EscrowContractData {
     pub released_amount: i128,
     pub refunded_amount: i128,
     pub reputation_issued: bool,
-}
-
-#[soroban_sdk::contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct MilestoneApprovals {
-    pub client_approved: bool,
-    pub freelancer_approved: bool,
-    pub arbiter_approved: bool,
 }
 
 #[soroban_sdk::contracttype]
