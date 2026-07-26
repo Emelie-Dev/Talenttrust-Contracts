@@ -100,9 +100,10 @@ pub use ttl::{
 pub use milestones::{Milestone, MilestoneApprovals, MilestoneSummary, ReleaseAuthorization};
 pub use types::{
     Contract, ContractBounds, ContractStatus, ContractSummary, DataKey, DepositMode,
-    DisputeResolution, DisputeSplit, EscrowError, GovernedParameters, Milestone, MilestoneApprovals,
-    MilestoneSummary, PendingAdminProposal, ReadinessChecklist, ReleaseAuthorization, Reputation,
-    SimulatedRelease, SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION,
+    DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone, MilestoneApprovals,
+    MilestoneSchedule, MilestonesConfig, MilestoneSummary, PendingAdminProposal,
+    ReadinessChecklist, ReleaseAuthorization, Reputation, SplitAmounts,
+    CONTRACT_SUMMARY_SCHEMA_VERSION, MAX_SCHEDULE_DESCRIPTION_LEN, MAX_SCHEDULE_TITLE_LEN,
 };
 
 type Error = EscrowError;
@@ -623,6 +624,28 @@ impl Escrow {
             max_single_milestone_stroops: Self::read_settlement_limit(&_env),
             max_total_escrow_stroops: MAX_TOTAL_ESCROW_STROOPS,
             max_fee_bps: MAX_BPS,
+        }
+    }
+
+    /// Returns the milestone-related configuration values.
+    ///
+    /// Combines compile-time bounds with runtime-governed parameters. Before
+    /// initialization the governed fields fall back to sensible defaults so
+    /// callers can always read a complete configuration without panicking.
+    pub fn get_milestones_config(env: Env) -> MilestonesConfig {
+        let governed: Option<GovernedParameters> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::GovernedParameters);
+        MilestonesConfig {
+            max_milestones: MAX_MILESTONES,
+            max_single_milestone_stroops: MAX_SINGLE_AMOUNT_STROOPS,
+            max_total_escrow_stroops: governed
+                .map(|p| p.max_escrow_total_stroops)
+                .unwrap_or(MAX_TOTAL_ESCROW_STROOPS),
+            max_fee_bps: 10_000,
+            max_schedule_title_len: MAX_SCHEDULE_TITLE_LEN,
+            max_schedule_description_len: MAX_SCHEDULE_DESCRIPTION_LEN,
         }
     }
 
@@ -1971,6 +1994,161 @@ impl Escrow {
             .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
         ttl::extend_milestone_ttl(&env, contract_id);
         milestones.get(milestone_index)
+    }
+
+    /// Returns the schedule metadata for a single milestone, or `None` when no
+    /// schedule has been stored for that index or when the contract ID is unknown.
+    ///
+    /// Does NOT panic for unknown contract IDs — returns `None` consistently.
+    pub fn get_milestone_schedule(
+        env: Env,
+        contract_id: u32,
+        milestone_index: u32,
+    ) -> Option<MilestoneSchedule> {
+        let schedule_key = Symbol::new(&env, "schedule");
+        let schedules: Option<Vec<Option<MilestoneSchedule>>> = env
+            .storage()
+            .persistent()
+            .get(&(DataKey::Contract(contract_id), schedule_key));
+        match schedules {
+            None => None,
+            Some(s) => {
+                if milestone_index >= s.len() {
+                    None
+                } else {
+                    s.get(milestone_index)
+                }
+            }
+        }
+    }
+
+    /// Updates the schedule metadata for a single milestone.
+    ///
+    /// The caller must be the stored client and must authorize the call.
+    /// The target milestone must not yet be released or refunded.
+    ///
+    /// # Errors
+    /// * `ContractNotFound` — unknown `contract_id`.
+    /// * `UnauthorizedRole` — caller is not the stored client.
+    /// * `IndexOutOfBounds` — `milestone_index` exceeds the milestone count.
+    /// * `MilestoneAlreadyReleased` — milestone is already released.
+    /// * `AlreadyRefunded` — milestone has been refunded.
+    /// * `InvalidScheduleMetadata` — the schedule data fails validation.
+    pub fn set_milestone_schedule(
+        env: Env,
+        contract_id: u32,
+        caller: Address,
+        milestone_index: u32,
+        schedule: MilestoneSchedule,
+    ) -> bool {
+        Self::require_not_paused(&env);
+        caller.require_auth();
+
+        let contract: Contract = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Contract(contract_id))
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
+        ttl::extend_contract_ttl(&env, contract_id);
+
+        if caller != contract.client {
+            env.panic_with_error(Error::UnauthorizedRole);
+        }
+
+        let milestone_key = Symbol::new(&env, "milestones");
+        let milestones: Vec<Milestone> = env
+            .storage()
+            .persistent()
+            .get(&(DataKey::Contract(contract_id), milestone_key))
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
+
+        if milestone_index >= milestones.len() {
+            env.panic_with_error(Error::IndexOutOfBounds);
+        }
+
+        let ms = milestones.get(milestone_index).unwrap();
+        if ms.released {
+            env.panic_with_error(Error::MilestoneAlreadyReleased);
+        }
+        if ms.refunded {
+            env.panic_with_error(Error::AlreadyRefunded);
+        }
+
+        // Validate schedule data.
+        let now = env.ledger().timestamp();
+        if let Some(due) = schedule.due_date {
+            if due <= now {
+                env.panic_with_error(Error::InvalidScheduleMetadata);
+            }
+            // Check monotonicity with previous milestone (if any).
+            if milestone_index > 0 {
+                let prev_idx = milestone_index - 1;
+                let schedule_key = Symbol::new(&env, "schedule");
+                let schedules: Option<Vec<Option<MilestoneSchedule>>> = env
+                    .storage()
+                    .persistent()
+                    .get(&(DataKey::Contract(contract_id), schedule_key.clone()));
+                if let Some(ref scheds) = schedules {
+                    if let Some(Some(ref prev)) = scheds.get(prev_idx) {
+                        if let Some(prev_due) = prev.due_date {
+                            if due <= prev_due {
+                                env.panic_with_error(Error::InvalidScheduleMetadata);
+                            }
+                        }
+                    }
+                }
+            }
+            // Check monotonicity with next milestone (if any).
+            if (milestone_index as u32) < milestones.len() - 1 {
+                let next_idx = milestone_index + 1;
+                let schedule_key = Symbol::new(&env, "schedule");
+                let schedules: Option<Vec<Option<MilestoneSchedule>>> = env
+                    .storage()
+                    .persistent()
+                    .get(&(DataKey::Contract(contract_id), schedule_key));
+                if let Some(ref scheds) = schedules {
+                    if let Some(Some(ref next)) = scheds.get(next_idx) {
+                        if let Some(next_due) = next.due_date {
+                            if next_due <= due {
+                                env.panic_with_error(Error::InvalidScheduleMetadata);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(ref title) = schedule.title {
+            if title.len() > MAX_SCHEDULE_TITLE_LEN as u32 {
+                env.panic_with_error(Error::InvalidScheduleMetadata);
+            }
+        }
+        if let Some(ref desc) = schedule.description {
+            if desc.len() > MAX_SCHEDULE_DESCRIPTION_LEN as u32 {
+                env.panic_with_error(Error::InvalidScheduleMetadata);
+            }
+        }
+
+        // Store the schedule.
+        let mut entry = schedule;
+        entry.updated_at = now;
+        let schedule_key = Symbol::new(&env, "schedule");
+        let mut stored_schedules: Vec<Option<MilestoneSchedule>> = env
+            .storage()
+            .persistent()
+            .get(&(DataKey::Contract(contract_id), schedule_key.clone()))
+            .unwrap_or_else(|| {
+                let mut v: Vec<Option<MilestoneSchedule>> = Vec::new(&env);
+                for _ in 0..milestones.len() {
+                    v.push_back(None);
+                }
+                v
+            });
+        stored_schedules.set(milestone_index, Some(entry));
+        env.storage()
+            .persistent()
+            .set(&(DataKey::Contract(contract_id), schedule_key), &stored_schedules);
+
+        true
     }
 
     /// Returns funded minus released minus refunded for `contract_id`.

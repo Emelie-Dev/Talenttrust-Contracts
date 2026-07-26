@@ -286,32 +286,8 @@ pub enum EscrowError {
     EscrowCapExceeded = 51,
     SettlementTokenNotConfigured = 52,
     MilestoneNotOverdue = 53,
-    /// The total milestone amount exceeds the configured cap.
-    TotalCapExceeded = 54,
-    /// Too many milestones were provided.
-    TooManyMilestones = 55,
-    /// The contract has been cancelled.
-    ContractCancelled = 56,
-    /// The contract has been refunded.
-    ContractRefunded = 57,
-    /// A settlement token has already been bound.
-    SettlementTokenAlreadyBound = 58,
-    /// The settlement token is the escrow contract itself.
-    SettlementTokenIsSelf = 59,
-    /// The settlement token is the escrow admin.
-    SettlementTokenIsAdmin = 60,
-    /// The batch item limit has been exceeded.
-    BatchItemLimitExceeded = 61,
-    /// Escrow balance is insufficient for the operation.
-    InsufficientEscrowBalance = 62,
-    /// The milestone was not found.
-    MilestoneNotFound = 63,
-    /// An exact deposit amount is required.
-    ExactDepositRequired = 64,
-    /// The funding amount exceeds the required amount.
-    FundingExceedsRequired = 65,
-    /// The total exceeds the maximum escrow amount.
-    TotalExceedsMaxEscrow = 66,
+    /// The milestone schedule metadata is invalid.
+    InvalidScheduleMetadata = 54,
 }
 
 #[contracttype]
@@ -520,6 +496,56 @@ pub struct DisputeSplit {
 }
 
 pub type SplitAmounts = DisputeSplit;
+
+// ── Milestone schedule metadata ───────────────────────────────────────────
+
+/// Maximum byte length for a milestone schedule title.
+pub const MAX_SCHEDULE_TITLE_LEN: u32 = 64;
+/// Maximum byte length for a milestone schedule description.
+pub const MAX_SCHEDULE_DESCRIPTION_LEN: u32 = 256;
+
+/// Milestone-related configuration values.
+///
+/// Combines compile‑time bounds with runtime‑governed parameters, providing
+/// a single read‑only view for callers that need to discover how milestones
+/// are constrained.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MilestonesConfig {
+    /// Maximum number of milestones per contract (compile‑time constant).
+    pub max_milestones: u32,
+    /// Maximum amount allowed for a single milestone in stroops (compile‑time constant).
+    pub max_single_milestone_stroops: i128,
+    /// Maximum total escrow amount in stroops.
+    /// This is the runtime‑governed cap (falls back to the compile‑time bound when unset).
+    pub max_total_escrow_stroops: i128,
+    /// Maximum protocol fee in basis points (10_000 = 100 %).
+    /// This is the runtime‑governed cap (falls back to 10_000 when unset).
+    pub max_fee_bps: u32,
+    /// Maximum byte length for a milestone schedule title.
+    pub max_schedule_title_len: u32,
+    /// Maximum byte length for a milestone schedule description.
+    pub max_schedule_description_len: u32,
+}
+
+/// Per-milestone schedule metadata stored alongside the milestone vector.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MilestoneSchedule {
+    /// Optional Unix timestamp (seconds) for the expected delivery deadline.
+    /// `None` means no deadline — the milestone never expires for schedule
+    /// purposes (distinct from the timeout-refund deadline on `Milestone`).
+    pub due_date: Option<u64>,
+    /// Optional short title for the milestone (e.g. "Phase 1").
+    /// Max byte length is [`MAX_SCHEDULE_TITLE_LEN`].
+    pub title: Option<String>,
+    /// Optional longer description of the milestone deliverable.
+    /// Max byte length is [`MAX_SCHEDULE_DESCRIPTION_LEN`].
+    pub description: Option<String>,
+    /// Ledger timestamp of the last schedule update.  Stamped by the contract
+    /// on create / set — caller-supplied values are overwritten.
+    pub updated_at: u64,
+}
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
