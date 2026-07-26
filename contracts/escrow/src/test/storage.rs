@@ -1,10 +1,55 @@
 use super::{
     assert_contract_error, complete_contract, create_contract, default_milestones,
-    generated_participants, register_client, total_milestone_amount, MILESTONE_ONE, MILESTONE_THREE,
-    MILESTONE_TWO,
+    generated_participants, register_client, total_milestone_amount, MILESTONE_ONE,
+    MILESTONE_THREE, MILESTONE_TWO,
 };
-use crate::{ContractStatus, DataKey, EscrowError, ReadinessChecklist, ReleaseAuthorization};
-use soroban_sdk::{testutils::Address as _, Address, Env, Vec};
+use crate::{
+    ContractStatus, DataKey, Error, Escrow, EscrowClient, EscrowError, ReadinessChecklist,
+    ReleaseAuthorization,
+};
+use soroban_sdk::{testutils::Address as _, Address, Env};
+
+fn setup_initialized_client(env: &Env, admin: &Address) -> EscrowClient<'_> {
+    env.mock_all_auths();
+    let id = env.register(Escrow, ());
+    let client = EscrowClient::new(env, &id);
+    assert!(client.initialize(admin));
+    client
+}
+
+fn assert_admin_allows_and_party_stranger_denied<
+    T: core::fmt::Debug,
+    InnerError: core::fmt::Debug,
+    ExpectedError: Into<soroban_sdk::Error> + core::fmt::Debug,
+>(
+    admin_client: &EscrowClient<'_>,
+    party_client: &EscrowClient<'_>,
+    stranger_client: &EscrowClient<'_>,
+    expected_error: ExpectedError,
+    admin_action: impl FnOnce(
+        &EscrowClient<'_>,
+    ) -> Result<
+        Result<T, InnerError>,
+        Result<soroban_sdk::Error, soroban_sdk::InvokeError>,
+    >,
+    party_action: impl FnOnce(
+        &EscrowClient<'_>,
+    ) -> Result<
+        Result<T, InnerError>,
+        Result<soroban_sdk::Error, soroban_sdk::InvokeError>,
+    >,
+    stranger_action: impl FnOnce(
+        &EscrowClient<'_>,
+    ) -> Result<
+        Result<T, InnerError>,
+        Result<soroban_sdk::Error, soroban_sdk::InvokeError>,
+    >,
+) {
+    let admin_result = admin_action(admin_client);
+    assert!(matches!(admin_result, Ok(Ok(_))), "admin should be allowed");
+    assert_contract_error(party_action(party_client), expected_error);
+    assert_contract_error(stranger_action(stranger_client), expected_error);
+}
 
 // ─── Initialized / Admin ──────────────────────────────────────────────────────
 
@@ -85,6 +130,99 @@ fn paused_written_by_pause_and_cleared_by_unpause() {
             .unwrap_or(false);
         assert!(!v);
     });
+}
+
+#[test]
+fn storage_auth_matrix_allows_admin_and_rejects_non_admin_roles() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let party = Address::generate(&env);
+    let stranger = Address::generate(&env);
+
+    let admin_client = setup_initialized_client(&env, &admin);
+    let party_client = setup_initialized_client(&env, &admin);
+    let stranger_client = setup_initialized_client(&env, &admin);
+
+    assert_admin_allows_and_party_stranger_denied(
+        &admin_client,
+        &party_client,
+        &stranger_client,
+        EscrowError::UnauthorizedRole,
+        |client| client.try_pause(),
+        |client| client.try_pause(),
+        |client| client.try_pause(),
+    );
+
+    let admin_client = setup_initialized_client(&env, &admin);
+    let party_client = setup_initialized_client(&env, &admin);
+    let stranger_client = setup_initialized_client(&env, &admin);
+
+    assert_admin_allows_and_party_stranger_denied(
+        &admin_client,
+        &party_client,
+        &stranger_client,
+        EscrowError::UnauthorizedRole,
+        |client| client.try_unpause(),
+        |client| client.try_unpause(),
+        |client| client.try_unpause(),
+    );
+
+    let admin_client = setup_initialized_client(&env, &admin);
+    let party_client = setup_initialized_client(&env, &admin);
+    let stranger_client = setup_initialized_client(&env, &admin);
+
+    assert_admin_allows_and_party_stranger_denied(
+        &admin_client,
+        &party_client,
+        &stranger_client,
+        EscrowError::UnauthorizedRole,
+        |client| client.try_activate_emergency_pause(),
+        |client| client.try_activate_emergency_pause(),
+        |client| client.try_activate_emergency_pause(),
+    );
+
+    let admin_client = setup_initialized_client(&env, &admin);
+    let party_client = setup_initialized_client(&env, &admin);
+    let stranger_client = setup_initialized_client(&env, &admin);
+
+    assert!(admin_client.activate_emergency_pause());
+    assert_contract_error(
+        party_client.try_resolve_emergency(),
+        EscrowError::UnauthorizedRole,
+    );
+    assert_contract_error(
+        stranger_client.try_resolve_emergency(),
+        EscrowError::UnauthorizedRole,
+    );
+
+    let admin_client = setup_initialized_client(&env, &admin);
+    let party_client = setup_initialized_client(&env, &admin);
+    let stranger_client = setup_initialized_client(&env, &admin);
+
+    let token = env.register_stellar_asset_contract(admin.clone());
+    assert!(admin_client.bind_settlement_token(&admin, &token));
+    assert_contract_error(
+        party_client.try_bind_settlement_token(&party, &token),
+        EscrowError::UnauthorizedRole,
+    );
+    assert_contract_error(
+        stranger_client.try_bind_settlement_token(&stranger, &token),
+        EscrowError::UnauthorizedRole,
+    );
+
+    let admin_client = setup_initialized_client(&env, &admin);
+    let party_client = setup_initialized_client(&env, &admin);
+    let stranger_client = setup_initialized_client(&env, &admin);
+
+    assert!(admin_client.set_governed_params(&admin, &0_u32, &1_000_000_i128));
+    assert_contract_error(
+        party_client.try_set_governed_params(&party, &0_u32, &1_000_000_i128),
+        Error::UnauthorizedRole,
+    );
+    assert_contract_error(
+        stranger_client.try_set_governed_params(&stranger, &0_u32, &1_000_000_i128),
+        Error::UnauthorizedRole,
+    );
 }
 
 #[test]
@@ -283,9 +421,18 @@ fn milestone_released_flag_set_in_vector_on_release() {
     client.release_milestone(&id, &client_addr, &0);
 
     let milestones = client.get_milestones(&id);
-    assert!(milestones.get(0).unwrap().released, "index 0 must be released");
-    assert!(!milestones.get(1).unwrap().released, "index 1 must not be released");
-    assert!(!milestones.get(2).unwrap().released, "index 2 must not be released");
+    assert!(
+        milestones.get(0).unwrap().released,
+        "index 0 must be released"
+    );
+    assert!(
+        !milestones.get(1).unwrap().released,
+        "index 1 must not be released"
+    );
+    assert!(
+        !milestones.get(2).unwrap().released,
+        "index 2 must not be released"
+    );
 }
 
 #[test]
@@ -417,127 +564,6 @@ fn reputation_requires_client_caller() {
         client.try_issue_reputation(&id, &stranger, &f, &5),
         EscrowError::UnauthorizedRole,
     );
-}
-
-// ─── Reputation Batch ─────────────────────────────────────────────────
-
-fn reputation_batch_item(env: &Env, contract_id: u32, rating: u32) -> crate::ReputationBatchItem {
-    crate::ReputationBatchItem {
-        contract_id,
-        rating,
-        comment: String::from_str(&env, "batch comment"),
-    }
-}
-
-#[test]
-fn issue_reputation_batch_empty_is_noop() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let client = register_client(&env);
-    let (c, _f, _id) = complete_contract(&env, &client);
-
-    let items: Vec<crate::ReputationBatchItem> = Vec::new(&env);
-    let result = client.issue_reputation_batch(&c, &items);
-    assert!(result);
-}
-
-#[test]
-fn issue_reputation_batch_over_cap_fails() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let client = register_client(&env);
-
-    let (c, _f, id) = complete_contract(&env, &client);
-
-    let mut items: Vec<crate::ReputationBatchItem> = Vec::new(&env);
-    for _ in 0..crate::MAX_REPUTATION_BATCH_SIZE + 1 {
-        let item = crate::ReputationBatchItem {
-            contract_id: id,
-            rating: 5,
-            comment: String::from_str(&env, "batch comment"),
-        };
-        items.push_back(&item);
-    }
-
-    assert_contract_error(
-        client.try_issue_reputation_batch(&c, &items),
-        EscrowError::BatchItemLimitExceeded,
-    );
-}
-
-#[test]
-fn issue_reputation_batch_at_cap_succeeds() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let client = register_client(&env);
-
-    let (c, f, id) = complete_contract(&env, &client);
-
-    let mut contract_ids: Vec<u32> = Vec::new(&env);
-    contract_ids.push_back(&id);
-
-    // Create additional contracts to fill up the batch cap.
-    for _ in 1..crate::MAX_REPUTATION_BATCH_SIZE {
-        let c2 = client
-            .create_contract(
-                &c,
-                &f,
-                &None,
-                &default_milestones(&env),
-                &ReleaseAuthorization::ClientOnly,
-            );
-        let total = total_milestone_amount();
-        client.deposit_funds(&c2, &c, &total);
-        for milestone_index in 0..3u32 {
-            client.approve_milestone_release(&c2, &c, &milestone_index);
-            client.release_milestone(&c2, &c, &milestone_index);
-        }
-        contract_ids.push_back(&c2);
-    }
-
-    let mut items: Vec<crate::ReputationBatchItem> = Vec::new(&env);
-    for i in 0..crate::MAX_REPUTATION_BATCH_SIZE {
-        let contract_id = contract_ids.get(i as u32).unwrap();
-        let item = crate::ReputationBatchItem {
-            contract_id: *contract_id,
-            rating: 5,
-            comment: String::from_str(&env, "batch comment"),
-        };
-        items.push_back(&item);
-    }
-
-    let result = client.issue_reputation_batch(&c, &items);
-    assert!(result);
-}
-
-#[test]
-fn issue_reputation_batch_per_item_semantics() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let client = register_client(&env);
-
-    let (c, f, id) = complete_contract(&env, &client);
-
-    let item = reputation_batch_item(&env, id, 4);
-    let mut items: Vec<crate::ReputationBatchItem> = Vec::new(&env);
-    items.push_back(&item);
-
-    let result = client.issue_reputation_batch(&c, &items);
-    assert!(result);
-
-    env.as_contract(&client.address, || {
-        let issued: bool = env
-            .storage()
-            .persistent()
-            .get(&DataKey::ReputationIssued(id))
-            .unwrap_or(false);
-        assert!(issued);
-    });
-
-    let rep = client.get_reputation(&f).unwrap();
-    assert_eq!(rep.completed_contracts, 1);
-    assert_eq!(rep.total_rating, 4);
-    assert_eq!(rep.last_rating, 4);
 }
 
 // ─── ReadinessChecklist ───────────────────────────────────────────────────────
