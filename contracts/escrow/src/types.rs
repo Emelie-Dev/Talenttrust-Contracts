@@ -120,6 +120,10 @@ pub enum DataKey {
     // Configurable limits
     MaxMilestones,
     MaxEscrowStroops,
+    // Finalization
+    Finalization(u32),
+    // Settlement token
+    SettlementToken,
 }
 
 /// Canonical contract error type for all entrypoint-facing errors.

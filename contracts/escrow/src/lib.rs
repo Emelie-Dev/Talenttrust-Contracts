@@ -81,11 +81,10 @@ pub use ttl::{ADMIN_ROTATION_MIN_DELAY_LEDGERS, PENDING_MIGRATION_TTL_LEDGERS};
 // `DisputeResolution` and `DisputeSplit` are defined once in `types.rs` and
 // re-exported here; `dispute.rs` uses them via `crate::DisputeResolution`.
 pub use types::{
-    Contract, ContractBounds, ContractEntry, ContractStatus, ContractSummary, DataKey,
-    DepositMode, DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone,
-    MilestoneApprovals, MilestoneEntry, MilestoneSummary, PendingAdminProposal,
-    ReadinessChecklist, ReleaseAuthorization, Reputation, SplitAmounts,
-    CONTRACT_SUMMARY_SCHEMA_VERSION,
+    Contract, ContractBounds, ContractEntry, ContractStatus, ContractSummary, DataKey, DepositMode,
+    DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone, MilestoneApprovals,
+    MilestoneEntry, MilestoneSummary, PendingAdminProposal, ReadinessChecklist,
+    ReleaseAuthorization, Reputation, SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION,
 };
 
 /// Default maximum number of milestones allowed per contract.
@@ -253,6 +252,9 @@ pub enum EscrowError {
     EmptyComment = 42,
     /// Reputation feedback comment exceeded the 200-character maximum.
     CommentTooLong = 43,
+    /// A configurable limit value (max milestones or max escrow stroops) was
+    /// outside its allowed range.
+    LimitOutOfRange = 44,
 }
 
 impl Escrow {
@@ -1898,25 +1900,6 @@ impl Escrow {
 
     // ── Cancel contract ──────────────────────────────────────────────────────
 
-    pub fn get_mainnet_readiness_info(env: Env) -> MainnetReadinessInfo {
-        let checklist = Self::load_checklist(&env);
-        MainnetReadinessInfo {
-            initialized: checklist.initialized,
-            governed_params_set: checklist.governed_params_set,
-            emergency_controls_enabled: checklist.emergency_controls_enabled,
-            caps_set: MAINNET_MAX_TOTAL_ESCROW_PER_CONTRACT_STROOPS > 0,
-            protocol_version: MAINNET_PROTOCOL_VERSION,
-            max_escrow_total_stroops: MAINNET_MAX_TOTAL_ESCROW_PER_CONTRACT_STROOPS,
-        }
-    }
-
-    fn load_checklist(env: &Env) -> ReadinessChecklist {
-        env.storage()
-            .persistent()
-            .get(&DataKey::ReadinessChecklist)
-            .unwrap_or_default()
-    }
-
     // ─── Configurable limits ──────────────────────────────────────────────────
 
     /// Returns the effective max milestones, falling back to the default.
@@ -1999,13 +1982,23 @@ impl Escrow {
 
     // ─── Contract lifecycle ───────────────────────────────────────────────────
 
-    /// Create a new escrow contract. Blocked when paused.
-    pub fn create_contract(
-        env: Env,
-        client: Address,
-        freelancer: Address,
-        milestone_amounts: Vec<i128>,
-    ) -> u32 {
+    /// Cancels a contract before any milestone has been released.
+    ///
+    /// The caller must be the stored client and must authorize the call. The
+    /// contract must be in `Created` or `Funded` state, with no released
+    /// balance, and the full remaining refundable balance is sent back to the
+    /// client via the configured Stellar Asset Contract before the contract is
+    /// marked `Cancelled`. A zero-funded cancellation does not invoke a token
+    /// transfer and leaves unrelated contracts' escrowed token balances intact.
+    ///
+    /// # Errors
+    /// * `ContractPaused` - If the contract is paused while not in emergency mode.
+    /// * `EmergencyActive` - If the contract is in an active emergency pause.
+    /// * `ContractNotFound` - If the contract does not exist.
+    /// * `UnauthorizedRole` - If the caller is not the stored client.
+    /// * `AlreadyCancelled` - If the contract was already cancelled.
+    /// * `InvalidStatusTransition` - If the contract is not `Created`/`Funded` or has already released funds.
+    pub fn cancel_contract(env: Env, contract_id: u32, client: Address) -> bool {
         Self::require_not_paused(&env);
         let mut contract: Contract = env
             .storage()
@@ -2050,19 +2043,11 @@ impl Escrow {
             );
         }
 
-        let mut total: i128 = 0;
-        for i in 0..milestone_amounts.len() {
-            let amt = milestone_amounts.get(i).unwrap();
-            if amt <= 0 {
-                env.panic_with_error(EscrowError::InvalidMilestoneAmount);
-            }
-            total = safe_add_amounts(total, amt)
-                .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
-        }
-        let max_escrow = Self::effective_max_escrow_stroops(&env);
-        if total > max_escrow {
-            env.panic_with_error(EscrowError::InvalidMilestoneAmount);
-        }
+        contract.refunded_amount = contract
+            .refunded_amount
+            .checked_add(refund_amount)
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::InsufficientFunds));
+        contract.status = ContractStatus::Cancelled;
 
         env.storage()
             .persistent()
@@ -2072,18 +2057,6 @@ impl Escrow {
         env.events().publish(
             (symbol_short!("cancelled"), contract_id),
             (client, refund_amount, env.ledger().timestamp()),
-        );
-
-        env.events().publish(
-            (symbol_short!("ctrct_st"), contract_id),
-            (
-                old_status as u32,
-                ContractStatus::Cancelled as u32,
-                contract.funded_amount,
-                contract.released_amount,
-                contract.refunded_amount,
-                env.ledger().timestamp(),
-            ),
         );
 
         true
@@ -2597,6 +2570,26 @@ impl Escrow {
             .persistent()
             .get::<_, bool>(&DataKey::Initialized)
             .unwrap_or(false)
+    }
+
+    /// Defensive bounds check: `contract_id` must fall within the allocated
+    /// range `[1, get_next_contract_id() - 1]`.
+    ///
+    /// Contract IDs are allocated contiguously starting at `1` and are never
+    /// removed from storage (see [`Escrow::get_contracts_page`]), so any ID
+    /// outside this range is guaranteed to be unallocated. This is a cheap
+    /// pre-check ahead of a storage lookup; it does not change the security
+    /// model — an out-of-range ID would fail the subsequent storage `.get`
+    /// with the same `ContractNotFound` error regardless.
+    pub(crate) fn validate_contract_id_bounds(env: &Env, contract_id: u32) {
+        let next_id: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::NextContractId)
+            .unwrap_or(1);
+        if contract_id == 0 || contract_id >= next_id {
+            env.panic_with_error(EscrowError::ContractNotFound);
+        }
     }
 
     // -----------------------------------------------------------------------
