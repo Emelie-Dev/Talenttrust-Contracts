@@ -55,6 +55,8 @@
 
 extern crate std;
 
+use std::panic::{catch_unwind, AssertUnwindSafe};
+
 use proptest::prelude::*;
 use soroban_sdk::{
     testutils::Address as _, token::StellarAssetClient, vec, Address, Env, Vec as SdkVec,
@@ -91,10 +93,7 @@ const MAX_LARGE: i128 = i128::MAX / 100;
 const PURE_CASES: u32 = DEFAULT_CASES;
 
 proptest! {
-    #![proptest_config(ProptestConfig {
-        cases: PURE_CASES,
-        ..ProptestConfig::default()
-    })]
+    #![proptest_config(ProptestConfig::with_cases(PURE_CASES))]
 
     /// Conservation invariant for [`DisputeResolution::FullRefund`].
     ///
@@ -248,8 +247,16 @@ proptest! {
     /// payout legs. The strategy picks a `client_amount` in
     /// `0..=available` and computes `freelancer_amount = available - client_amount`,
     /// guaranteeing sum equality and absence of overflow.
+    ///
+    /// Uses `prop_flat_map` so the inner range's upper bound can reference
+    /// the outer parameter's value — proptest 1.4.0's `proptest!` macro
+    /// parses dependent tuple strategies but can mis-evaluate `RangeInclusive`
+    /// value types at strategy-construction time without this lift.
     #[test]
-    fn prop_split_accepts_exact_conservation(funded in 0i128..=MAX_LARGE, client_amount in 0i128..=funded) {
+    fn prop_split_accepts_exact_conservation(
+        (funded, client_amount) in (0i128..=MAX_LARGE)
+            .prop_flat_map(|funded| (Just(funded), 0i128..=funded)),
+    ) {
         let env = Env::default();
         let contract = payout_contract(&env, funded, 0, 0);
         let freelancer_amount = funded - client_amount;
@@ -272,11 +279,15 @@ proptest! {
     /// individually-conserved-but-jointly-exceeding-available} is rejected with
     /// [`Error::InvalidDisputeSplit`] or [`Error::PotentialOverflow`] as
     /// appropriate.
+    ///
+    /// Uses `prop_flat_map` for the dependent ranges — see
+    /// `prop_split_accepts_exact_conservation` for rationale.
     #[test]
     fn prop_split_rejects_invalid_inputs(
-        funded in 1i128..=MAX_LARGE,
-        client_in in -2i128..=funded.saturating_add(10),
-        freelancer_in in -2i128..=funded.saturating_add(10),
+        (funded, client_in, freelancer_in) in (1i128..=MAX_LARGE).prop_flat_map(|funded| {
+            let upper = funded.saturating_add(10);
+            (Just(funded), -2i128..=upper, -2i128..=upper)
+        }),
     ) {
         let env = Env::default();
         let contract = payout_contract(&env, funded, 0, 0);
@@ -344,10 +355,7 @@ fn split_overflow_surfaces_potential_overflow() {
 // ---------------------------------------------------------------------------
 
 proptest! {
-    #![proptest_config(ProptestConfig {
-        cases: PURE_CASES,
-        ..ProptestConfig::default()
-    })]
+    #![proptest_config(ProptestConfig::with_cases(PURE_CASES))]
 
     /// `final_status_after_resolution` returns [`ContractStatus::Refunded`]
     /// iff `refunded_amount == funded_amount`, regardless of `released_amount`.
@@ -425,6 +433,10 @@ fn dispute_resolution_code_uniqueness() {
 /// Run the full dispute flow on a freshly-minted contract and return the
 /// resulting state. Asserts conservation (`released + refunded == funded`)
 /// before returning so failing runs surface a clear diagnostic.
+///
+/// Wrapped in `catch_unwind` because Soroban test-env panics (auth failures,
+/// settled-state assertions) are otherwise opaque to proptest's failure
+/// reporting.
 fn run(end_amounts: &[i128], resolution: &DisputeResolution) -> Contract {
     let env = Env::default();
     env.mock_all_auths_allowing_non_root_auth();
@@ -482,10 +494,13 @@ fn run(end_amounts: &[i128], resolution: &DisputeResolution) -> Contract {
 fn fullrefund_integration_mark_refunded_and_conserves_for_random_totals() {
     let totals: &[i128] = &[10, 100, 1_000, 1_000_000];
     for &total in totals {
-        let contract = run(&[total], &DisputeResolution::FullRefund);
-        assert_eq!(contract.status, ContractStatus::Refunded);
-        assert_eq!(contract.refunded_amount, total);
-        assert_eq!(contract.released_amount, 0);
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let contract = run(&[total], &DisputeResolution::FullRefund);
+            assert_eq!(contract.status, ContractStatus::Refunded);
+            assert_eq!(contract.refunded_amount, total);
+            assert_eq!(contract.released_amount, 0);
+        }));
+        assert!(result.is_ok(), "FullRefund integration panicked for total={total}");
     }
 }
 
@@ -494,10 +509,13 @@ fn fullrefund_integration_mark_refunded_and_conserves_for_random_totals() {
 fn fullpayout_integration_mark_completed_and_conserves_for_random_totals() {
     let totals: &[i128] = &[10, 100, 1_000, 1_000_000];
     for &total in totals {
-        let contract = run(&[total], &DisputeResolution::FullPayout);
-        assert_eq!(contract.status, ContractStatus::Completed);
-        assert_eq!(contract.released_amount, total);
-        assert_eq!(contract.refunded_amount, 0);
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let contract = run(&[total], &DisputeResolution::FullPayout);
+            assert_eq!(contract.status, ContractStatus::Completed);
+            assert_eq!(contract.released_amount, total);
+            assert_eq!(contract.refunded_amount, 0);
+        }));
+        assert!(result.is_ok(), "FullPayout integration panicked for total={total}");
     }
 }
 
@@ -509,12 +527,15 @@ fn fullpayout_integration_mark_completed_and_conserves_for_random_totals() {
 fn partialrefund_integration_mark_completed_and_conserves_for_random_totals() {
     let totals: &[i128] = &[10, 33, 100, 333, 1_000, 999_999];
     for &total in totals {
-        let contract = run(&[total], &DisputeResolution::PartialRefund);
-        assert_eq!(contract.status, ContractStatus::Completed);
-        let expected_freelancer = total.saturating_mul(30) / 100;
-        let expected_client = total - expected_freelancer;
-        assert_eq!(contract.released_amount, expected_freelancer);
-        assert_eq!(contract.refunded_amount, expected_client);
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let contract = run(&[total], &DisputeResolution::PartialRefund);
+            assert_eq!(contract.status, ContractStatus::Completed);
+            let expected_freelancer = total.saturating_mul(30) / 100;
+            let expected_client = total - expected_freelancer;
+            assert_eq!(contract.released_amount, expected_freelancer);
+            assert_eq!(contract.refunded_amount, expected_client);
+        }));
+        assert!(result.is_ok(), "PartialRefund integration panicked for total={total}");
     }
 }
 
@@ -534,15 +555,18 @@ fn split_integration_conserves_for_random_legs() {
         (100, 0),
     ];
     for &(client_amt, freelancer_amt) in cases {
-        let contract = run(
-            &[client_amt + freelancer_amt],
-            &DisputeResolution::Split(DisputeSplit {
-                client_amount: client_amt,
-                freelancer_amount: freelancer_amt,
-            }),
-        );
-        assert_eq!(contract.status, ContractStatus::Completed);
-        assert_eq!(contract.released_amount, freelancer_amt);
-        assert_eq!(contract.refunded_amount, client_amt);
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let contract = run(
+                &[client_amt + freelancer_amt],
+                &DisputeResolution::Split(DisputeSplit {
+                    client_amount: client_amt,
+                    freelancer_amount: freelancer_amt,
+                }),
+            );
+            assert_eq!(contract.status, ContractStatus::Completed);
+            assert_eq!(contract.released_amount, freelancer_amt);
+            assert_eq!(contract.refunded_amount, client_amt);
+        }));
+        assert!(result.is_ok(), "Split integration panicked for c={client_amt} f={freelancer_amt}");
     }
 }
