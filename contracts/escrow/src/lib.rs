@@ -1656,28 +1656,98 @@ impl Escrow {
 
     /// Issues reputation credit for a completed contract.
     ///
-    /// # Comment length
-    /// `comment` must be between 1 and 200 **bytes** (inclusive). Because Soroban
-    /// `String::len()` returns the UTF-8 byte length, a multi-byte character (e.g.
-    /// a 3-byte emoji) counts as 3 toward the limit. ASCII characters are 1 byte each.
+    /// Once all milestones on a contract have been released (or a mix of
+    /// released and refunded), the contract transitions to
+    /// [`ContractStatus::Completed`] and the freelancer earns one
+    /// *pending reputation credit*. The client must consume that credit by
+    /// calling this function, which records a `rating` (1–5) and a text
+    /// `comment` on-chain and updates the freelancer's cumulative
+    /// [`types::Reputation`] record.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` – The Soroban execution environment (injected by the runtime).
+    /// * `contract_id` – The numeric ID of the completed escrow contract.
+    /// * `caller` – Address of the client; must match `contract.client`.
+    ///   `require_auth` is called on this address.
+    /// * `rating` – Integer score in the closed range \[1, 5\] (inclusive).
+    /// * `comment` – Freeform UTF-8 feedback; must be 1–200 **bytes**.
+    ///   Because [`soroban_sdk::String::len`] counts UTF-8 bytes, a 3-byte
+    ///   emoji occupies 3 bytes toward the 200-byte cap.
+    ///
+    /// # Returns
+    ///
+    /// `true` on success. The function panics on all error paths — it never
+    /// returns `false`.
     ///
     /// # Errors
-    /// * `ContractPaused` - If the contract is paused while not in emergency mode
-    /// * `EmergencyActive` - If the contract is in an active emergency pause
-    /// * `ContractNotFound` - If contract doesn't exist
-    /// * `UnauthorizedRole` - If caller is not the stored client
-    /// * `FreelancerMismatch` - If `freelancer` does not match the stored freelancer
-    /// * `InvalidRating` - If rating is not in [1, 5]
-    /// * `EmptyComment` - If comment is 0 bytes
-    /// * `CommentTooLong` - If comment exceeds 200 bytes
-    /// * `NotCompleted` - If contract status is not `Completed`
-    /// * `ReputationAlreadyIssued` - If reputation was already issued
-    /// * `SelfRating` - If client and freelancer are the same address
+    ///
+    /// The function panics with the following [`crate::EscrowError`] codes:
+    ///
+    /// | Error | Condition |
+    /// |---|---|
+    /// | `ContractPaused` | Contract is paused (non-emergency mode) |
+    /// | `EmergencyActive` | Emergency pause is active |
+    /// | `ContractNotFound` | `contract_id` does not map to an existing contract |
+    /// | `UnauthorizedRole` | `caller` is not the stored client address |
+    /// | `InvalidRating` | `rating < 1` or `rating > 5` |
+    /// | `EmptyComment` | `comment` has zero bytes |
+    /// | `CommentTooLong` | `comment` exceeds 200 bytes |
+    /// | `NotCompleted` | Contract status is not `Completed` |
+    /// | `ReputationAlreadyIssued` | Reputation was already issued for this contract |
+    /// | `SelfRating` | `contract.client == contract.freelancer` |
+    /// | `InvalidState` | No pending reputation credit exists for the freelancer |
     ///
     /// # Security
-    /// * Pause/emergency gate runs BEFORE contract state read so paused
-    ///   contracts cannot have reputation mutated while paused.
+    ///
+    /// * The pause/emergency gate runs **before** any contract state is read,
+    ///   so a paused contract cannot have its reputation record mutated.
     /// * The 200-byte cap prevents unbounded on-chain storage growth.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use soroban_sdk::{testutils::Address as _, vec, Address, Env, String};
+    /// # use escrow::{Escrow, EscrowClient, ReleaseAuthorization};
+    /// let env = Env::default();
+    /// env.mock_all_auths();
+    ///
+    /// // Deploy and initialise the contract.
+    /// let escrow_id = env.register(Escrow, ());
+    /// let escrow = EscrowClient::new(&env, &escrow_id);
+    /// let admin = Address::generate(&env);
+    /// escrow.initialize(&admin);
+    ///
+    /// // Create participants and a 3-milestone escrow.
+    /// let client_addr = Address::generate(&env);
+    /// let freelancer_addr = Address::generate(&env);
+    /// let milestones = vec![&env, 200_0000000_i128, 400_0000000_i128, 600_0000000_i128];
+    /// let contract_id = escrow.create_contract(
+    ///     &client_addr,
+    ///     &freelancer_addr,
+    ///     &None,
+    ///     &milestones,
+    ///     &ReleaseAuthorization::ClientOnly,
+    /// );
+    ///
+    /// // Deposit and release all milestones to reach Completed status.
+    /// escrow.deposit_funds(&contract_id, &client_addr, &1_200_0000000_i128);
+    /// for idx in 0_u32..3 {
+    ///     escrow.approve_milestone_release(&contract_id, &client_addr, &idx);
+    ///     escrow.release_milestone(&contract_id, &client_addr, &idx);
+    /// }
+    ///
+    /// // Issue a 5-star rating with a short comment.
+    /// let comment = String::from_str(&env, "Delivered on time, great communication!");
+    /// let ok = escrow.issue_reputation(&contract_id, &client_addr, &5, &comment);
+    /// assert!(ok);
+    ///
+    /// // The freelancer's reputation record is now populated.
+    /// let rep = escrow.get_reputation(&freelancer_addr).unwrap();
+    /// assert_eq!(rep.completed_contracts, 1);
+    /// assert_eq!(rep.total_rating, 5);
+    /// assert_eq!(rep.last_rating, 5);
+    /// ```
     pub fn issue_reputation(
         env: Env,
         contract_id: u32,
@@ -1760,8 +1830,61 @@ impl Escrow {
         true
     }
 
-    /// Returns the written feedback provided by the client when reputation was issued.
-    /// Returns `None` if reputation has not been issued for this contract.
+    /// Returns the written feedback the client provided when issuing reputation.
+    ///
+    /// The comment is stored under [`DataKey::ReputationComment`]`(contract_id)`.
+    /// Reading the value also bumps its TTL so it remains accessible for the
+    /// standard persistent-storage window.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` – The Soroban execution environment.
+    /// * `contract_id` – Numeric ID of the escrow contract to query.
+    ///
+    /// # Returns
+    ///
+    /// * `Some(comment)` – The UTF-8 string written by the client.
+    /// * `None` – Reputation has not yet been issued for this contract, or the
+    ///   entry has expired from storage.
+    ///
+    /// No authorisation is required; this is a read-only query.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use soroban_sdk::{testutils::Address as _, vec, Address, Env, String};
+    /// # use escrow::{Escrow, EscrowClient, ReleaseAuthorization};
+    /// let env = Env::default();
+    /// env.mock_all_auths();
+    ///
+    /// let escrow_id = env.register(Escrow, ());
+    /// let escrow = EscrowClient::new(&env, &escrow_id);
+    /// escrow.initialize(&Address::generate(&env));
+    ///
+    /// let client_addr = Address::generate(&env);
+    /// let freelancer_addr = Address::generate(&env);
+    /// let milestones = vec![&env, 200_0000000_i128, 400_0000000_i128, 600_0000000_i128];
+    /// let contract_id = escrow.create_contract(
+    ///     &client_addr, &freelancer_addr, &None, &milestones,
+    ///     &ReleaseAuthorization::ClientOnly,
+    /// );
+    ///
+    /// // Before reputation is issued the comment is absent.
+    /// assert!(escrow.get_reputation_comment(&contract_id).is_none());
+    ///
+    /// // Complete the contract and issue reputation.
+    /// escrow.deposit_funds(&contract_id, &client_addr, &1_200_0000000_i128);
+    /// for idx in 0_u32..3 {
+    ///     escrow.approve_milestone_release(&contract_id, &client_addr, &idx);
+    ///     escrow.release_milestone(&contract_id, &client_addr, &idx);
+    /// }
+    /// let comment = String::from_str(&env, "Excellent work!");
+    /// escrow.issue_reputation(&contract_id, &client_addr, &5, &comment);
+    ///
+    /// // Now the comment is readable.
+    /// let stored = escrow.get_reputation_comment(&contract_id).unwrap();
+    /// assert_eq!(stored, comment);
+    /// ```
     pub fn get_reputation_comment(env: Env, contract_id: u32) -> Option<String> {
         let comment_key = DataKey::ReputationComment(contract_id);
         let comment: Option<String> = env.storage().persistent().get(&comment_key);
@@ -1775,6 +1898,73 @@ impl Escrow {
         comment
     }
 
+    /// Returns the cumulative reputation record for a freelancer address.
+    ///
+    /// The [`types::Reputation`] struct aggregates every rating the address has
+    /// received across all completed escrow contracts:
+    ///
+    /// | Field | Description |
+    /// |---|---|
+    /// | `completed_contracts` | Number of contracts for which reputation was issued |
+    /// | `total_rating` | Sum of all individual ratings (each in \[1, 5\]) |
+    /// | `last_rating` | The most recent rating value |
+    ///
+    /// To obtain a decimal average divide `total_rating` by `completed_contracts`,
+    /// or use `get_average_rating` which returns the value pre-scaled to
+    /// basis points (×10 000).
+    ///
+    /// # Arguments
+    ///
+    /// * `env` – The Soroban execution environment.
+    /// * `address` – The freelancer address to query.
+    ///
+    /// # Returns
+    ///
+    /// * `Some(Reputation)` – A snapshot of the freelancer's aggregate record.
+    /// * `None` – No reputation entry exists yet (the address has never received
+    ///   a rating, or the entry has expired from persistent storage).
+    ///
+    /// No authorisation is required; this is a read-only query.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use soroban_sdk::{testutils::Address as _, vec, Address, Env, String};
+    /// # use escrow::{Escrow, EscrowClient, ReleaseAuthorization};
+    /// let env = Env::default();
+    /// env.mock_all_auths();
+    ///
+    /// let escrow_id = env.register(Escrow, ());
+    /// let escrow = EscrowClient::new(&env, &escrow_id);
+    /// escrow.initialize(&Address::generate(&env));
+    ///
+    /// let client_addr = Address::generate(&env);
+    /// let freelancer_addr = Address::generate(&env);
+    ///
+    /// // Unknown address returns None.
+    /// assert!(escrow.get_reputation(&freelancer_addr).is_none());
+    ///
+    /// // Complete a contract and issue a rating of 4.
+    /// let milestones = vec![&env, 200_0000000_i128, 400_0000000_i128, 600_0000000_i128];
+    /// let contract_id = escrow.create_contract(
+    ///     &client_addr, &freelancer_addr, &None, &milestones,
+    ///     &ReleaseAuthorization::ClientOnly,
+    /// );
+    /// escrow.deposit_funds(&contract_id, &client_addr, &1_200_0000000_i128);
+    /// for idx in 0_u32..3 {
+    ///     escrow.approve_milestone_release(&contract_id, &client_addr, &idx);
+    ///     escrow.release_milestone(&contract_id, &client_addr, &idx);
+    /// }
+    /// escrow.issue_reputation(
+    ///     &contract_id, &client_addr, &4,
+    ///     &String::from_str(&env, "Solid delivery."),
+    /// );
+    ///
+    /// let rep = escrow.get_reputation(&freelancer_addr).unwrap();
+    /// assert_eq!(rep.completed_contracts, 1);
+    /// assert_eq!(rep.total_rating, 4);
+    /// assert_eq!(rep.last_rating, 4);
+    /// ```
     pub fn get_reputation(env: Env, address: Address) -> Option<types::Reputation> {
         env.storage()
             .persistent()
@@ -1784,7 +1974,20 @@ impl Escrow {
     /// Returns the freelancer's average rating scaled to basis points (×10 000),
     /// or `None` if no reputation record exists or no contracts have been completed.
     ///
+    /// # Arguments
+    ///
+    /// * `env` – The Soroban execution environment.
+    /// * `address` – The freelancer address to query.
+    ///
+    /// # Returns
+    ///
+    /// * `Some(scaled_avg)` – `total_rating * 10_000 / completed_contracts`.
+    ///   Divide by `10_000` to recover the decimal average.
+    /// * `None` – No reputation record for `address`, or
+    ///   `completed_contracts == 0`.
+    ///
     /// # Scaling
+    ///
     /// `result = total_rating * 10_000 / completed_contracts`
     ///
     /// A raw rating of 5 on a single contract returns `50_000` (5.0000 on a
@@ -1792,6 +1995,58 @@ impl Escrow {
     ///
     /// Checked arithmetic is used throughout; division by zero is impossible
     /// because `None` is returned whenever `completed_contracts == 0`.
+    ///
+    /// No authorisation is required; this is a read-only query.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use soroban_sdk::{testutils::Address as _, vec, Address, Env, String};
+    /// # use escrow::{Escrow, EscrowClient, ReleaseAuthorization};
+    /// let env = Env::default();
+    /// env.mock_all_auths();
+    ///
+    /// let escrow_id = env.register(Escrow, ());
+    /// let escrow = EscrowClient::new(&env, &escrow_id);
+    /// escrow.initialize(&Address::generate(&env));
+    ///
+    /// // No record yet → None.
+    /// let unknown = Address::generate(&env);
+    /// assert!(escrow.get_average_rating(&unknown).is_none());
+    ///
+    /// // Helper: create, fund, complete, and rate a contract.
+    /// let client_addr = Address::generate(&env);
+    /// let freelancer_addr = Address::generate(&env);
+    /// let milestones = vec![&env, 200_0000000_i128, 400_0000000_i128, 600_0000000_i128];
+    ///
+    /// let cid1 = escrow.create_contract(
+    ///     &client_addr, &freelancer_addr, &None, &milestones,
+    ///     &ReleaseAuthorization::ClientOnly,
+    /// );
+    /// escrow.deposit_funds(&cid1, &client_addr, &1_200_0000000_i128);
+    /// for idx in 0_u32..3 {
+    ///     escrow.approve_milestone_release(&cid1, &client_addr, &idx);
+    ///     escrow.release_milestone(&cid1, &client_addr, &idx);
+    /// }
+    /// // Rating: 3  →  3 * 10_000 / 1 = 30_000
+    /// escrow.issue_reputation(&cid1, &client_addr, &3, &String::from_str(&env, "Good."));
+    /// assert_eq!(escrow.get_average_rating(&freelancer_addr), Some(30_000));
+    ///
+    /// // A second client rates the same freelancer 5.
+    /// // total_rating = 8, completed = 2  →  8 * 10_000 / 2 = 40_000
+    /// let client2 = Address::generate(&env);
+    /// let cid2 = escrow.create_contract(
+    ///     &client2, &freelancer_addr, &None, &milestones,
+    ///     &ReleaseAuthorization::ClientOnly,
+    /// );
+    /// escrow.deposit_funds(&cid2, &client2, &1_200_0000000_i128);
+    /// for idx in 0_u32..3 {
+    ///     escrow.approve_milestone_release(&cid2, &client2, &idx);
+    ///     escrow.release_milestone(&cid2, &client2, &idx);
+    /// }
+    /// escrow.issue_reputation(&cid2, &client2, &5, &String::from_str(&env, "Outstanding!"));
+    /// assert_eq!(escrow.get_average_rating(&freelancer_addr), Some(40_000));
+    /// ```
     pub fn get_average_rating(env: Env, address: Address) -> Option<i128> {
         /// Basis-point scaling factor (×10 000 preserves four decimal places).
         const SCALE: i128 = 10_000;
@@ -1812,9 +2067,66 @@ impl Escrow {
 
     /// Returns the number of completed contracts awaiting a reputation rating.
     ///
+    /// Each time a contract transitions to [`ContractStatus::Completed`] (all
+    /// milestones released, or a mix of released and refunded) the freelancer
+    /// earns one pending credit. Calling `issue_reputation` consumes
+    /// exactly one credit. Fully-refunded contracts (`Refunded` status) do
+    /// **not** accrue a credit.
+    ///
     /// This value increments once per completed contract and decrements once
     /// per successful `issue_reputation` call. Refunded contracts do not accrue
     /// pending reputation credits.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` – The Soroban execution environment.
+    /// * `address` – The freelancer address to query.
+    ///
+    /// # Returns
+    ///
+    /// The number of pending credits as an `i128`. Returns `0` when no record
+    /// exists. The value should not be negative under normal operation.
+    ///
+    /// No authorisation is required; this is a read-only query.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use soroban_sdk::{testutils::Address as _, vec, Address, Env, String};
+    /// # use escrow::{Escrow, EscrowClient, ReleaseAuthorization};
+    /// let env = Env::default();
+    /// env.mock_all_auths();
+    ///
+    /// let escrow_id = env.register(Escrow, ());
+    /// let escrow = EscrowClient::new(&env, &escrow_id);
+    /// escrow.initialize(&Address::generate(&env));
+    ///
+    /// let freelancer_addr = Address::generate(&env);
+    ///
+    /// // No completed contracts yet → 0 credits.
+    /// assert_eq!(escrow.get_pending_reputation_credits(&freelancer_addr), 0);
+    ///
+    /// // Complete a contract — credit increments to 1.
+    /// let client_addr = Address::generate(&env);
+    /// let milestones = vec![&env, 200_0000000_i128, 400_0000000_i128, 600_0000000_i128];
+    /// let contract_id = escrow.create_contract(
+    ///     &client_addr, &freelancer_addr, &None, &milestones,
+    ///     &ReleaseAuthorization::ClientOnly,
+    /// );
+    /// escrow.deposit_funds(&contract_id, &client_addr, &1_200_0000000_i128);
+    /// for idx in 0_u32..3 {
+    ///     escrow.approve_milestone_release(&contract_id, &client_addr, &idx);
+    ///     escrow.release_milestone(&contract_id, &client_addr, &idx);
+    /// }
+    /// assert_eq!(escrow.get_pending_reputation_credits(&freelancer_addr), 1);
+    ///
+    /// // Issuing reputation consumes the credit — back to 0.
+    /// escrow.issue_reputation(
+    ///     &contract_id, &client_addr, &5,
+    ///     &String::from_str(&env, "Flawless execution."),
+    /// );
+    /// assert_eq!(escrow.get_pending_reputation_credits(&freelancer_addr), 0);
+    /// ```
     pub fn get_pending_reputation_credits(env: Env, address: Address) -> i128 {
         env.storage()
             .persistent()
