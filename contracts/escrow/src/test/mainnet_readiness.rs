@@ -1,6 +1,10 @@
 use soroban_sdk::{testutils::Address as _, testutils::Events, testutils::Ledger, Address, Env};
 
-use crate::{Escrow, EscrowClient, EscrowError};
+use super::{
+    assert_contract_error, complete_contract, default_milestones, generated_participants,
+    register_client,
+};
+use crate::{types::CONTRACT_SUMMARY_SCHEMA_VERSION, Error, Escrow, EscrowClient, EscrowError};
 
 /// Returns a fresh (Env, contract Address) pair with all auths mocked.
 fn setup() -> (Env, Address) {
@@ -85,7 +89,7 @@ fn unauthorized_set_governed_params_does_not_set_flag() {
     client.initialize(&admin);
 
     let result = client.try_set_governed_params(&fake_admin, &1000_u32, &500_000_000_000_i128);
-    super::assert_contract_error(result, EscrowError::UnauthorizedRole);
+    super::assert_contract_error(result, Error::UnauthorizedRole);
 
     let info = client.get_mainnet_readiness_info();
     assert!(
@@ -103,7 +107,7 @@ fn invalid_set_governed_params_does_not_set_flag() {
     client.initialize(&admin);
 
     let result = client.try_set_governed_params(&admin, &20_000_u32, &500_000_000_000_i128);
-    super::assert_contract_error(result, crate::Error::InvalidProtocolParameters);
+    super::assert_contract_error(result, Error::InvalidProtocolParameters);
 
     let info = client.get_mainnet_readiness_info();
     assert!(
@@ -241,8 +245,8 @@ fn double_initialize_panics() {
 fn finalized_record_carries_current_schema_version() {
     let env = Env::default();
     env.mock_all_auths();
-    let client = super::register_client(&env);
-    let (client_addr, _freelancer, contract_id) = super::complete_contract(&env, &client);
+    let client = register_client(&env);
+    let (client_addr, _freelancer, contract_id) = complete_contract(&env, &client);
 
     assert!(client.finalize_contract(&contract_id, &client_addr));
 
