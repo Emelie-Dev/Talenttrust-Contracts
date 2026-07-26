@@ -9,8 +9,8 @@
 
 use crate::ttl::ADMIN_ROTATION_MIN_DELAY_LEDGERS;
 use crate::{
-    DataKey, Error, Escrow, EscrowArgs, EscrowClient, GovernedParameters, PendingAdminProposal,
-    ReadinessChecklist,
+    DataKey, DisputeConfig, Error, Escrow, EscrowArgs, EscrowClient, GovernedParameters,
+    PendingAdminProposal, ReadinessChecklist,
 };
 use soroban_sdk::{symbol_short, Address, Env, Symbol};
 
@@ -251,5 +251,43 @@ impl Escrow {
     /// Retrieve the current governed parameters.
     pub fn get_governed_parameters(env: Env) -> Option<GovernedParameters> {
         env.storage().persistent().get(&DataKey::GovernedParameters)
+    }
+
+    /// Read-only view returning the disputes configuration values without mutating storage.
+    /// Returns sensible default values before initialization or if unconfigured.
+    pub fn get_disputes_config(env: Env) -> DisputeConfig {
+        env.storage()
+            .persistent()
+            .get(&DataKey::DisputeConfigKey)
+            .unwrap_or_default()
+    }
+
+    /// Read-only view alias returning disputes configuration values without mutating storage.
+    pub fn get_dispute_config(env: Env) -> DisputeConfig {
+        Self::get_disputes_config(env)
+    }
+
+    /// Admin-gated entrypoint to update disputes configuration.
+    pub fn set_disputes_config(
+        env: Env,
+        freelancer_share_bps: u32,
+        client_share_bps: u32,
+    ) -> bool {
+        Self::require_initialized(&env);
+        let admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| env.panic_with_error(Error::NotInitialized));
+        admin.require_auth();
+
+        let config = DisputeConfig {
+            partial_refund_freelancer_bps: freelancer_share_bps,
+            partial_refund_client_bps: client_share_bps,
+        };
+        env.storage()
+            .persistent()
+            .set(&DataKey::DisputeConfigKey, &config);
+        true
     }
 }

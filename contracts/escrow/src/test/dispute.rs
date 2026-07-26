@@ -25,8 +25,8 @@
 #![cfg(test)]
 
 use crate::{
-    Contract, ContractStatus, DisputeResolution, DisputeSplit, Error, Escrow, EscrowClient,
-    ReleaseAuthorization,
+    Contract, ContractStatus, DisputeConfig, DisputeResolution, DisputeSplit, Error, Escrow,
+    EscrowClient, ReleaseAuthorization,
 };
 use soroban_sdk::{testutils::Address as _, vec, Address, Env};
 
@@ -762,4 +762,70 @@ fn resolve_after_finalize_is_rejected() {
         client.try_resolve_dispute(&contract_id, &arbiter_addr, &DisputeResolution::FullRefund),
         Error::AlreadyFinalized,
     );
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests: disputes configuration view
+// ---------------------------------------------------------------------------
+
+#[test]
+fn disputes_config_default_before_init() {
+    let env = Env::default();
+    let id = env.register(Escrow, ());
+    let client = EscrowClient::new(&env, &id);
+
+    // Call get_disputes_config before initialization - returns sensible default values
+    let config = client.get_disputes_config();
+    assert_eq!(config, DisputeConfig::default());
+    assert_eq!(config.partial_refund_freelancer_bps, 3000);
+    assert_eq!(config.partial_refund_client_bps, 7000);
+
+    let alias_config = client.get_dispute_config();
+    assert_eq!(alias_config, DisputeConfig::default());
+}
+
+#[test]
+fn disputes_config_default_after_init() {
+    let env = make_env();
+    let client = make_client(&env);
+
+    let config = client.get_disputes_config();
+    assert_eq!(config, DisputeConfig::default());
+    assert_eq!(config.partial_refund_freelancer_bps, 3000);
+    assert_eq!(config.partial_refund_client_bps, 7000);
+}
+
+#[test]
+fn disputes_config_values_after_set() {
+    let env = make_env();
+    let id = env.register(Escrow, ());
+    let client = EscrowClient::new(&env, &id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let new_config = DisputeConfig {
+        partial_refund_freelancer_bps: 4000,
+        partial_refund_client_bps: 6000,
+    };
+
+    assert!(client.set_disputes_config(&4000, &6000));
+
+    let config = client.get_disputes_config();
+    assert_eq!(config, new_config);
+    assert_eq!(config.partial_refund_freelancer_bps, 4000);
+    assert_eq!(config.partial_refund_client_bps, 6000);
+
+    let alias_config = client.get_dispute_config();
+    assert_eq!(alias_config, new_config);
+}
+
+#[test]
+fn disputes_config_read_only_does_not_mutate_storage() {
+    let env = make_env();
+    let id = env.register(Escrow, ());
+    let client = EscrowClient::new(&env, &id);
+
+    let config1 = client.get_disputes_config();
+    let config2 = client.get_disputes_config();
+    assert_eq!(config1, config2);
 }

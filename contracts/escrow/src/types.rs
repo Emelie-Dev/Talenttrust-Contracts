@@ -1,4 +1,4 @@
-use soroban_sdk::{contracterror, contracttype, Address, String, Vec};
+use soroban_sdk::{contracterror, contracttype, Address, Env, String, Val, Vec};
 
 // ── Indexer summary types ────────────────────────────────────────────────────
 
@@ -52,6 +52,25 @@ pub struct ContractBounds {
     pub max_fee_bps: u32,
 }
 
+/// Configuration parameters for dispute resolutions.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DisputeConfig {
+    /// Percentage of remaining funds allocated to the freelancer in partial refunds (in basis points, 3000 = 30%).
+    pub partial_refund_freelancer_bps: u32,
+    /// Percentage of remaining funds allocated to the client in partial refunds (in basis points, 7000 = 70%).
+    pub partial_refund_client_bps: u32,
+}
+
+impl Default for DisputeConfig {
+    fn default() -> Self {
+        DisputeConfig {
+            partial_refund_freelancer_bps: 3000,
+            partial_refund_client_bps: 7000,
+        }
+    }
+}
+
 // ── Core contract state ──────────────────────────────────────────────────────
 
 // ─── Storage keys ──────────────────────────────────────────────────────────────
@@ -90,6 +109,8 @@ pub enum DataKey {
     Finalization(u32),
     // Settlement token
     SettlementToken,
+    // Dispute configuration
+    DisputeConfigKey,
 }
 
 /// Canonical contract error type for all entrypoint-facing errors.

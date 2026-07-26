@@ -285,6 +285,16 @@ The list intentionally omits planned or reserved entrypoints that are not implem
 - Events: `("dispute", "resolved")`
 - Errors: `ContractPaused`, `EmergencyActive`, `ContractNotFound`, `UnauthorizedRole`, `InvalidStatusTransition`, `InvalidDisputeSplit`, `AccountingInvariantViolated`, `PotentialOverflow`, `AlreadyFinalized`
 
+### get_disputes_config
+
+- Signature: `get_disputes_config(env: Env) -> DisputeConfig`
+- Kind: Read-only
+- Auth: None
+- Semantics: Returns the current disputes configuration parameters without mutating storage. Returns sensible default values before initialization or if unconfigured.
+- Events: None
+- Errors: None
+
+
 ### issue_reputation
 
 - Signature: `issue_reputation(env: Env, contract_id: u32, caller: Address, rating: u32, comment: String) -> bool`

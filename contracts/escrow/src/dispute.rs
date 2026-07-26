@@ -9,9 +9,30 @@
 use soroban_sdk::{contractimpl, symbol_short, Address, Env};
 
 use crate::{
-    safe_add_amounts, Contract, ContractStatus, DataKey, DisputeResolution, DisputeSplit, Error,
-    Escrow, EscrowArgs, EscrowClient,
+    safe_add_amounts, Contract, ContractStatus, DataKey, DisputeConfig, DisputeResolution,
+    DisputeSplit, Error,
 };
+
+// ---------------------------------------------------------------------------
+// disputes configuration helpers
+// ---------------------------------------------------------------------------
+
+/// Read-only getter for disputes configuration without mutating storage.
+/// Returns sensible default (`partial_refund_freelancer_share_bps = 3000`, `partial_refund_client_share_bps = 7000`)
+/// before initialization or if storage is unconfigured.
+pub fn get_dispute_config(env: &Env) -> Option<DisputeConfig> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::DisputeConfigKey)
+}
+
+/// Storage writer for disputes configuration.
+pub fn set_dispute_config(env: &Env, config: DisputeConfig) -> bool {
+    env.storage()
+        .persistent()
+        .set(&DataKey::DisputeConfigKey, &config);
+    true
+}
 
 // ---------------------------------------------------------------------------
 // resolution_payouts: pure arithmetic for dispute payout calculations
@@ -81,9 +102,3 @@ pub fn final_status_after_resolution(contract: &Contract) -> ContractStatus {
     }
 }
 
-// ---------------------------------------------------------------------------
-// raise_dispute / resolve_dispute entrypoints
-// ---------------------------------------------------------------------------
-
-// Dispute entrypoints are implemented in `contracts/escrow/src/lib.rs`.
-// This module retains dispute-related helpers only.
