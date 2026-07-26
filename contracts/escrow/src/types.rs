@@ -1,7 +1,4 @@
-use soroban_sdk::{
-    contracterror, contracttype, Address, ConversionError, Env, IntoVal, String, Symbol,
-    TryFromVal, Val, Vec,
-};
+use soroban_sdk::{contracterror, contracttype, Address, Env, String, Val, Vec};
 
 // ── Indexer summary types ────────────────────────────────────────────────────
 
@@ -85,7 +82,26 @@ pub struct ContractBounds {
     pub max_disputes: u32,
 }
 
-// ── Storage keys ──────────────────────────────────────────────────────────────
+/// Configuration parameters for dispute resolutions.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DisputeConfig {
+    /// Percentage of remaining funds allocated to the freelancer in partial refunds (in basis points, 3000 = 30%).
+    pub partial_refund_freelancer_bps: u32,
+    /// Percentage of remaining funds allocated to the client in partial refunds (in basis points, 7000 = 70%).
+    pub partial_refund_client_bps: u32,
+}
+
+impl Default for DisputeConfig {
+    fn default() -> Self {
+        DisputeConfig {
+            partial_refund_freelancer_bps: 3000,
+            partial_refund_client_bps: 7000,
+        }
+    }
+}
+
+// ── Core contract state ──────────────────────────────────────────────────────
 
 /// Typed storage key for contract-owned entries that previously used ad-hoc
 /// tuple keys such as `(DataKey::Contract(id), Symbol("milestones"))`.
@@ -171,8 +187,8 @@ pub enum DataKey {
     Finalization(u32),
     // Settlement token
     SettlementToken,
-    // Dispute metadata (raised/resolved state)
-    Dispute(u32),
+    // Dispute configuration
+    DisputeConfigKey,
 }
 
 /// Canonical contract error type for all entrypoint-facing errors.

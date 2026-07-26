@@ -294,14 +294,15 @@ The list intentionally omits planned or reserved entrypoints that are not implem
 - Events: `("dispute", "resolved")`
 - Errors: `ContractPaused`, `EmergencyActive`, `ContractNotFound`, `UnauthorizedRole`, `InvalidStatusTransition`, `InvalidDisputeSplit`, `AccountingInvariantViolated`, `PotentialOverflow`, `AlreadyFinalized`
 
-### rollback_dispute
+### get_disputes_config
 
-- Signature: `rollback_dispute(env: Env, contract_id: u32) -> bool`
-- Kind: Mutating
-- Auth: Stored admin `require_auth()`
-- Semantics: Restores an unresolved dispute to its recorded `Funded` or `PartiallyFunded` status only when the contract and milestones are unchanged since the dispute opened. Refund, resolution, or finalization permanently closes the rollback window.
-- Events: `("rollback", contract_id)` with `(admin, Disputed, restored_status, timestamp)`
-- Errors: `ContractPaused`, `EmergencyActive`, `ContractNotFound`, `AlreadyFinalized`, `RollbackNotAllowed`, `RollbackStateChanged`
+- Signature: `get_disputes_config(env: Env) -> DisputeConfig`
+- Kind: Read-only
+- Auth: None
+- Semantics: Returns the current disputes configuration parameters without mutating storage. Returns sensible default values before initialization or if unconfigured.
+- Events: None
+- Errors: None
+
 
 ### issue_reputation
 
