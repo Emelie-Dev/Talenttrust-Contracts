@@ -8,25 +8,7 @@ use soroban_sdk::{
 #[allow(dead_code)]
 pub const CONTRACT_SUMMARY_SCHEMA_VERSION: u32 = 1;
 
-/// Current reputation storage schema version.
-///
-/// Increment this constant whenever the [`Reputation`] struct gains or removes
-/// fields, so the migration path can detect and upgrade stale on-chain layouts.
-///
-/// | Version | Description |
-/// |---------|-------------|
-/// | 1 (absent) | Original three-field layout: `completed_contracts`, `total_rating`, `last_rating`. |
-/// | 2 (current) | Same fields plus explicit `schema_version` marker written to storage. |
-pub const REPUTATION_STORAGE_VERSION: u32 = 2;
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct MilestoneSummary {
-    pub index: u32,
-    pub amount: i128,
-    pub released: bool,
-    pub refunded: bool,
-}
+use crate::milestones::{MilestoneSummary, ReleaseAuthorization};
 
 /// Lightweight milestone entry returned by the paginated milestones view.
 ///
@@ -273,35 +255,6 @@ pub struct SettlementState {
     pub token: Option<Address>,
     /// Protocol fees accrued in the settlement asset, in stroops.
     pub accumulated_protocol_fees: i128,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Milestone {
-    pub amount: i128,
-    pub funded_amount: i128,
-    pub released: bool,
-    pub refunded: bool,
-    pub work_evidence: Option<String>,
-    pub refunded_amount: i128,
-    pub deadline: Option<u64>,
-}
-
-#[contracttype]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ReleaseAuthorization {
-    ClientOnly = 0,
-    ClientAndArbiter = 1,
-    ArbiterOnly = 2,
-    MultiSig = 3,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct MilestoneApprovals {
-    pub client_approved: bool,
-    pub freelancer_approved: bool,
-    pub arbiter_approved: bool,
 }
 
 #[contracttype]

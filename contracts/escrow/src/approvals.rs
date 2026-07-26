@@ -10,9 +10,8 @@
 //! `PENDING_APPROVAL_TTL_LEDGERS`. Missing or expired approvals fail closed.
 
 use crate::ttl::{PENDING_APPROVAL_BUMP_THRESHOLD, PENDING_APPROVAL_TTL_LEDGERS};
-use crate::types::{
-    ArbiterApprovalKey, Contract, ContractStatus, DataKey, Error, Milestone, MilestoneApprovals,
-    ReleaseAuthorization,
+use crate::{
+    Contract, ContractStatus, DataKey, Error, Milestone, MilestoneApprovals, ReleaseAuthorization,
 };
 use crate::MilestonesKey;
 use soroban_sdk::{Address, Env, Vec};
