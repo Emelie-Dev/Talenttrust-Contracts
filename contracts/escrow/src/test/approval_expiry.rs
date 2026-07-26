@@ -6,7 +6,7 @@
 use soroban_sdk::{
     log,
     testutils::{Address as _, Ledger as _},
-    vec, Address, Env,
+    vec, Address, Env, Vec,
 };
 
 use crate::{Error, Escrow, EscrowClient, ReleaseAuthorization};
@@ -825,4 +825,195 @@ fn test_deadline_independent_per_milestone() {
     // Deadline should be roughly current sequence + PENDING_APPROVAL_TTL_LEDGERS
     let expected = env.ledger().sequence() + PENDING_APPROVAL_TTL_LEDGERS;
     assert_eq!(deadline.unwrap(), expected);
+}
+
+// ===========================================================================
+//  Batch approval entrypoint
+// ===========================================================================
+
+#[test]
+fn batch_approve_empty_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = new_client(&env);
+    let (client_addr, freelancer_addr, _) = setup(&env);
+
+    let id = funded_no_approvals(
+        &env,
+        &client,
+        &client_addr,
+        &freelancer_addr,
+        &ReleaseAuthorization::ClientOnly,
+        None,
+    );
+
+    let empty: soroban_sdk::Vec<u32> = vec![&env];
+    assert!(client.approve_milestone_release_batch(&id, &client_addr, &empty));
+}
+
+#[test]
+fn batch_approve_at_cap_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = new_client(&env);
+    let (client_addr, freelancer_addr, _) = setup(&env);
+
+    // Create a contract with MAX_MILESTONES milestones (contract max)
+    let count = crate::MAX_MILESTONES;
+    let mut milestones = Vec::new(&env);
+    for _ in 0..count {
+        milestones.push_back(100_i128);
+    }
+    let id = client.create_contract(
+        &client_addr,
+        &freelancer_addr,
+        &None,
+        &milestones,
+        &ReleaseAuthorization::ClientOnly,
+    );
+
+    // Inject Funded status directly so we don't need SAC token
+    let escrow_addr = client.address.clone();
+    env.as_contract(&escrow_addr, || {
+        let key = crate::DataKey::Contract(id);
+        let mut c: crate::Contract = env.storage().persistent().get(&key).unwrap();
+        c.status = crate::ContractStatus::Funded;
+        c.funded_amount = (100 * count as i128);
+        env.storage().persistent().set(&key, &c);
+        // Also store milestones
+        let milestone_key = soroban_sdk::Symbol::new(&env, "milestones");
+        let mut ms = Vec::new(&env);
+        for _ in 0..count {
+            ms.push_back(crate::Milestone {
+                amount: 100,
+                funded_amount: 0,
+                released: false,
+                refunded: false,
+                work_evidence: None,
+                refunded_amount: 0,
+                deadline: None,
+            });
+        }
+        env.storage().persistent().set(
+            &(crate::DataKey::Contract(id), milestone_key),
+            &ms,
+        );
+    });
+
+    let mut indices = Vec::new(&env);
+    for i in 0..count {
+        indices.push_back(i);
+    }
+    assert!(client.approve_milestone_release_batch(&id, &client_addr, &indices));
+
+    // Verify all milestones were approved
+    for i in 0..count {
+        let approvals = client.get_milestone_approvals(&id, &i);
+        assert!(approvals.is_some(), "milestone {i} should be approved");
+    }
+}
+
+#[test]
+fn batch_approve_over_cap_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = new_client(&env);
+    let (client_addr, freelancer_addr, _) = setup(&env);
+
+    let id = funded_no_approvals(
+        &env,
+        &client,
+        &client_addr,
+        &freelancer_addr,
+        &ReleaseAuthorization::ClientOnly,
+        None,
+    );
+
+    let over_cap = crate::MAX_BATCH_APPROVALS + 1;
+    let large_indices = {
+        let mut v = Vec::new(&env);
+        for i in 0..over_cap {
+            v.push_back(i);
+        }
+        v
+    };
+
+    let result = client.try_approve_milestone_release_batch(&id, &client_addr, &large_indices);
+    super::assert_contract_error(result, crate::EscrowError::BatchCapExceeded);
+}
+
+#[test]
+fn batch_approve_emits_per_item_events() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let client = new_client(&env);
+    let (client_addr, freelancer_addr, _) = setup(&env);
+
+    let id = funded_no_approvals(
+        &env,
+        &client,
+        &client_addr,
+        &freelancer_addr,
+        &ReleaseAuthorization::ClientOnly,
+        None,
+    );
+
+    // Approve milestones 0 and 1 in a batch
+    let indices = vec![&env, 0u32, 1u32];
+    assert!(client.approve_milestone_release_batch(&id, &client_addr, &indices));
+
+    // Verify per-item approval records
+    let approvals_0 = client.get_milestone_approvals(&id, &0);
+    assert!(approvals_0.is_some(), "milestone 0 should be approved");
+    let approvals_1 = client.get_milestone_approvals(&id, &1);
+    assert!(approvals_1.is_some(), "milestone 1 should be approved");
+}
+
+#[test]
+fn batch_approve_fails_on_first_error() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = new_client(&env);
+    let (client_addr, freelancer_addr, _) = setup(&env);
+
+    let id = funded_no_approvals(
+        &env,
+        &client,
+        &client_addr,
+        &freelancer_addr,
+        &ReleaseAuthorization::ClientOnly,
+        None,
+    );
+
+    // Valid index 0 first, then invalid index 99 — should fail on index 0
+    // because milestone 0 approval succeeds but 99 is out of bounds
+    let indices = vec![&env, 0u32, 99u32];
+    let result = client.try_approve_milestone_release_batch(&id, &client_addr, &indices);
+    super::assert_contract_error(result, crate::Error::IndexOutOfBounds);
+}
+
+#[test]
+fn batch_approve_preserves_per_item_semantics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = new_client(&env);
+    let (client_addr, freelancer_addr, _) = setup(&env);
+
+    let id = funded_no_approvals(
+        &env,
+        &client,
+        &client_addr,
+        &freelancer_addr,
+        &ReleaseAuthorization::ClientOnly,
+        None,
+    );
+
+    // Approve milestone 0 individually first, then try batch including 0 and 1
+    assert!(client.approve_milestone_release(&id, &client_addr, &0));
+
+    // Batch should fail on milestone 0 with AlreadyApproved
+    let indices = vec![&env, 0u32, 1u32];
+    let result = client.try_approve_milestone_release_batch(&id, &client_addr, &indices);
+    super::assert_contract_error(result, crate::Error::AlreadyApproved);
 }

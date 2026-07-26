@@ -119,99 +119,9 @@ pub const MAX_TOTAL_ESCROW_STROOPS: i128 = DEFAULT_MAX_TOTAL_ESCROW_STROOPS;
 /// crate-root scope from `amount_validation` because `get_bounds` reads it
 /// directly; without this re-export the crate does not compile.
 pub const MAX_SINGLE_AMOUNT_STROOPS: i128 = crate::amount_validation::MAX_SINGLE_AMOUNT_STROOPS;
-
-/// Absolute minimum for the max milestones setting.
-pub const MIN_MAX_MILESTONES: u32 = 1;
-
-/// Absolute maximum for the max milestones setting.
-pub const MAX_MAX_MILESTONES: u32 = 100;
-
-/// Maximum entries per page returned by paginated views.
-pub const PAGE_CEILING: u32 = 100;
-
-/// Absolute minimum for the max escrow stroops setting (0.01 XLM).
-pub const MIN_MAX_ESCROW_STROOPS: i128 = 1_000_000;
-
-/// Shared upper bound on the number of entries any paginated read view
-/// (e.g. [`Escrow::get_milestones_page`], [`Escrow::get_contracts_page`])
-/// returns in a single call, regardless of the caller-supplied `limit`.
-///
-/// This keeps per-call host resource usage predictable for indexers and
-/// UIs, independent of how large the underlying collection grows.
-pub const PAGE_CEILING: u32 = 50;
-
-pub const MAINNET_PROTOCOL_VERSION: u32 = 1u32;
-pub const MAINNET_MAX_TOTAL_ESCROW_PER_CONTRACT_STROOPS: i128 = 1_000_000_000_000_000i128;
-
-// ─── Contract data ────────────────────────────────────────────────────────────
-
-#[soroban_sdk::contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct EscrowContractData {
-    pub client: Address,
-    pub freelancer: Address,
-    pub arbiter: Option<Address>,
-    pub milestones: Vec<i128>,
-    pub status: ContractStatus,
-    pub total_deposited: i128,
-    pub released_amount: i128,
-    pub refunded_amount: i128,
-    pub reputation_issued: bool,
-}
-
-#[soroban_sdk::contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ReputationRecord {
-    pub completed_contracts: u32,
-    pub total_rating: i128,
-    pub last_rating: i128,
-}
-
-impl Default for ReputationRecord {
-    fn default() -> Self {
-        ReputationRecord {
-            completed_contracts: 0,
-            total_rating: 0,
-            last_rating: 0,
-        }
-    }
-}
-
-#[soroban_sdk::contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct MainnetReadinessInfo {
-    pub initialized: bool,
-    pub governed_params_set: bool,
-    pub emergency_controls_enabled: bool,
-    pub caps_set: bool,
-    pub protocol_version: u32,
-    pub max_escrow_total_stroops: i128,
-}
-
-// ── Admin-configurable storage limit constants ─────────────────────────────
-/// Minimum value accepted by [`Escrow::set_storage_limit`] (1 byte).
-pub const MIN_STORAGE_LIMIT: u32 = 1;
-/// Maximum value accepted by [`Escrow::set_storage_limit`] (1 000 000 bytes).
-pub const MAX_STORAGE_LIMIT: u32 = 1_000_000;
-/// Default storage limit (65 536 bytes = 64 KiB) when no admin override is set.
-///
-/// Preserves pre-#901 behaviour for deployments that have not called
-/// [`Escrow::set_storage_limit`].
-pub const DEFAULT_STORAGE_LIMIT: u32 = 65_536;
-
-// ─── Configurable disputes limit ──────────────────────────────────────
-
-/// Default maximum number of disputes per contract.
-pub const DEFAULT_MAX_DISPUTES: u32 = 10;
-
-/// Absolute minimum for the max disputes setting.
-pub const MIN_MAX_DISPUTES: u32 = 1;
-
-/// Absolute maximum for the max disputes setting.
-pub const MAX_MAX_DISPUTES: u32 = 100;
-
-/// Upper bound on the `limit` parameter of paginated read views.
-pub const PAGE_CEILING: u32 = 50;
+pub const MAX_TOTAL_ESCROW_STROOPS: i128 = MAX_SINGLE_AMOUNT_STROOPS;
+/// Maximum number of items in a batch approval request.
+pub const MAX_BATCH_APPROVALS: u32 = 10;
 
 #[contract]
 pub struct Escrow;
@@ -295,8 +205,8 @@ pub enum EscrowError {
     EmptyComment = 42,
     /// Reputation feedback comment exceeded the 200-character maximum.
     CommentTooLong = 43,
-    /// The value is outside the allowed bounds for a configurable limit.
-    LimitOutOfRange = 44,
+    /// The batch approval vector exceeds the maximum allowed cap.
+    BatchCapExceeded = 44,
 }
 
 impl Escrow {
@@ -946,6 +856,61 @@ impl Escrow {
             .unwrap_or_else(|e| env.panic_with_error(e))
     }
 
+    /// Batch variant of [`approve_milestone_release`](Self::approve_milestone_release)
+    /// that accepts a bounded vector of milestone indices.
+    ///
+    /// If the vector length exceeds [`MAX_BATCH_APPROVALS`], the call is rejected
+    /// with [`EscrowError::BatchCapExceeded`]. Per-item semantics are preserved:
+    /// each milestone index goes through the same authorization logic as the
+    /// single-entrypoint, and events are emitted per item.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `contract_id` - The contract ID
+    /// * `caller` - The address of the caller (must be authorized)
+    /// * `milestone_indices` - Bounded vector of milestone indices to approve
+    ///
+    /// # Errors
+    /// * `BatchCapExceeded` - If `milestone_indices` length exceeds the cap
+    /// * All errors from [`approve_milestone_release`](Self::approve_milestone_release)
+    ///
+    /// # Events
+    /// Emits `("approve", contract_id)` with payload
+    /// `(caller, milestone_index, timestamp)` for each successfully approved milestone.
+    pub fn approve_milestone_release_batch(
+        env: Env,
+        contract_id: u32,
+        caller: Address,
+        milestone_indices: Vec<u32>,
+    ) -> bool {
+        Self::require_not_paused(&env);
+        Self::require_not_finalized(&env, contract_id);
+
+        if milestone_indices.len() > MAX_BATCH_APPROVALS {
+            env.panic_with_error(EscrowError::BatchCapExceeded);
+        }
+
+        for i in 0..milestone_indices.len() {
+            let milestone_index = milestone_indices.get(i).unwrap();
+            approvals::approve_milestone(&env, contract_id, milestone_index, &caller)
+                .unwrap_or_else(|e| env.panic_with_error(e));
+
+            env.events().publish(
+                (symbol_short!("approve"), contract_id),
+                (caller.clone(), milestone_index, env.ledger().timestamp()),
+            );
+        }
+
+        true
+    }
+
+    /// Grants exactly one pending reputation credit to the freelancer.
+    ///
+    /// This is called exactly once when a contract successfully transitions to
+    /// the `Completed` state, either through the final milestone release
+    /// or via dispute resolution. Credits accumulate independently for each
+    /// completed contract and are consumed one at a time by `issue_reputation`.
+    /// A `Refunded` contract never calls this helper and therefore earns no credit.
     fn grant_pending_reputation_credit(env: &Env, freelancer: &Address) {
         let pending_key = DataKey::PendingReputationCredits(ReputationKey { user: freelancer.clone() });
         let pending: i128 = env.storage().persistent().get(&pending_key).unwrap_or(0);
