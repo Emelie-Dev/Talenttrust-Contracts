@@ -1,6 +1,7 @@
 use crate::{
     amount_validation, ttl, Contract, ContractStatus, DataKey, Error, Escrow, EscrowArgs,
-    EscrowClient, EscrowError, GovernedParameters, Milestone, ReleaseAuthorization, MAX_MILESTONES,
+    EscrowClient, EscrowError, GovernedParameters, Milestone, MilestoneSchedule,
+    ReleaseAuthorization, MAX_MILESTONES, MAX_SCHEDULE_DESCRIPTION_LEN, MAX_SCHEDULE_TITLE_LEN,
 };
 use soroban_sdk::{contractimpl, symbol_short, Address, Env, Symbol, Vec};
 
@@ -169,6 +170,85 @@ impl Escrow {
             (symbol_short!("created"), id),
             (client, freelancer_addr, env.ledger().timestamp()),
         );
+
+        id
+    }
+
+    /// Creates a new escrow contract with per-milestone schedule metadata.
+    ///
+    /// Accepts the same parameters as [`create_contract`] plus a `schedules` vector
+    /// that carries optional due-date, title, and description for each milestone.
+    ///
+    /// * `schedules` — Length must match `milestones`. Each entry's `due_date`
+    ///   must be strictly in the future and strictly increasing (skipping `None`
+    ///   entries). `title` and `description` are bounded by
+    ///   [`MAX_SCHEDULE_TITLE_LEN`] and [`MAX_SCHEDULE_DESCRIPTION_LEN`].
+    ///   Pass an empty vec when no schedule metadata is needed.
+    pub fn create_contract_with_schedules(
+        env: Env,
+        client: Address,
+        freelancer: Address,
+        arbiter: Option<Address>,
+        milestones: Vec<i128>,
+        release_authorization: ReleaseAuthorization,
+        schedules: Vec<Option<MilestoneSchedule>>,
+    ) -> u32 {
+        // Delegate to the base creation logic.
+        let id = Self::create_contract(
+            env.clone(),
+            client,
+            freelancer,
+            arbiter,
+            milestones.clone(),
+            release_authorization,
+        );
+
+        // Validate and persist milestone schedule metadata.
+        if schedules.len() > 0 {
+            if schedules.len() != milestones.len() {
+                env.panic_with_error(Error::InvalidScheduleMetadata);
+            }
+            let now = env.ledger().timestamp();
+            let mut prev_due: Option<u64> = None;
+            for i in 0..schedules.len() {
+                if let Some(ref sched) = schedules.get(i) {
+                    if let Some(due) = sched.due_date {
+                        if due <= now {
+                            env.panic_with_error(Error::InvalidScheduleMetadata);
+                        }
+                        if let Some(prev) = prev_due {
+                            if due <= prev {
+                                env.panic_with_error(Error::InvalidScheduleMetadata);
+                            }
+                        }
+                        prev_due = Some(due);
+                    }
+                    if let Some(ref title) = sched.title {
+                        if title.len() > MAX_SCHEDULE_TITLE_LEN as u32 {
+                            env.panic_with_error(Error::InvalidScheduleMetadata);
+                        }
+                    }
+                    if let Some(ref desc) = sched.description {
+                        if desc.len() > MAX_SCHEDULE_DESCRIPTION_LEN as u32 {
+                            env.panic_with_error(Error::InvalidScheduleMetadata);
+                        }
+                    }
+                }
+            }
+            // Store schedules keyed by contract id.
+            let schedule_key = Symbol::new(&env, "schedule");
+            let mut stored_schedules: Vec<Option<MilestoneSchedule>> = Vec::new(&env);
+            for i in 0..schedules.len() {
+                let mut entry = schedules.get(i);
+                if let Some(ref mut s) = entry {
+                    s.updated_at = now;
+                }
+                stored_schedules.push_back(entry);
+            }
+            env.storage()
+                .persistent()
+                .set(&(DataKey::Contract(id), schedule_key), &stored_schedules);
+        }
 
         id
     }
