@@ -238,3 +238,28 @@ fn propose_emits_event() {
     });
     assert!(found_proposed, "propose event should be emitted");
 }
+
+#[test]
+fn events_limit_tests() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    // Default preserves current behaviour
+    assert_eq!(client.get_events_limit(), 100);
+
+    // In-bounds set
+    assert!(client.set_events_limit(&500));
+    assert_eq!(client.get_events_limit(), 500);
+
+    // Over-bounds rejected
+    let result = client.try_set_events_limit(&1001);
+    super::assert_contract_error(result, crate::Error::InvalidEventsLimit);
+
+    // Out-of-bounds zero rejected
+    let result = client.try_set_events_limit(&0);
+    super::assert_contract_error(result, crate::Error::InvalidEventsLimit);
+}

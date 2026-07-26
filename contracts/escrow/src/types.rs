@@ -98,6 +98,7 @@ pub enum DataKey {
     PendingGovernanceAdmin,
     ProtocolParameters,
     ProtocolFeeBps,
+    EventsLimit,
     // Two-step admin transfer: pending admin stored here while proposal awaits acceptance
     PendingAdmin,
     AccumulatedProtocolFees,
