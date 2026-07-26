@@ -289,6 +289,7 @@ pub struct Contract {
     pub refunded_amount: i128,
     pub release_authorization: ReleaseAuthorization,
     pub reputation_issued: bool,
+    pub token: Address,
 }
 
 /// Bounded snapshot of the escrow instance's settlement configuration.

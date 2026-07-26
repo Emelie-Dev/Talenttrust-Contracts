@@ -107,7 +107,7 @@ impl EscrowFixtureBuilder {
             admin: None,
             participants: None,
             milestones: None,
-            settlement_token: false,
+            settlement_token: true,
             fund: false,
         }
     }

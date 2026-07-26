@@ -419,6 +419,7 @@ mod tests {
             refunded_amount: 0,
             release_authorization: ReleaseAuthorization::ClientOnly,
             reputation_issued: false,
+            token: crate::Address::generate(&env),
         };
 
         let contract_id = 1u32;
@@ -475,6 +476,7 @@ mod tests {
             refunded_amount: 0,
             release_authorization: ReleaseAuthorization::MultiSig,
             reputation_issued: false,
+            token: crate::Address::generate(&env),
         };
 
         let contract_id = 1u32;
@@ -538,6 +540,7 @@ mod tests {
             refunded_amount: 0,
             release_authorization: ReleaseAuthorization::ClientOnly,
             reputation_issued: false,
+            token: crate::Address::generate(&env),
         };
 
         let contract_id = 1u32;

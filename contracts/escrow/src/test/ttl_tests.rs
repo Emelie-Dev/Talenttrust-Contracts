@@ -370,6 +370,7 @@ mod approval_ttl_integration {
             refunded_amount: 0,
             release_authorization: ReleaseAuthorization::ClientOnly,
             reputation_issued: false,
+            token: soroban_sdk::Address::generate(&env),
         };
 
         env.as_contract(&escrow_id, || {
@@ -486,6 +487,7 @@ mod approval_ttl_integration {
             refunded_amount: 0,
             release_authorization: ReleaseAuthorization::MultiSig,
             reputation_issued: false,
+            token: soroban_sdk::Address::generate(&env),
         };
 
         env.as_contract(&escrow_id, || {
