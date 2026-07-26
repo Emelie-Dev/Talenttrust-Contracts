@@ -54,6 +54,7 @@
 mod amount_validation;
 mod approvals;
 mod deposit;
+pub mod events;
 mod finalize;
 mod migration;
 mod ttl;
@@ -889,6 +890,8 @@ impl Escrow {
             .persistent()
             .set(&DataKey::Contract(contract_id), &contract);
 
+        events::emit_contract_indexed_event(&env, contract_id, &contract);
+
         // Extend TTL on contract write (milestone TTL already extended by store_milestones)
         ttl::extend_contract_ttl(&env, contract_id);
 
@@ -1142,6 +1145,8 @@ impl Escrow {
         env.storage()
             .persistent()
             .set(&DataKey::Contract(contract_id), &contract);
+
+        events::emit_contract_indexed_event(&env, contract_id, &contract);
 
         // Extend TTL on contract write (milestone TTL already extended by store_milestones)
         ttl::extend_contract_ttl(&env, contract_id);
@@ -1640,6 +1645,8 @@ impl Escrow {
         env.storage()
             .persistent()
             .set(&DataKey::Contract(contract_id), &contract);
+
+        events::emit_contract_indexed_event(&env, contract_id, &contract);
         ttl::extend_contract_ttl(&env, contract_id);
 
         env.events().publish(
@@ -2218,6 +2225,8 @@ impl Escrow {
             .persistent()
             .set(&DataKey::Contract(contract_id), &contract);
 
+        events::emit_contract_indexed_event(&env, contract_id, &contract);
+
         ttl::extend_contract_ttl(&env, contract_id);
 
         env.events().publish(
@@ -2310,6 +2319,8 @@ impl Escrow {
         env.storage()
             .persistent()
             .set(&DataKey::Contract(contract_id), &contract);
+
+        events::emit_contract_indexed_event(&env, contract_id, &contract);
 
         ttl::extend_contract_ttl(&env, contract_id);
 

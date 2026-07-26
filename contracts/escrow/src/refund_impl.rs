@@ -133,6 +133,8 @@ pub fn refund_unreleased_milestones(
         .persistent()
         .set(&DataKey::Contract(contract_id), &contract);
 
+    crate::events::emit_contract_indexed_event(env, contract_id, &contract);
+
     total_refund_amount
 }
 

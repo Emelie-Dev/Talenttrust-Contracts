@@ -164,6 +164,8 @@ pub fn finalize_contract_impl(env: &Env, contract_id: u32, finalizer: Address) -
         (finalizer, record.timestamp),
     );
 
+    crate::events::emit_contract_indexed_event(env, contract_id, &contract);
+
     true
 }
 

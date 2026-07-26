@@ -135,6 +135,8 @@ impl Escrow {
             .persistent()
             .set(&DataKey::Contract(contract_id), &contract);
 
+        crate::events::emit_contract_indexed_event(env, contract_id, &contract);
+
         ttl::extend_contract_and_milestones_ttl(env, contract_id);
 
         env.events().publish(
