@@ -91,7 +91,7 @@ impl Escrow {
             .unwrap_or_else(|e| env.panic_with_error(e));
 
         let available_balance =
-            contract.funded_amount - contract.released_amount - contract.refunded_amount;
+            crate::amount_validation::available_balance(contract.funded_amount, contract.released_amount, contract.refunded_amount).unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
         if available_balance < milestone.amount {
             env.panic_with_error(Error::InsufficientFunds);
         }
@@ -99,7 +99,7 @@ impl Escrow {
         let _release_amount = milestone.amount;
         milestone.released = true;
         milestones.set(milestone_index, milestone.clone());
-        contract.released_amount += milestone.amount;
+        contract.released_amount = crate::amount_validation::safe_add_amounts(contract.released_amount, milestone.amount).unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
 
         if is_initialized(&env) {
             let fee_bps = get_protocol_fee_bps(&env);
