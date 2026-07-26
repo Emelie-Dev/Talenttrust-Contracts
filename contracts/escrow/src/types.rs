@@ -436,11 +436,68 @@ pub struct PendingAdminProposal {
     pub proposed_at_ledger: u32,
 }
 
+// ── Reputation ───────────────────────────────────────────────────────────────
+
+/// Cumulative on-chain reputation record for a freelancer.
+///
+/// A `Reputation` entry is created (or updated) each time
+/// `issue_reputation` is called for a completed contract.  It
+/// aggregates ratings across all contracts the freelancer has participated in,
+/// enabling clients and integrations to derive an average score at any time.
+///
+/// # Stored under
+///
+/// [`DataKey::Reputation`]`(freelancer_address)` in persistent storage.
+///
+/// # Average rating
+///
+/// To compute the decimal average:
+/// ```text
+/// average = total_rating as f64 / completed_contracts as f64
+/// ```
+/// Or, to avoid floating-point arithmetic on-chain, use
+/// `get_average_rating` which returns
+/// `total_rating * 10_000 / completed_contracts` (basis-point precision).
+///
+/// # Example
+///
+/// ```no_run
+/// # use soroban_sdk::{testutils::Address as _, vec, Address, Env, String};
+/// # use escrow::{Escrow, EscrowClient, ReleaseAuthorization};
+/// let env = Env::default();
+/// env.mock_all_auths();
+///
+/// let escrow_id = env.register(Escrow, ());
+/// let escrow = EscrowClient::new(&env, &escrow_id);
+/// escrow.initialize(&Address::generate(&env));
+///
+/// let client_addr = Address::generate(&env);
+/// let freelancer_addr = Address::generate(&env);
+/// let milestones = vec![&env, 200_0000000_i128, 400_0000000_i128, 600_0000000_i128];
+/// let contract_id = escrow.create_contract(
+///     &client_addr, &freelancer_addr, &None, &milestones,
+///     &ReleaseAuthorization::ClientOnly,
+/// );
+/// escrow.deposit_funds(&contract_id, &client_addr, &1_200_0000000_i128);
+/// for idx in 0_u32..3 {
+///     escrow.approve_milestone_release(&contract_id, &client_addr, &idx);
+///     escrow.release_milestone(&contract_id, &client_addr, &idx);
+/// }
+/// escrow.issue_reputation(&contract_id, &client_addr, &5, &String::from_str(&env, "Excellent!"));
+///
+/// let rep = escrow.get_reputation(&freelancer_addr).unwrap();
+/// assert_eq!(rep.completed_contracts, 1);
+/// assert_eq!(rep.total_rating, 5);
+/// assert_eq!(rep.last_rating, 5);
+/// ```
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq, Default)]
 pub struct Reputation {
+    /// Number of escrow contracts for which reputation has been issued.
     pub completed_contracts: i128,
+    /// Sum of all individual ratings received (each rating is in \[1, 5\]).
     pub total_rating: i128,
+    /// The most recent individual rating value.
     pub last_rating: i128,
 }
 
