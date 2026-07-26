@@ -255,6 +255,7 @@ impl Escrow {
     /// configuration.
     pub fn bind_settlement_token(env: Env, admin: Address, token: Address) -> bool {
         Self::require_initialized(&env);
+        Self::require_not_paused(&env);
         let stored_admin: Address = env
             .storage()
             .persistent()
@@ -2009,17 +2010,7 @@ impl Escrow {
     /// * `to` - The destination address for the withdrawn fees
     pub fn withdraw_protocol_fees(env: Env, amount: i128, to: Address) -> bool {
         Self::require_initialized(&env);
-
-        // Block withdrawal while paused or in emergency — consistent with all
-        // other mutating entrypoints in this contract.
-        if env
-            .storage()
-            .persistent()
-            .get::<_, bool>(&DataKey::Paused)
-            .unwrap_or(false)
-        {
-            env.panic_with_error(EscrowError::ContractPaused);
-        }
+        Self::require_not_paused(&env);
 
         let admin: Address = env
             .storage()
