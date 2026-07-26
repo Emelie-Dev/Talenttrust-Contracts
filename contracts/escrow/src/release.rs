@@ -1,5 +1,5 @@
 use crate::{
-    approvals, authorization, ttl, Contract, ContractStatus, DataKey, Error, Escrow, Milestone,
+    approvals, storage, ttl, Contract, ContractStatus, DataKey, Error, Escrow, Milestone,
     ReleaseAuthorization,
 };
 use soroban_sdk::{Address, Env, Vec};
@@ -15,23 +15,11 @@ impl Escrow {
         caller: Address,
         milestone_index: u32,
     ) -> bool {
-        Self::require_not_paused(&env);
         caller.require_auth();
 
-        Self::require_not_paused(&env);
-
-        Self::require_not_finalized(&env, contract_id);
-
-        let mut contract: Contract = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Contract(contract_id))
-            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
+        let mut contract = Self::require_contract_mutable(&env, contract_id);
 
         ttl::extend_contract_ttl(&env, contract_id);
-
-        Self::require_not_paused(&env);
-        Self::require_not_finalized(&env, contract_id);
 
         if contract.status != ContractStatus::Funded {
             env.panic_with_error(EscrowError::InvalidState);
@@ -63,11 +51,8 @@ impl Escrow {
             }
         }
 
-        let mut milestones: Vec<Milestone> = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Milestones(contract_id))
-            .unwrap();
+        let milestone_key = Symbol::new(&env, "milestones");
+        let mut milestones: Vec<Milestone> = storage::load_milestones(&env, contract_id);
 
         ttl::extend_milestone_ttl(&env, contract_id);
 

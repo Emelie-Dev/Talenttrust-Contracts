@@ -9,6 +9,7 @@
 //! Approval records live in Soroban temporary storage and expire according to
 //! `PENDING_APPROVAL_TTL_LEDGERS`. Missing or expired approvals fail closed.
 
+use crate::storage;
 use crate::ttl::{PENDING_APPROVAL_BUMP_THRESHOLD, PENDING_APPROVAL_TTL_LEDGERS};
 use crate::{
     Contract, ContractStatus, DataKey, Error, Milestone, MilestoneApprovals, ReleaseAuthorization,
@@ -55,11 +56,7 @@ pub fn approve_milestone(
     caller: &Address,
 ) -> Result<bool, Error> {
     // Load contract
-    let contract: Contract = env
-        .storage()
-        .persistent()
-        .get(&DataKey::Contract(contract_id))
-        .ok_or(Error::ContractNotFound)?;
+    let contract: Contract = storage::load_contract(env, contract_id);
 
     // Verify contract is in Funded or PartiallyFunded state
     if contract.status != ContractStatus::Funded
@@ -68,12 +65,8 @@ pub fn approve_milestone(
         return Err(Error::InvalidState);
     }
 
-    // Load milestones via the typed [`MilestonesKey`] wrapper (issue #938).
-    let milestones: Vec<Milestone> = env
-        .storage()
-        .persistent()
-        .get(&MilestonesKey::new(contract_id))
-        .ok_or(Error::ContractNotFound)?;
+    // Load milestones
+    let milestones: Vec<Milestone> = storage::load_milestones(env, contract_id);
 
     // Validate milestone index
     if milestone_index >= milestones.len() {

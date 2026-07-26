@@ -1,8 +1,8 @@
 use soroban_sdk::{contracttype, symbol_short, Address, Env, Vec};
 
 use crate::{
-    authorization, safe_subtract_amounts, Contract, ContractStatus, ContractSummary, DataKey, Error, Escrow,
-    EscrowError, Milestone, MilestoneSummary, CONTRACT_SUMMARY_SCHEMA_VERSION,
+    safe_subtract_amounts, storage, Contract, ContractStatus, ContractSummary, DataKey, Error,
+    Escrow, EscrowError, Milestone, MilestoneSummary, CONTRACT_SUMMARY_SCHEMA_VERSION,
 };
 
 /// Immutable metadata written when an escrow contract is closed.
@@ -27,39 +27,45 @@ impl Escrow {
     }
 
     fn load_contract_for_finalization(env: &Env, contract_id: u32) -> Contract {
-        env.storage()
-            .persistent()
-            .get::<_, Contract>(&DataKey::Contract(contract_id))
-            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound))
+        storage::load_contract(env, contract_id)
     }
 
     pub(crate) fn is_finalized(env: &Env, contract_id: u32) -> bool {
-        settlement::is_finalized(env, contract_id)
+        storage::is_finalized(env, contract_id)
     }
 
     pub(crate) fn require_not_finalized(env: &Env, contract_id: u32) {
-        if Self::is_finalized(env, contract_id) {
-            env.panic_with_error(EscrowError::AlreadyFinalized);
-        }
+        storage::require_not_finalized(env, contract_id);
     }
 
     pub(crate) fn require_not_paused(env: &Env) {
-        if env
-            .storage()
-            .persistent()
-            .get::<_, bool>(&DataKey::Paused)
-            .unwrap_or(false)
-        {
-            env.panic_with_error(EscrowError::ContractPaused);
-        }
-        if env
-            .storage()
-            .persistent()
-            .get::<_, bool>(&DataKey::Emergency)
-            .unwrap_or(false)
-        {
-            env.panic_with_error(EscrowError::EmergencyActive);
-        }
+        storage::require_not_paused(env);
+    }
+
+    /// Load a contract for mutation, applying storage precondition checks.
+    ///
+    /// This helper combines three essential preconditions into a single call:
+    /// 1. Verifies contract operations are not paused or in emergency mode
+    /// 2. Loads the contract from persistent storage
+    /// 3. Verifies the contract has not been finalized (immutable)
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `contract_id` - The contract ID to load
+    ///
+    /// # Panics
+    /// - `ContractPaused` if the contract is paused
+    /// - `EmergencyActive` if emergency mode is active
+    /// - `ContractNotFound` if no contract exists for this ID
+    /// - `AlreadyFinalized` if the contract has been finalized
+    ///
+    /// # Returns
+    /// The loaded `Contract` if all preconditions pass
+    pub(crate) fn require_contract_mutable(env: &Env, contract_id: u32) -> Contract {
+        Self::require_not_paused(env);
+        let contract = Self::load_contract_for_finalization(env, contract_id);
+        Self::require_not_finalized(env, contract_id);
+        contract
     }
 
     fn require_finalizer_role(env: &Env, contract: &Contract, finalizer: &Address) {
@@ -68,11 +74,7 @@ impl Escrow {
     }
 
     fn summarize_contract(env: &Env, contract_id: u32, contract: &Contract) -> ContractSummary {
-        let milestones: Vec<Milestone> = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Milestones(contract_id))
-            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
+        let milestones: Vec<Milestone> = storage::load_milestones(env, contract_id);
 
         let mut total_amount: i128 = 0;
         let mut released_milestone_count: u32 = 0;

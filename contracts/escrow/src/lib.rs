@@ -59,7 +59,7 @@ mod authorization;
 mod deposit;
 mod finalize;
 mod migration;
-mod rollback;
+mod storage;
 mod ttl;
 mod types;
 mod utils;
@@ -1716,18 +1716,27 @@ impl Escrow {
 
     // ── Cancel contract ──────────────────────────────────────────────────────
 
-    pub fn cancel_contract(env: Env, contract_id: u32, caller: Address) -> bool {
-        Self::require_not_paused(&env);
-        let mut contract: Contract = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Contract(contract_id))
-            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
+    /// Cancels a contract before any milestone has been released.
+    ///
+    /// The caller must be the stored client and must authorize the call. The
+    /// contract must be in `Created` or `Funded` state, with no released
+    /// balance, and the full remaining refundable balance is sent back to the
+    /// client via the configured Stellar Asset Contract before the contract is
+    /// marked `Cancelled`. A zero-funded cancellation does not invoke a token
+    /// transfer and leaves unrelated contracts' escrowed token balances intact.
+    ///
+    /// # Errors
+    /// * `ContractPaused` - If the contract is paused while not in emergency mode.
+    /// * `EmergencyActive` - If the contract is in an active emergency pause.
+    /// * `ContractNotFound` - If the contract does not exist.
+    /// * `UnauthorizedRole` - If the caller is not the stored client.
+    /// * `AlreadyCancelled` - If the contract was already cancelled.
+    /// * `InvalidStatusTransition` - If the contract is not `Created`/`Funded` or has already released funds.
+    pub fn cancel_contract(env: Env, contract_id: u32, client: Address) -> bool {
+        let mut contract = Self::require_contract_mutable(&env, contract_id);
         ttl::extend_contract_ttl(&env, contract_id);
 
-        Self::require_not_finalized(&env, contract_id);
-
-        if caller != contract.client {
+        if client != contract.client {
             env.panic_with_error(EscrowError::UnauthorizedRole);
         }
 
@@ -2479,26 +2488,14 @@ impl Escrow {
     /// - Respects pause and emergency controls
     pub fn raise_dispute(env: Env, contract_id: u32, caller: Address) -> bool {
         Self::require_initialized(&env);
-        Self::require_not_paused(&env);
-        Self::validate_contract_id_bounds(&env, contract_id);
         caller.require_auth();
         Self::raise_dispute_inner(&env, contract_id, &caller);
         true
     }
 
-    /// Shared raise-dispute mutation used by the single and batch entrypoints.
-    ///
-    /// Callers must already have completed `require_initialized`, `require_not_paused`,
-    /// and `caller.require_auth()` so batch invocations authenticate once.
-    fn raise_dispute_inner(env: &Env, contract_id: u32, caller: &Address) {
-        let mut contract: Contract = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Contract(contract_id))
-            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
+        let mut contract = Self::require_contract_mutable(&env, contract_id);
 
-        ttl::extend_contract_ttl(env, contract_id);
-        Self::require_not_finalized(env, contract_id);
+        ttl::extend_contract_ttl(&env, contract_id);
 
         if caller != contract.client && caller != contract.freelancer {
             env.panic_with_error(EscrowError::UnauthorizedRole);
@@ -2599,18 +2596,11 @@ impl Escrow {
         resolution: DisputeResolution,
     ) -> bool {
         Self::require_initialized(&env);
-        Self::require_not_paused(&env);
-        Self::validate_contract_id_bounds(&env, contract_id);
         arbiter.require_auth();
 
-        let mut contract: Contract = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Contract(contract_id))
-            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
+        let mut contract = Self::require_contract_mutable(&env, contract_id);
 
         ttl::extend_contract_ttl(&env, contract_id);
-        Self::require_not_finalized(&env, contract_id);
 
         if contract.status != ContractStatus::Disputed {
             env.panic_with_error(EscrowError::InvalidStatusTransition);
