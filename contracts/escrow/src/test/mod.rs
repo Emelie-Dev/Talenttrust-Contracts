@@ -32,7 +32,7 @@ mod refund;
 mod release;
 mod release_authorization;
 mod reputation;
-mod reputation_migration;
+mod rollback;
 mod security;
 mod storage_limit;
 mod ttl_tests;

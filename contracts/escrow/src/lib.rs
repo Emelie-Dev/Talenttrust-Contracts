@@ -18,6 +18,7 @@
 //! | `deposit` | Deposit preflight and post-transfer accounting used by `deposit_funds`. | `DataKey::Contract(contract_id)` and `(DataKey::Contract(contract_id), "milestones")`. |
 //! | `finalize` | Immutable finalization records, finalization guards, and final contract summaries. | `DataKey::Finalization(contract_id)`; reads `Contract(id)`, `(Contract(id), "milestones")`, `Paused`, and `Emergency`. |
 //! | `migration` | Client migration proposals, acceptance checks, cancellation, and pending-migration reads. | Temporary `DataKey::PendingClientMigration(contract_id)`; reads and updates `DataKey::Contract(contract_id)`. |
+//! | `rollback` | Guarded rollback of unchanged, unresolved disputes. | `DataKey::DisputeRollback(contract_id)`; reads and updates `DataKey::Contract(contract_id)` and its milestones. |
 //! | `ttl` | TTL constants plus helpers for temporary and persistent storage renewal. | Extends caller-provided keys, especially `Contract(id)`, `(Contract(id), "milestones")`, `NextContractId`, participant indexes, approvals, and migrations. |
 //! | `types` | Shared Soroban types, error enums, summaries, governance records, dispute records, and the canonical `DataKey` enum. | Declares storage key schema only; does not access storage itself. |
 //! | `utils` | Small deterministic helpers shared by entrypoints, currently ledger timestamp access (`now_seconds`). See `docs/escrow/ledger-time-source.md`. | None. |
@@ -57,7 +58,7 @@ mod approvals;
 mod deposit;
 mod finalize;
 mod migration;
-mod reputation_migration;
+mod rollback;
 mod ttl;
 mod types;
 mod utils;
@@ -553,6 +554,12 @@ impl Escrow {
         finalize::finalize_contract_impl(&env, contract_id, finalizer)
     }
 
+    /// Restore an unchanged, unresolved dispute to its pre-dispute status.
+    pub fn rollback_dispute(env: Env, contract_id: u32) -> bool {
+        rollback::rollback_dispute_impl(&env, contract_id)
+    }
+
+    /// Return immutable close metadata for `contract_id`, if it has been finalized.
     pub fn get_finalization_record(
         env: Env,
         contract_id: u32,
@@ -1206,6 +1213,7 @@ impl Escrow {
             .persistent()
             .get(&DataKey::Contract(contract_id))
             .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
+        let was_disputed = contract.status == ContractStatus::Disputed;
 
         ttl::extend_contract_ttl(&env, contract_id);
         Self::require_not_finalized(&env, contract_id);
@@ -1298,6 +1306,11 @@ impl Escrow {
             .persistent()
             .set(&DataKey::Contract(contract_id), &contract);
 
+        if was_disputed {
+            rollback::clear_dispute_rollback(&env, contract_id);
+        }
+
+        // Extend TTL on contract write (milestone TTL already extended by store_milestones)
         ttl::extend_contract_ttl(&env, contract_id);
 
         env.events().publish(
@@ -2614,7 +2627,9 @@ impl Escrow {
             _ => env.panic_with_error(Error::InvalidState),
         }
 
-        let old_status = contract.status;
+        let milestones = ttl::load_milestones(&env, contract_id);
+        rollback::store_dispute_rollback(&env, contract_id, &contract, &milestones);
+
         contract.status = ContractStatus::Disputed;
         env.storage()
             .persistent()
@@ -2736,6 +2751,7 @@ impl Escrow {
         env.storage()
             .persistent()
             .set(&DataKey::Contract(contract_id), &contract);
+        rollback::clear_dispute_rollback(&env, contract_id);
 
         ttl::extend_contract_ttl(&env, contract_id);
 

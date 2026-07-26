@@ -169,32 +169,7 @@ pub enum DataKey {
     Finalization(u32),
     // Settlement token
     SettlementToken,
-    Finalization(u32),
-}
-
-/// Typed key for milestone approval entries that include arbiter approval state.
-///
-/// This intentionally maps to the existing `DataKey::MilestoneApprovals`
-/// variant so persisted storage layout and ABI remain unchanged.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ArbiterApprovalKey {
-    pub contract_id: u32,
-    pub milestone_index: u32,
-}
-
-impl ArbiterApprovalKey {
-    pub const fn new(contract_id: u32, milestone_index: u32) -> Self {
-        Self {
-            contract_id,
-            milestone_index,
-        }
-    }
-}
-
-impl From<ArbiterApprovalKey> for DataKey {
-    fn from(key: ArbiterApprovalKey) -> Self {
-        DataKey::MilestoneApprovals(key.contract_id, key.milestone_index)
-    }
+    DisputeRollback(u32),
 }
 
 /// Canonical contract error type for all entrypoint-facing errors.
@@ -250,11 +225,10 @@ pub enum Error {
     EscrowCapExceeded = 51,
     SettlementTokenNotConfigured = 52,
     MilestoneNotOverdue = 53,
-    /// The requested storage limit falls outside the permitted range.
-    ///
-    /// The storage limit must be between [`MIN_STORAGE_LIMIT`] (1) and
-    /// [`MAX_STORAGE_LIMIT`] (the compile-time hard cap) inclusive.
-    StorageLimitOutOfRange = 54,
+    /// No safe rollback is available for the contract's current state.
+    RollbackNotAllowed = 54,
+    /// Contract or milestone state changed after the rollback point was recorded.
+    RollbackStateChanged = 55,
 }
 
 #[contracttype]
