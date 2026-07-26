@@ -40,10 +40,33 @@ impl Escrow {
         // Check if caller is authorized to release under this contract's release mode
         authorization::require_release_authorization(&env, &caller, &contract);
 
+        match contract.release_authorization {
+            ReleaseAuthorization::ClientOnly => {
+                if !is_client {
+                    env.panic_with_error(Error::UnauthorizedRole);
+                }
+            }
+            ReleaseAuthorization::ArbiterOnly => {
+                if !is_arbiter {
+                    env.panic_with_error(Error::UnauthorizedRole);
+                }
+            }
+            ReleaseAuthorization::ClientAndArbiter => {
+                if !is_client && !is_arbiter {
+                    env.panic_with_error(Error::UnauthorizedRole);
+                }
+            }
+            ReleaseAuthorization::MultiSig => {
+                if !is_client && !is_freelancer {
+                    env.panic_with_error(Error::UnauthorizedRole);
+                }
+            }
+        }
+
         let mut milestones: Vec<Milestone> = env
             .storage()
             .persistent()
-            .get(&crate::StorageKey::contract_milestones(contract_id))
+            .get(&DataKey::Milestones(contract_id))
             .unwrap();
 
         ttl::extend_milestone_ttl(&env, contract_id);
@@ -114,9 +137,10 @@ impl Escrow {
             env.storage().persistent().set(&pending_key, &new_pending);
         }
 
-        env.storage()
-            .persistent()
-            .set(&crate::StorageKey::contract_milestones(contract_id), &milestones);
+        env.storage().persistent().set(
+            &DataKey::Milestones(contract_id),
+            &milestones,
+        );
         env.storage()
             .persistent()
             .set(&DataKey::Contract(contract_id), &contract);

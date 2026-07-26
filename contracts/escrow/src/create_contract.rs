@@ -114,7 +114,7 @@ pub fn execute_create_contract(
         }
         env.storage()
             .persistent()
-            .set(&crate::StorageKey::contract_milestones(id), &milestone_vec);
+            .set(&DataKey::Milestones(id), &milestone_vec);
 
         let next_id = id
             .checked_add(1)

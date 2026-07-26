@@ -398,9 +398,10 @@ mod tests {
                 }],
             );
             let _ = release_auth;
-            env.storage()
-                .persistent()
-                .set(&MilestonesKey::new(contract_id), &milestones);
+            env.storage().persistent().set(
+                &DataKey::Milestones(contract_id),
+                &milestones,
+            );
         });
     }
 
@@ -445,9 +446,10 @@ mod tests {
                     deadline: None,
                 }],
             );
-            env.storage()
-                .persistent()
-                .set(&MilestonesKey::new(contract_id), &milestones);
+            env.storage().persistent().set(
+                &DataKey::Milestones(contract_id),
+                &milestones,
+            );
 
             // Client approves
             let result = approve_milestone(&env, contract_id, 0, &client);
@@ -500,9 +502,10 @@ mod tests {
                     deadline: None,
                 }],
             );
-            env.storage()
-                .persistent()
-                .set(&MilestonesKey::new(contract_id), &milestones);
+            env.storage().persistent().set(
+                &DataKey::Milestones(contract_id),
+                &milestones,
+            );
 
             // Only client approves - insufficient
             let result = approve_milestone(&env, contract_id, 0, &client);
@@ -562,9 +565,10 @@ mod tests {
                     deadline: None,
                 }],
             );
-            env.storage()
-                .persistent()
-                .set(&MilestonesKey::new(contract_id), &milestones);
+            env.storage().persistent().set(
+                &DataKey::Milestones(contract_id),
+                &milestones,
+            );
 
             // First approval succeeds
             let result = approve_milestone(&env, contract_id, 0, &client);

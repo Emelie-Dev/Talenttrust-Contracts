@@ -71,8 +71,8 @@ impl Escrow {
         let milestones: Vec<Milestone> = env
             .storage()
             .persistent()
-            .get(&(DataKey::Contract(contract_id), milestone_key))
-            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
+            .get(&DataKey::Milestones(contract_id))
+            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
 
         let mut total_amount: i128 = 0;
         let mut released_milestone_count: u32 = 0;

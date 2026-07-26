@@ -120,6 +120,8 @@ pub enum DataKey {
     Contract(u32),
     ContractSchemaVersion(u32),
     NextContractId,
+    Milestones(u32),
+    MilestoneReleased(u32, u32),
     MilestoneApprovals(u32, u32),
     // Reputation
     ReputationIssued(u32),

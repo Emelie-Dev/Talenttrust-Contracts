@@ -55,8 +55,8 @@ pub fn validate_deposit(
     let milestones: Vec<Milestone> = env
         .storage()
         .persistent()
-        .get(&(DataKey::Contract(contract_id), milestone_key))
-        .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
+        .get(&DataKey::Milestones(contract_id))
+        .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
 
     /// Calculate the total amount from milestones with checked arithmetic.
     /// This prevents overflow panics that would brick the contract if a malformed

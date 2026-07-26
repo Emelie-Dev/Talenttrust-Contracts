@@ -390,7 +390,7 @@ mod approval_ttl_integration {
             );
             env.storage()
                 .persistent()
-                .set(&MilestonesKey::new(1), &milestones);
+                .set(&DataKey::Milestones(1), &milestones);
         });
 
         (
@@ -506,7 +506,7 @@ mod approval_ttl_integration {
             );
             env.storage()
                 .persistent()
-                .set(&MilestonesKey::new(1), &milestones);
+                .set(&DataKey::Milestones(1), &milestones);
         });
 
         env.as_contract(&escrow_id, || {

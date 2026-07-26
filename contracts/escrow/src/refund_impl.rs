@@ -100,7 +100,7 @@ pub fn refund_unreleased_milestones(
     let mut milestones: Vec<Milestone> = env
         .storage()
         .persistent()
-        .get(&crate::StorageKey::contract_milestones(contract_id))
+        .get(&DataKey::Milestones(contract_id))
         .unwrap();
 
     // Validate all milestones and calculate total refund amount
@@ -131,7 +131,7 @@ pub fn refund_unreleased_milestones(
     // Persist changes via the typed [`MilestonesKey`] wrapper (issue #938).
     env.storage()
         .persistent()
-        .set(&crate::StorageKey::contract_milestones(contract_id), &milestones);
+        .set(&DataKey::Milestones(contract_id), &milestones);
     env.storage()
         .persistent()
         .set(&DataKey::Contract(contract_id), &contract);
