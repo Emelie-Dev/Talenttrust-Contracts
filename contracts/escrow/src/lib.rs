@@ -265,6 +265,8 @@ pub enum EscrowError {
     EmptyComment = 42,
     /// Reputation feedback comment exceeded the 200-character maximum.
     CommentTooLong = 43,
+    /// Rollback is not allowed in the current contract state.
+    RollbackNotAllowed = 54,
 }
 
 impl Escrow {
@@ -850,6 +852,30 @@ impl Escrow {
         finalize::get_finalization_record_impl(&env, contract_id)
     }
 
+    /// Roll back a finalized escrow contract, removing its immutable close record.
+    ///
+    /// `admin` must authorize the call and match the stored admin. Rollback is
+    /// allowed only when the contract is finalized and its status is `Completed`
+    /// or `Disputed`. Removing the finalization record re-enables mutating
+    /// lifecycle operations without changing any accounting fields.
+    ///
+    /// # Errors
+    /// * `NotInitialized` - If `initialize` has not been called.
+    /// * `UnauthorizedRole` - If `admin` is not the stored admin.
+    /// * `RollbackNotAllowed` - If the contract is not finalized or not in a safe status.
+    ///
+    /// # Events
+    /// `("rollback", contract_id)` -> `(admin, status, timestamp)`
+    pub fn rollback_contract(env: Env, admin: Address, contract_id: u32) -> bool {
+        finalize::rollback_contract_impl(&env, contract_id, admin)
+    }
+
+    /// Propose a client migration for an existing contract.
+    ///
+    /// Canonical public entrypoint; delegates to `propose_client_migration_impl`.
+    /// The current client must authorize the call. The proposed client address
+    /// must not be the freelancer or the current client. The pending migration
+    /// is stored in temporary storage with TTL.
     pub fn propose_client_migration(
         env: Env,
         contract_id: u32,

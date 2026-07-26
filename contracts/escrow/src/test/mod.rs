@@ -35,7 +35,7 @@ mod refund;
 mod release;
 mod release_authorization;
 mod reputation;
-mod proptest_contracts;
+mod rollback;
 mod security;
 mod simulate_create_contract;
 mod ttl_tests;
