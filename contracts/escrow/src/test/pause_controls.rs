@@ -63,6 +63,57 @@ fn pause_then_unpause_toggles_state() {
     assert!(!client.is_paused());
 }
 
+#[test]
+fn pause_blocks_bind_settlement_token() {
+    let (env, contract_id, admin) = setup_initialized();
+    let client = EscrowClient::new(&env, &contract_id);
+    client.pause();
+
+    let token = env.register_stellar_asset_contract(admin.clone());
+    super::assert_contract_error(
+        client.try_bind_settlement_token(&admin, &token),
+        Error::ContractPaused,
+    );
+}
+
+#[test]
+fn unpause_restores_bind_settlement_token() {
+    let (env, contract_id, admin) = setup_initialized();
+    let client = EscrowClient::new(&env, &contract_id);
+    client.pause();
+    client.unpause();
+
+    let token = env.register_stellar_asset_contract(admin.clone());
+    assert!(client.bind_settlement_token(&admin, &token));
+}
+
+#[test]
+fn pause_blocks_withdraw_protocol_fees() {
+    let (env, contract_id, _admin) = setup_initialized();
+    let client = EscrowClient::new(&env, &contract_id);
+    client.pause();
+
+    let treasury = Address::generate(&env);
+    super::assert_contract_error(
+        client.try_withdraw_protocol_fees(&100_i128, &treasury),
+        Error::ContractPaused,
+    );
+}
+
+#[test]
+fn unpause_restores_withdraw_protocol_fees() {
+    let (env, contract_id, _admin) = setup_initialized();
+    let client = EscrowClient::new(&env, &contract_id);
+    client.pause();
+    client.unpause();
+
+    let treasury = Address::generate(&env);
+    super::assert_contract_error(
+        client.try_withdraw_protocol_fees(&0_i128, &treasury),
+        EscrowError::AmountMustBePositive,
+    );
+}
+
 // --- create_contract ---
 
 #[test]
