@@ -2179,6 +2179,78 @@ impl Escrow {
     /// - Requires arbiter assignment for resolution
     /// - Blocks milestone releases while disputed
     /// - Respects pause and emergency controls
+    /// Open a dispute on a funded or partially funded contract.
+    ///
+    /// Transitions the contract from `Funded` or `PartiallyFunded` to `Disputed`,
+    /// blocking subsequent milestone releases until the assigned arbiter calls
+    /// [`crate::Escrow::resolve_dispute`]. Only the client or freelancer of the
+    /// contract may raise a dispute, and the contract must have been created
+    /// with an arbiter assigned. On success, the contract status is mutated and the
+    /// `(dispute, opened)` event is published for off-chain indexers.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `contract_id` - The unique ID of the contract to dispute
+    /// * `caller` - The address raising the dispute (must be the client or
+    ///   freelancer and must authorize the call via `require_auth`)
+    ///
+    /// # Returns
+    /// `true` once the contract has been transitioned to `Disputed` and the
+    /// `(dispute, opened)` event has been published.
+    ///
+    /// # Errors
+    /// * `NotInitialized` - If `initialize` has not been called
+    /// * `ContractPaused` - If pause or emergency controls are active
+    /// * `ContractNotFound` - If `contract_id` does not exist
+    /// * `AlreadyFinalized` - If a finalization record already exists for the
+    ///   contract
+    /// * `UnauthorizedRole` - If `caller` is neither the client nor the
+    ///   freelancer
+    /// * `ArbiterRequired` - If the contract was created without an arbiter
+    /// * `InvalidState` - If the contract is in any state other than `Funded`
+    ///   or `PartiallyFunded` (e.g. `Completed`, `Refunded`, `Cancelled`)
+    ///
+    /// # Security
+    /// - Pause/emergency gate runs before any state mutation.
+    /// - Only contract parties (client or freelancer) may raise a dispute.
+    /// - Issuing a dispute requires the contract to have a designated arbiter.
+    /// - Once raised, milestone releases are blocked until the arbiter resolves
+    ///   the dispute or the contract is finalized.
+    ///
+    /// # Example
+    /// ```ignore
+    /// use soroban_sdk::{testutils::Address as _, vec, Address, Env};
+    /// use crate::{ContractStatus, Escrow, EscrowClient, ReleaseAuthorization};
+    ///
+    /// // Prereq: the contract must already be `initialize`'d and have a
+    /// // settlement token bound via `bind_settlement_token` so that
+    /// // `deposit_funds` can transfer SAC tokens.
+    ///
+    /// let env = Env::default();
+    /// env.mock_all_auths();
+    /// let id = env.register(Escrow, ());
+    /// let client = EscrowClient::new(&env, &id);
+    /// client.initialize(&Address::generate(&env));
+    ///
+    /// let client_addr = Address::generate(&env);
+    /// let freelancer_addr = Address::generate(&env);
+    /// let arbiter_addr = Address::generate(&env);
+    /// let contract_id = client.create_contract(
+    ///     &client_addr,
+    ///     &freelancer_addr,
+    ///     &Some(arbiter_addr.clone()),
+    ///     &vec![&env, 100_i128],
+    ///     &ReleaseAuthorization::ClientOnly,
+    /// );
+    /// client.deposit_funds(&contract_id, &client_addr, &100_i128);
+    ///
+    /// // Either party may raise a dispute while the contract is Funded.
+    /// assert!(client.raise_dispute(&contract_id, &client_addr));
+    /// assert_eq!(
+    ///     client.get_contract(&contract_id).status,
+    ///     ContractStatus::Disputed,
+    /// );
+    /// ```
     pub fn raise_dispute(env: Env, contract_id: u32, caller: Address) -> bool {
         /// Gate: contract must have been initialized so pause and emergency rails
         /// are always in scope before any state mutation can occur.
@@ -2303,8 +2375,47 @@ impl Escrow {
     /// - Only the assigned arbiter can resolve disputes
     /// - Split amounts must exactly match available balance
     /// - Updates released_amount and refunded_amount atomically
-    /// - Emits dispute resolution event for indexers
     /// - Sets final contract status based on resolution outcome
+    ///
+    /// # Example
+    /// ```ignore
+    /// use soroban_sdk::{testutils::Address as _, vec, Address, Env};
+    /// use crate::{DisputeResolution, Escrow, EscrowClient, ReleaseAuthorization};
+    ///
+    /// // Prereq: the contract must be `initialize`'d, have a settlement token
+    /// // bound through `bind_settlement_token`, and the contract must be in
+    /// // the `Disputed` state (i.e. `raise_dispute` has already been called
+    /// // by the client or freelancer).
+    ///
+    /// let env = Env::default();
+    /// env.mock_all_auths();
+    /// let id = env.register(Escrow, ());
+    /// let client = EscrowClient::new(&env, &id);
+    /// client.initialize(&Address::generate(&env));
+    ///
+    /// let client_addr = Address::generate(&env);
+    /// let freelancer_addr = Address::generate(&env);
+    /// let arbiter_addr = Address::generate(&env);
+    /// let contract_id = client.create_contract(
+    ///     &client_addr,
+    ///     &freelancer_addr,
+    ///     &Some(arbiter_addr.clone()),
+    ///     &vec![&env, 100_i128],
+    ///     &ReleaseAuthorization::ClientOnly,
+    /// );
+    /// client.deposit_funds(&contract_id, &client_addr, &100_i128);
+    /// client.raise_dispute(&contract_id, &client_addr);
+    ///
+    /// // The arbiter applies FullRefund and the contract terminates as Refunded.
+    /// assert!(client.resolve_dispute(
+    ///     &contract_id,
+    ///     &arbiter_addr,
+    ///     &DisputeResolution::FullRefund,
+    /// ));
+    /// let post = client.get_contract(&contract_id);
+    /// assert_eq!(post.refunded_amount, 100);
+    /// assert_eq!(post.released_amount, 0);
+    /// ```
     pub fn resolve_dispute(
         env: Env,
         contract_id: u32,

@@ -5,6 +5,16 @@
 //! the root dispute entrypoint whether the contract should end as `Completed`
 //! or `Refunded`. The root entrypoints own authentication, token transfer, event
 //! publication, and writes to `DataKey::Contract(contract_id)`.
+//!
+//! The two helpers exposed here, [`resolution_payouts`] and
+//! [`final_status_after_resolution`], are pure: they take a `&Contract` plus a
+//! [`crate::DisputeResolution`] and return a payout tuple or the post-resolution
+//! status. Both are only invoked from [`crate::Escrow::resolve_dispute`] (the
+//! arbiter-authorized resolution flow) — [`crate::Escrow::raise_dispute`] only
+//! transitions the contract status to [`crate::ContractStatus::Disputed`] and
+//! never touches the payout helpers. Everything in this module is
+//! deterministic and free of host calls; authentication, token transfer, and
+//! event publication remain in the storage-aware entrypoints in `lib.rs`.
 
 use soroban_sdk::{contractimpl, symbol_short, Address, Env};
 
@@ -26,7 +36,60 @@ use crate::{
 /// # Errors
 /// - `AccountingInvariantViolated` if available would be negative (corrupted state)
 /// - `PotentialOverflow` if intermediate calculations overflow
-/// - `InvalidDisputeSplit` for Split variant with negative legs or non-conserving sum
+/// - `InvalidDisputeSplit` for Split variant with negative legs, components
+///   that individually exceed `available`, or whose non-overflowing sum does
+///   not exactly match `available`
+///
+/// # Example
+/// ```ignore
+/// use soroban_sdk::{Address, Env};
+/// use crate::{
+///     Contract, ContractStatus, DisputeResolution, DisputeSplit, ReleaseAuthorization,
+/// };
+///
+/// let env = Env::default();
+/// let contract = Contract {
+///     client: Address::generate(&env),
+///     freelancer: Address::generate(&env),
+///     arbiter: Some(Address::generate(&env)),
+///     status: ContractStatus::Disputed,
+///     total_deposited: 100,
+///     funded_amount: 100,
+///     released_amount: 0,
+///     refunded_amount: 0,
+///     release_authorization: ReleaseAuthorization::ClientOnly,
+///     reputation_issued: false,
+/// };
+///
+/// // FullRefund routes every available stroop to the client.
+/// assert_eq!(
+///     resolution_payouts(&contract, &DisputeResolution::FullRefund),
+///     Ok((100, 0))
+/// );
+///
+/// // PartialRefund applies the 70/30 split, with floor rounding on the
+/// // freelancer leg (client receives the whole remainder).
+/// assert_eq!(
+///     resolution_payouts(&contract, &DisputeResolution::PartialRefund),
+///     Ok((70, 30))
+/// );
+///
+/// // FullPayout routes every available stroop to the freelancer.
+/// assert_eq!(
+///     resolution_payouts(&contract, &DisputeResolution::FullPayout),
+///     Ok((0, 100))
+/// );
+///
+/// // Split accepts custom amounts that exactly conserve the available balance.
+/// let split = DisputeSplit {
+///     client_amount: 65,
+///     freelancer_amount: 35,
+/// };
+/// assert_eq!(
+///     resolution_payouts(&contract, &DisputeResolution::Split(split)),
+///     Ok((65, 35))
+/// );
+/// ```
 pub fn resolution_payouts(
     contract: &Contract,
     resolution: &DisputeResolution,
@@ -71,8 +134,42 @@ pub fn resolution_payouts(
 
 /// Determine the final contract status after dispute resolution.
 ///
-/// Returns `Refunded` only when the full deposit has been refunded.
-/// Otherwise returns `Completed`.
+/// Returns [`ContractStatus::Refunded`] only when every stroop ever deposited
+/// has been refunded (`refunded_amount == funded_amount`). Otherwise returns
+/// [`ContractStatus::Completed`] — including the case where some funds remain
+/// escrowed after a dispute resolution.
+///
+/// # Example
+/// ```ignore
+/// use soroban_sdk::{Address, Env};
+/// use crate::{Contract, ContractStatus, ReleaseAuthorization};
+///
+/// let env = Env::default();
+/// let fixture = |funded: i128, refunded: i128| Contract {
+///     client: Address::generate(&env),
+///     freelancer: Address::generate(&env),
+///     arbiter: Some(Address::generate(&env)),
+///     status: ContractStatus::Disputed,
+///     total_deposited: funded,
+///     funded_amount: funded,
+///     released_amount: 0,
+///     refunded_amount: refunded,
+///     release_authorization: ReleaseAuthorization::ClientOnly,
+///     reputation_issued: false,
+/// };
+///
+/// // Full refund of the deposit lands the contract in the Refunded terminal state.
+/// assert_eq!(
+///     final_status_after_resolution(&fixture(100, 100)),
+///     ContractStatus::Refunded,
+/// );
+///
+/// // Partial refund plus the released remainder keeps the contract Completed.
+/// assert_eq!(
+///     final_status_after_resolution(&fixture(100, 60)),
+///     ContractStatus::Completed,
+/// );
+/// ```
 pub fn final_status_after_resolution(contract: &Contract) -> ContractStatus {
     if contract.refunded_amount == contract.funded_amount {
         ContractStatus::Refunded
