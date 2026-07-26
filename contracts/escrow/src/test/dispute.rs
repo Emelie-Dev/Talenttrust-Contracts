@@ -25,10 +25,10 @@
 #![cfg(test)]
 
 use crate::{
-    Contract, ContractStatus, DisputeResolution, DisputeSplit, Error, Escrow, EscrowClient,
-    ReleaseAuthorization,
+    Contract, ContractStatus, DataKey, DisputeOutcome, DisputeRecord, DisputeResolution,
+    DisputeSplit, Error, Escrow, EscrowClient, ReleaseAuthorization,
 };
-use soroban_sdk::{testutils::Address as _, vec, Address, Env};
+use soroban_sdk::{testutils::Address as _, token::StellarAssetClient, vec, Address, Env};
 
 use crate::dispute::{final_status_after_resolution, resolution_payouts};
 
@@ -762,4 +762,217 @@ fn resolve_after_finalize_is_rejected() {
         client.try_resolve_dispute(&contract_id, &arbiter_addr, &DisputeResolution::FullRefund),
         Error::AlreadyFinalized,
     );
+}
+
+// ---------------------------------------------------------------------------
+// Typed DataKey::Dispute storage round-trip tests (issue #948)
+// ---------------------------------------------------------------------------
+
+/// Helper: register an escrow with a bound SAC, returning
+/// `(escrow_client, sac_address, admin_address)`.
+fn setup_sac_escrow(env: &Env) -> (EscrowClient<'_>, Address, Address) {
+    let escrow_addr = env.register(Escrow, ());
+    let client = EscrowClient::new(env, &escrow_addr);
+    let admin = Address::generate(env);
+    let sac = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    client.initialize(&admin);
+    client.bind_settlement_token(&admin, &sac);
+    (client, sac, admin)
+}
+
+/// Helper: create + fully fund a contract with an arbiter via SAC deposit.
+fn sac_funded_contract(
+    env: &Env,
+    client: &EscrowClient<'_>,
+    sac: &Address,
+) -> (Address, Address, Address, u32) {
+    let client_addr = Address::generate(env);
+    let freelancer_addr = Address::generate(env);
+    let arbiter_addr = Address::generate(env);
+    let amount = 100_i128;
+    let milestones = vec![env, amount];
+    let contract_id = client.create_contract(
+        &client_addr,
+        &freelancer_addr,
+        &Some(arbiter_addr.clone()),
+        &milestones,
+        &ReleaseAuthorization::ClientOnly,
+    );
+    StellarAssetClient::new(env, sac).mint(&client_addr, &amount);
+    client.deposit_funds(&contract_id, &client_addr, &amount);
+    (client_addr, freelancer_addr, arbiter_addr, contract_id)
+}
+
+/// `get_dispute_record` returns `None` for a contract that has never been disputed.
+#[test]
+fn dispute_record_absent_before_raise() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+    let (client, sac, _admin) = setup_sac_escrow(&env);
+    let (_, _, _, contract_id) = sac_funded_contract(&env, &client, &sac);
+
+    assert!(
+        client.get_dispute_record(&contract_id).is_none(),
+        "no dispute record should exist before raise_dispute is called"
+    );
+}
+
+/// `raise_dispute` writes a `DisputeRecord` with correct fields and `resolution` is `None`.
+#[test]
+fn dispute_record_written_on_raise() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+    let (client, sac, _admin) = setup_sac_escrow(&env);
+    let (client_addr, _, _, contract_id) = sac_funded_contract(&env, &client, &sac);
+
+    let ts_before = env.ledger().timestamp();
+    client.raise_dispute(&contract_id, &client_addr);
+
+    let record: DisputeRecord = client
+        .get_dispute_record(&contract_id)
+        .expect("DisputeRecord must exist after raise_dispute");
+
+    assert_eq!(record.raised_by, client_addr);
+    assert!(record.raised_at >= ts_before);
+    assert_eq!(
+        record.outcome,
+        DisputeOutcome::Open,
+        "outcome must be Open while dispute is unresolved"
+    );
+    assert!(
+        record.resolved_at.is_none(),
+        "resolved_at must be None while dispute is open"
+    );
+}
+
+/// Freelancer can raise a dispute and the record captures their address.
+#[test]
+fn dispute_record_raised_by_freelancer_captured() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+    let (client, sac, _admin) = setup_sac_escrow(&env);
+    let (_, freelancer_addr, _, contract_id) = sac_funded_contract(&env, &client, &sac);
+
+    client.raise_dispute(&contract_id, &freelancer_addr);
+
+    let record = client
+        .get_dispute_record(&contract_id)
+        .expect("record must exist");
+    assert_eq!(record.raised_by, freelancer_addr);
+}
+
+/// `resolve_dispute` updates the record with the chosen resolution and a timestamp.
+#[test]
+fn dispute_record_updated_on_resolve() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+    let (client, sac, _admin) = setup_sac_escrow(&env);
+    let (client_addr, _, arbiter_addr, contract_id) = sac_funded_contract(&env, &client, &sac);
+
+    client.raise_dispute(&contract_id, &client_addr);
+    let ts_before = env.ledger().timestamp();
+    client.resolve_dispute(&contract_id, &arbiter_addr, &DisputeResolution::FullRefund);
+
+    let record = client
+        .get_dispute_record(&contract_id)
+        .expect("record must still exist after resolution");
+
+    assert_eq!(record.raised_by, client_addr);
+    assert_eq!(record.outcome, DisputeOutcome::FullRefund);
+    assert!(
+        record.resolved_at.is_some(),
+        "resolved_at must be set after resolution"
+    );
+    assert!(record.resolved_at.unwrap() >= ts_before);
+}
+
+/// Round-trip: write then read produces the same record, with FullPayout resolution.
+#[test]
+fn dispute_record_round_trip_full_payout() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+    let (client, sac, _admin) = setup_sac_escrow(&env);
+    let (client_addr, _, arbiter_addr, contract_id) = sac_funded_contract(&env, &client, &sac);
+
+    client.raise_dispute(&contract_id, &client_addr);
+
+    let open_record = client
+        .get_dispute_record(&contract_id)
+        .expect("open record must exist");
+    assert_eq!(open_record.outcome, DisputeOutcome::Open);
+
+    client.resolve_dispute(&contract_id, &arbiter_addr, &DisputeResolution::FullPayout);
+
+    let resolved_record = client
+        .get_dispute_record(&contract_id)
+        .expect("resolved record must exist");
+    assert_eq!(resolved_record.raised_by, client_addr);
+    assert_eq!(resolved_record.raised_at, open_record.raised_at);
+    assert_eq!(resolved_record.outcome, DisputeOutcome::FullPayout);
+    assert!(resolved_record.resolved_at.is_some());
+}
+
+/// Round-trip: Split resolution is stored and read back correctly.
+#[test]
+fn dispute_record_round_trip_split_resolution() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+    let (client, sac, _admin) = setup_sac_escrow(&env);
+    let (client_addr, _, arbiter_addr, contract_id) = sac_funded_contract(&env, &client, &sac);
+
+    client.raise_dispute(&contract_id, &client_addr);
+
+    let split = DisputeSplit {
+        client_amount: 40,
+        freelancer_amount: 60,
+    };
+    client.resolve_dispute(
+        &contract_id,
+        &arbiter_addr,
+        &DisputeResolution::Split(split.clone()),
+    );
+
+    let record = client
+        .get_dispute_record(&contract_id)
+        .expect("record must exist");
+
+    assert_eq!(
+        record.outcome,
+        DisputeOutcome::Split(split),
+        "Split outcome must survive the storage round-trip"
+    );
+}
+
+/// `DataKey::Dispute(contract_id)` is stored in persistent storage and can be read
+/// directly via `env.as_contract`.
+#[test]
+fn dispute_record_stored_under_typed_key() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+    let (client, sac, _admin) = setup_sac_escrow(&env);
+    let (client_addr, _, _, contract_id) = sac_funded_contract(&env, &client, &sac);
+
+    // No record before raise.
+    env.as_contract(&client.address, || {
+        let absent: Option<DisputeRecord> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Dispute(contract_id));
+        assert!(absent.is_none(), "key must be absent before raise_dispute");
+    });
+
+    client.raise_dispute(&contract_id, &client_addr);
+
+    // Record present and correct after raise.
+    env.as_contract(&client.address, || {
+        let record: DisputeRecord = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Dispute(contract_id))
+            .expect("DataKey::Dispute must be present after raise_dispute");
+        assert_eq!(record.raised_by, client_addr);
+        assert_eq!(record.outcome, DisputeOutcome::Open);
+    });
 }

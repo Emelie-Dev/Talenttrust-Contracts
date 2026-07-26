@@ -197,3 +197,15 @@ pub fn extend_participant_contract_index_ttl(env: &Env, key: &crate::DataKey) {
         .persistent()
         .extend_ttl(key, PERSISTENT_BUMP_THRESHOLD, PERSISTENT_TTL_LEDGERS);
 }
+
+/// Extend TTL of the dispute record entry for `contract_id`.
+pub fn extend_dispute_ttl(env: &Env, contract_id: u32) {
+    let key = DataKey::Dispute(contract_id);
+    if env.storage().persistent().has(&key) {
+        env.storage().persistent().extend_ttl(
+            &key,
+            PERSISTENT_BUMP_THRESHOLD,
+            PERSISTENT_TTL_LEDGERS,
+        );
+    }
+}
