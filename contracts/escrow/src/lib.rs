@@ -506,8 +506,7 @@ impl Escrow {
         // rejected deposits cannot debit the client and then fail state checks.
         let validated = deposit::validate_deposit(&env, contract_id, &caller, amount);
 
-        let token = Self::read_settlement_token(&env)
-            .unwrap_or_else(|| env.panic_with_error(Error::SettlementTokenNotConfigured));
+        let token = validated.contract.token.clone();
 
         let token_client = token::Client::new(&env, &token);
         token_client.transfer(&caller, &env.current_contract_address(), &amount);
@@ -836,8 +835,7 @@ impl Escrow {
         // Transfer the net amount (gross minus fee) to the freelancer.
         // The fee portion remains in the contract's token balance and is
         // tracked separately in AccumulatedProtocolFees.
-        let token = Self::read_settlement_token(&env)
-            .unwrap_or_else(|| env.panic_with_error(Error::SettlementTokenNotConfigured));
+        let token = contract.token.clone();
         let token_client = token::Client::new(&env, &token);
         token_client.transfer(
             &env.current_contract_address(),
@@ -1102,8 +1100,7 @@ impl Escrow {
         }
 
         // Transfer tokens from contract to client
-        let token = Self::read_settlement_token(&env)
-            .unwrap_or_else(|| env.panic_with_error(Error::SettlementTokenNotConfigured));
+        let token = contract.token.clone();
 
         let token_client = token::Client::new(&env, &token);
         token_client.transfer(
@@ -1622,8 +1619,7 @@ impl Escrow {
         let refund_amount =
             contract.funded_amount - contract.released_amount - contract.refunded_amount;
         if refund_amount > 0 {
-            let token = Self::read_settlement_token(&env)
-                .unwrap_or_else(|| env.panic_with_error(EscrowError::NotInitialized));
+            let token = contract.token.clone();
             token::Client::new(&env, &token).transfer(
                 &env.current_contract_address(),
                 &client,

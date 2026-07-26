@@ -51,6 +51,10 @@ impl Escrow {
         // finalize.rs::require_not_paused.
         Self::require_not_paused(&env);
 
+        // Require a bound settlement token before creating escrows.
+        let bound_token = Self::read_settlement_token(&env)
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::SettlementTokenNotConfigured));
+
         client.require_auth();
 
         // Validate that client and freelancer are distinct participants.
@@ -132,6 +136,7 @@ impl Escrow {
             refunded_amount: 0,
             release_authorization,
             reputation_issued: false,
+            token: bound_token,
         };
         env.storage()
             .persistent()

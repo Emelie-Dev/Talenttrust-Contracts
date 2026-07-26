@@ -67,6 +67,7 @@ fn payout_contract(env: &Env, funded: i128, released: i128, refunded: i128) -> C
         refunded_amount: refunded,
         release_authorization: ReleaseAuthorization::ClientOnly,
         reputation_issued: false,
+        token: Address::generate(env),
     }
 }
 

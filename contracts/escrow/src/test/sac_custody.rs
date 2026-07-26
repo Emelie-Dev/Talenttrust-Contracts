@@ -445,7 +445,7 @@ fn deposit_funds_with_sac_pulls_amount_into_contract() {
 }
 
 #[test]
-fn deposit_funds_rejects_when_token_unbound() {
+fn create_contract_rejects_when_token_unbound() {
     let env = Env::default();
     env.mock_all_auths_allowing_non_root_auth();
     let contract_id = env.register(crate::Escrow, ());
@@ -453,6 +453,26 @@ fn deposit_funds_rejects_when_token_unbound() {
     let admin = Address::generate(&env);
     client.initialize(&admin);
     // NOTE: not calling bind_settlement_token.
+
+    let client_addr = Address::generate(&env);
+    let freelancer_addr = Address::generate(&env);
+    assert_contract_error(
+        client.try_create_contract(
+            &client_addr,
+            &freelancer_addr,
+            &None,
+            &super::default_milestones(&env),
+            &ReleaseAuthorization::ClientOnly,
+        ),
+        crate::Error::SettlementTokenNotConfigured,
+    );
+}
+
+#[test]
+fn create_contract_persists_bound_settlement_token() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+    let (client, sac1, _admin) = setup_bound(&env);
 
     let client_addr = Address::generate(&env);
     let freelancer_addr = Address::generate(&env);
@@ -464,15 +484,8 @@ fn deposit_funds_rejects_when_token_unbound() {
         &ReleaseAuthorization::ClientOnly,
     );
 
-    assert_contract_error(
-        client.try_deposit_funds(&id, &client_addr, &100_i128),
-        crate::Error::SettlementTokenNotConfigured,
-    );
-
-    // State must be unchanged: no funded_amount bump, no status transition.
     let contract = client.get_contract(&id);
-    assert_eq!(contract.funded_amount, 0);
-    assert_eq!(contract.status, ContractStatus::Created);
+    assert_eq!(contract.token, sac1);
 }
 
 // ─── release_milestone (SAC path) ─────────────────────────────────────────────
