@@ -73,40 +73,35 @@ fn make_contract(env: &Env, funded: i128, released: i128, refunded: i128) -> Con
 
 /// Generate a valid accounting triple: `(funded, released, refunded)`
 /// where `released + refunded <= funded`.
-prop_compose! {
-    fn valid_accounting(
-        max_amount: i128,
-    )(
-        funded in 0i128..=max_amount,
-    )(
-        funded in Just(funded),
-        released in 0i128..=funded,
-    )(
-        funded in Just(funded),
-        released in Just(released),
-        refunded in 0i128..=(funded - released),
-    ) -> (i128, i128, i128) {
-        (funded, released, refunded)
-    }
+fn valid_accounting(max_amount: i128) -> impl Strategy<Value = (i128, i128, i128)> {
+    (0i128..=max_amount)
+        .prop_flat_map(move |funded| {
+            (0i128..=funded)
+                .prop_flat_map(move |released| {
+                    (0i128..=(funded - released))
+                        .prop_map(move |refunded| (funded, released, refunded))
+                })
+        })
 }
 
 /// Generate a corrupted accounting triple where `released + refunded > funded`,
 /// producing a negative available balance.
-prop_compose! {
-    fn corrupted_accounting()(
-        funded in 0i128..i128::MAX,
-    )(
-        funded in Just(funded),
-        // overshoot is guaranteed positive and won't overflow when added to funded
-        // because we clamp to i128::MAX - funded
-        overshoot in 1i128..=(i128::MAX.saturating_sub(funded).max(1)),
-    )(
-        total in Just(funded.saturating_add(overshoot)),
-        released in 0i128..=funded.saturating_add(overshoot),
-    ) -> (i128, i128, i128) {
-        let refunded = total.saturating_sub(released);
-        (funded, released, refunded)
-    }
+fn corrupted_accounting() -> impl Strategy<Value = (i128, i128, i128)> {
+    (0i128..i128::MAX)
+        .prop_flat_map(|funded| {
+            // overshoot is guaranteed positive and won't overflow when added to funded
+            // because we clamp to i128::MAX - funded
+            let max_overshoot = i128::MAX.saturating_sub(funded).max(1);
+            (1i128..=max_overshoot)
+                .prop_flat_map(move |overshoot| {
+                    let total = funded.saturating_add(overshoot);
+                    (0i128..=total)
+                        .prop_map(move |released| {
+                            let refunded = total.saturating_sub(released);
+                            (funded, released, refunded)
+                        })
+                })
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -114,16 +109,13 @@ prop_compose! {
 // ---------------------------------------------------------------------------
 
 proptest! {
-    #![proptest_config(ProptestConfig {
-        cases: DEFAULT_CASES,
-        ..ProptestConfig::default()
-    })]
+    #![proptest_config(ProptestConfig::with_cases(DEFAULT_CASES))]
 
     /// Conservation invariant: for any valid accounting state and any
     /// resolution variant, client_payout + freelancer_payout == available.
     #[test]
     fn prop_conservation_invariant_holds(
-        (funded, released, refunded) in valid_accounting(MAX_AMOUNT_FOR_PARTIAL),
+        (funded, released, refunded) in valid_accounting(MAX_AMOUNT_FOR_PARTIAL)
     ) {
         let env = Env::default();
         let contract = make_contract(&env, funded, released, refunded);
@@ -155,7 +147,7 @@ proptest! {
     /// with client receiving the remainder, for all valid amounts.
     #[test]
     fn prop_partial_refund_floor_rounding(
-        (funded, released, refunded) in valid_accounting(MAX_AMOUNT_FOR_PARTIAL),
+        (funded, released, refunded) in valid_accounting(MAX_AMOUNT_FOR_PARTIAL)
     ) {
         let env = Env::default();
         let contract = make_contract(&env, funded, released, refunded);
@@ -179,7 +171,7 @@ proptest! {
     /// The split is derived from the contract's actual available balance.
     #[test]
     fn prop_split_accepts_valid(
-        (funded, released, refunded) in valid_accounting(MAX_AMOUNT_FOR_PARTIAL),
+        (funded, released, refunded) in valid_accounting(MAX_AMOUNT_FOR_PARTIAL)
     ) {
         let env = Env::default();
         let contract = make_contract(&env, funded, released, refunded);
@@ -209,7 +201,7 @@ proptest! {
     /// and individual amounts exceeding available.
     #[test]
     fn prop_split_rejects_invalid(
-        (funded, released, refunded) in valid_accounting(MAX_AMOUNT_FOR_PARTIAL),
+        (funded, released, refunded) in valid_accounting(MAX_AMOUNT_FOR_PARTIAL)
     ) {
         let available = funded - released - refunded;
         prop_assume!(available > 0);
@@ -280,7 +272,7 @@ proptest! {
     /// `refunded_amount == funded_amount`; otherwise `Completed`.
     #[test]
     fn prop_final_status_refunded_iff_fully_refunded(
-        funded in 0i128..=MAX_AMOUNT_FOR_PARTIAL,
+        funded in 0i128..=MAX_AMOUNT_FOR_PARTIAL
     ) {
         let env = Env::default();
         // Test: refunded == funded → Refunded
@@ -308,7 +300,7 @@ proptest! {
     /// `AccountingInvariantViolated`.
     #[test]
     fn prop_corrupted_state_rejected(
-        (funded, released, refunded) in corrupted_accounting(),
+        (funded, released, refunded) in corrupted_accounting()
     ) {
         let env = Env::default();
         let contract = make_contract(&env, funded, released, refunded);
@@ -325,7 +317,7 @@ proptest! {
     /// Zero available must produce (0, 0) for every resolution variant.
     #[test]
     fn prop_zero_available_all_variants(
-        funded in 0i128..=MAX_AMOUNT_FOR_PARTIAL,
+        funded in 0i128..=MAX_AMOUNT_FOR_PARTIAL
     ) {
         let env = Env::default();
         // released=0, refunded=funded → available == 0
@@ -353,31 +345,32 @@ proptest! {
         prop_assert_eq!((c, f), (0, 0));
     }
 
-    /// For zero-funded contracts, `final_status_after_resolution` returns
-    /// `Refunded` because `refunded_amount == funded_amount == 0`.
-    #[test]
-    fn prop_zero_funded_status_is_refunded() {
-        let env = Env::default();
-        let contract = make_contract(&env, 0, 0, 0);
-        prop_assert_eq!(
-            final_status_after_resolution(&contract),
-            ContractStatus::Refunded,
-        );
-    }
+}
 
-    /// Split with i128::MAX amounts where sum overflows must return
-    /// `PotentialOverflow`.
-    #[test]
-    fn prop_split_overflow_rejected() {
-        let env = Env::default();
-        let contract = make_contract(&env, i128::MAX, 0, 0);
-        let split = DisputeSplit {
-            client_amount: i128::MAX,
-            freelancer_amount: 1,
-        };
-        let result = resolution_payouts(&contract, &DisputeResolution::Split(split));
-        prop_assert_eq!(result, Err(Error::PotentialOverflow));
-    }
+/// For zero-funded contracts, `final_status_after_resolution` returns
+/// `Refunded` because `refunded_amount == funded_amount == 0`.
+#[test]
+fn prop_zero_funded_status_is_refunded() {
+    let env = Env::default();
+    let contract = make_contract(&env, 0, 0, 0);
+    assert_eq!(
+        final_status_after_resolution(&contract),
+        ContractStatus::Refunded,
+    );
+}
+
+/// Split with i128::MAX amounts where sum overflows must return
+/// `PotentialOverflow`.
+#[test]
+fn prop_split_overflow_rejected() {
+    let env = Env::default();
+    let contract = make_contract(&env, i128::MAX, 0, 0);
+    let split = DisputeSplit {
+        client_amount: i128::MAX,
+        freelancer_amount: 1,
+    };
+    let result = resolution_payouts(&contract, &DisputeResolution::Split(split));
+    assert_eq!(result, Err(Error::PotentialOverflow));
 }
 
 // ---------------------------------------------------------------------------
@@ -434,10 +427,7 @@ fn int_ops_strategy(n_ms: u32) -> impl Strategy<Value = StdVec<DisputeOp>> {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig {
-        cases: DEFAULT_CASES,
-        ..ProptestConfig::default()
-    })]
+    #![proptest_config(ProptestConfig::with_cases(DEFAULT_CASES))]
 
     /// Full dispute lifecycle: create, fund, operate, dispute, resolve.
     /// The accounting invariant (`funded >= released + refunded`) must hold
@@ -447,7 +437,7 @@ proptest! {
         (amounts, ops) in int_milestone_amounts().prop_flat_map(|amounts| {
             let n = amounts.len() as u32;
             (Just(amounts), int_ops_strategy(n))
-        }),
+        })
     ) {
         let env = Env::default();
         env.mock_all_auths();
@@ -572,7 +562,7 @@ proptest! {
     /// to refunded_amount and mark Refunded.
     #[test]
     fn prop_dispute_full_refund_integration(
-        amounts in int_milestone_amounts(),
+        amounts in int_milestone_amounts()
     ) {
         let env = Env::default();
         env.mock_all_auths();
@@ -644,7 +634,7 @@ proptest! {
     /// to released_amount and mark Completed.
     #[test]
     fn prop_dispute_full_payout_integration(
-        amounts in int_milestone_amounts(),
+        amounts in int_milestone_amounts()
     ) {
         let env = Env::default();
         env.mock_all_auths();
@@ -713,7 +703,7 @@ proptest! {
     /// with the freelancer receiving floor(available * 30 / 100).
     #[test]
     fn prop_dispute_partial_refund_split_integration(
-        amounts in int_milestone_amounts(),
+        amounts in int_milestone_amounts()
     ) {
         let env = Env::default();
         env.mock_all_auths();
@@ -784,7 +774,7 @@ proptest! {
     /// amounts and conserve balance.
     #[test]
     fn prop_dispute_split_integration(
-        amounts in int_milestone_amounts(),
+        amounts in int_milestone_amounts()
     ) {
         let env = Env::default();
         env.mock_all_auths();
@@ -859,7 +849,7 @@ proptest! {
     /// Raise dispute is rejected when no arbiter is configured.
     #[test]
     fn prop_raise_dispute_rejected_without_arbiter(
-        amounts in int_milestone_amounts(),
+        amounts in int_milestone_amounts()
     ) {
         let env = Env::default();
         env.mock_all_auths();
@@ -900,7 +890,7 @@ proptest! {
     /// Double-resolve is rejected.
     #[test]
     fn prop_double_resolve_rejected(
-        amounts in int_milestone_amounts(),
+        amounts in int_milestone_amounts()
     ) {
         let env = Env::default();
         env.mock_all_auths();
