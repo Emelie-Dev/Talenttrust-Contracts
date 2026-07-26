@@ -4,8 +4,8 @@ use super::{
     MILESTONE_TWO,
 };
 use crate::{
-    ContractStatus, DataKey, EscrowError, Milestone, ReadinessChecklist, ReleaseAuthorization,
-    StorageKey,
+    ContractStatus, DataKey, EscrowError, ReadinessChecklist, ReleaseAuthorization,
+    ESCROW_STORAGE_VERSION,
 };
 use soroban_sdk::{testutils::Address as _, Address, Env};
 
@@ -331,6 +331,60 @@ fn next_contract_id_increments_per_contract() {
     let (_, _, id1) = create_contract(&env, &client);
     let (_, _, id2) = create_contract(&env, &client);
     assert_eq!(id2, id1 + 1);
+}
+
+#[test]
+fn storage_version_migrates_legacy_layout_and_preserves_contract_data() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let (client_addr, freelancer_addr, id) = create_contract(&env, &client);
+    let contract = client.get_contract(&id);
+
+    env.as_contract(&client.address, || {
+        env.storage().persistent().set(&DataKey::StorageVersion, &0u32);
+    });
+
+    let migrated = client.get_contract(&id);
+    assert_eq!(migrated.client, contract.client);
+    assert_eq!(migrated.freelancer, contract.freelancer);
+    assert_eq!(migrated.status, contract.status);
+
+    env.as_contract(&client.address, || {
+        let version: u32 = env.storage().persistent().get(&DataKey::StorageVersion).unwrap();
+        assert_eq!(version, ESCROW_STORAGE_VERSION);
+    });
+
+    assert_eq!(client.get_milestones(&id).len(), 3);
+    assert_eq!(client.get_contract(&id).client, client_addr);
+    assert_eq!(client.get_contract(&id).freelancer, freelancer_addr);
+}
+
+#[test]
+fn storage_version_is_a_noop_for_current_layout() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .set(&DataKey::StorageVersion, &ESCROW_STORAGE_VERSION);
+    });
+
+    let contract_id = create_contract(&env, &client).2;
+    let contract = client.get_contract(&contract_id);
+    assert_eq!(contract.status, ContractStatus::Created);
+
+    env.as_contract(&client.address, || {
+        let version: u32 = env.storage().persistent().get(&DataKey::StorageVersion).unwrap();
+        assert_eq!(version, ESCROW_STORAGE_VERSION);
+    });
 }
 
 #[test]

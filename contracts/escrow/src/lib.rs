@@ -57,7 +57,7 @@ mod approvals;
 mod deposit;
 mod finalize;
 mod migration;
-mod settlement;
+mod storage;
 mod ttl;
 mod types;
 mod utils;
@@ -79,6 +79,7 @@ pub use amount_validation::MAX_SINGLE_AMOUNT_STROOPS;
 pub use dispute::final_status_after_resolution;
 pub use dispute::resolution_payouts;
 pub use migration::PendingClientMigration;
+pub use storage::{initialize_storage_version, ESCROW_STORAGE_VERSION};
 pub use ttl::{ADMIN_ROTATION_MIN_DELAY_LEDGERS, PENDING_MIGRATION_TTL_LEDGERS};
 
 pub use types::{
@@ -390,6 +391,7 @@ impl Escrow {
         }
 
         admin.require_auth();
+        storage::initialize_storage_version(&env);
         env.storage().persistent().set(&DataKey::Initialized, &true);
         env.storage().persistent().set(&DataKey::Admin, &admin);
         env.storage()
@@ -1313,12 +1315,14 @@ impl Escrow {
     }
 
     pub fn contract_exists(env: Env, contract_id: u32) -> bool {
+        storage::ensure_storage_version(&env);
         env.storage()
             .persistent()
             .has(&DataKey::Contract(contract_id))
     }
 
     pub fn get_contract(env: Env, contract_id: u32) -> Contract {
+        storage::ensure_storage_version(&env);
         let contract = env
             .storage()
             .persistent()
@@ -1330,6 +1334,7 @@ impl Escrow {
     }
 
     pub fn get_next_contract_id(env: Env) -> u32 {
+        storage::ensure_storage_version(&env);
         env.storage()
             .persistent()
             .get(&DataKey::NextContractId)
@@ -1434,6 +1439,7 @@ impl Escrow {
     /// # Errors
     /// * `ContractNotFound` - If contract doesn't exist
     pub fn get_contract_summary(env: Env, contract_id: u32) -> ContractSummary {
+        storage::ensure_storage_version(&env);
         let contract: Contract = env
             .storage()
             .persistent()
@@ -1488,6 +1494,8 @@ impl Escrow {
     }
 
     pub fn get_milestones(env: Env, contract_id: u32) -> Vec<Milestone> {
+        storage::ensure_storage_version(&env);
+        let milestone_key = Symbol::new(&env, "milestones");
         let milestones = env
             .storage()
             .persistent()
