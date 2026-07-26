@@ -456,23 +456,6 @@ impl Escrow {
             .unwrap_or_default()
     }
 
-    /// Creates a new escrow contract with the specified client, freelancer, and milestone amounts.
-    ///
-    /// # Arguments
-    /// * `env` - The contract environment
-    /// * `client` - The address of the client funding the contract
-    /// * `freelancer` - The address of the freelancer performing the work
-    /// * `arbiter` - Optional arbiter address for dispute resolution
-    /// * `milestones` - Vector of milestone amounts (in stroops)
-    /// * `release_authorization` - Authorization mode for milestone releases
-    ///
-    /// # Returns
-    /// The unique contract ID
-    ///
-    /// # Errors
-    /// * `InvalidParticipants` - If client and freelancer are the same address
-    /// * `EmptyMilestones` - If no milestones are provided
-    /// * `InvalidMilestoneAmount` - If any milestone amount is <= 0
     /// Pull the settlement-token deposit from the client into the escrow contract address.
     ///
     /// Executes `SAC::transfer(from: client, to: escrow_address, amount)` and advances
@@ -498,6 +481,39 @@ impl Escrow {
     /// * `ContractNotFound` - If contract doesn't exist
     /// * `InvalidState` - If contract is not in Created state
     /// * `UnauthorizedRole` - If caller is not the client
+    ///
+    /// # Examples
+    /// ```
+    /// use soroban_sdk::{testutils::Address as _, token::StellarAssetClient, vec, Address, Env};
+    /// use escrow::{Escrow, EscrowClient, ReleaseAuthorization};
+    ///
+    /// let env = Env::default();
+    /// env.mock_all_auths_allowing_non_root_auth();
+    ///
+    /// let contract_id = env.register(Escrow, ());
+    /// let escrow = EscrowClient::new(&env, &contract_id);
+    ///
+    /// let admin = Address::generate(&env);
+    /// escrow.initialize(&admin);
+    ///
+    /// let token = env.register_stellar_asset_contract(admin.clone());
+    /// escrow.bind_settlement_token(&admin, &token);
+    ///
+    /// let client = Address::generate(&env);
+    /// let freelancer = Address::generate(&env);
+    /// let milestones = vec![&env, 100_0000000_i128, 200_0000000_i128];
+    /// let escrow_id = escrow.create_contract(
+    ///     &client,
+    ///     &freelancer,
+    ///     &None,
+    ///     &milestones,
+    ///     &ReleaseAuthorization::ClientOnly,
+    /// );
+    ///
+    /// StellarAssetClient::new(&env, &token).mint(&client, &300_0000000);
+    /// let funded = escrow.deposit_funds(&escrow_id, &client, &300_0000000);
+    /// assert!(funded);
+    /// ```
     pub fn deposit_funds(env: Env, contract_id: u32, caller: Address, amount: i128) -> bool {
         Self::require_initialized(&env);
         Self::require_not_paused(&env);
@@ -603,6 +619,40 @@ impl Escrow {
     ///   and approval staging so no approval state mutates while the contract is frozen.
     ///
     /// See `docs/escrow/approvals-and-release.md` for the full flow.
+    ///
+    /// # Examples
+    /// ```
+    /// use soroban_sdk::{testutils::Address as _, token::StellarAssetClient, vec, Address, Env};
+    /// use escrow::{Escrow, EscrowClient, ReleaseAuthorization};
+    ///
+    /// let env = Env::default();
+    /// env.mock_all_auths_allowing_non_root_auth();
+    ///
+    /// let contract_id = env.register(Escrow, ());
+    /// let escrow = EscrowClient::new(&env, &contract_id);
+    ///
+    /// let admin = Address::generate(&env);
+    /// escrow.initialize(&admin);
+    /// let token = env.register_stellar_asset_contract(admin.clone());
+    /// escrow.bind_settlement_token(&admin, &token);
+    ///
+    /// let client = Address::generate(&env);
+    /// let freelancer = Address::generate(&env);
+    /// let milestones = vec![&env, 100_0000000_i128];
+    /// let escrow_id = escrow.create_contract(
+    ///     &client,
+    ///     &freelancer,
+    ///     &None,
+    ///     &milestones,
+    ///     &ReleaseAuthorization::ClientOnly,
+    /// );
+    /// StellarAssetClient::new(&env, &token).mint(&client, &100_0000000);
+    /// escrow.deposit_funds(&escrow_id, &client, &100_0000000);
+    ///
+    /// // `ClientOnly` mode requires only the client's approval.
+    /// let approved = escrow.approve_milestone_release(&escrow_id, &client, &0);
+    /// assert!(approved);
+    /// ```
     pub fn approve_milestone_release(
         env: Env,
         contract_id: u32,
@@ -687,6 +737,41 @@ impl Escrow {
     /// Additionally emits `("ctrct_cmp", contract_id)` with payload
     /// `(caller, timestamp)` when the release transitions the contract to
     /// `Completed` (i.e. all milestones are released or refunded).
+    ///
+    /// # Examples
+    /// ```
+    /// use soroban_sdk::{testutils::Address as _, token::StellarAssetClient, vec, Address, Env};
+    /// use escrow::{Escrow, EscrowClient, ReleaseAuthorization};
+    ///
+    /// let env = Env::default();
+    /// env.mock_all_auths_allowing_non_root_auth();
+    ///
+    /// let contract_id = env.register(Escrow, ());
+    /// let escrow = EscrowClient::new(&env, &contract_id);
+    ///
+    /// let admin = Address::generate(&env);
+    /// escrow.initialize(&admin);
+    /// let token = env.register_stellar_asset_contract(admin.clone());
+    /// escrow.bind_settlement_token(&admin, &token);
+    ///
+    /// let client = Address::generate(&env);
+    /// let freelancer = Address::generate(&env);
+    /// let milestones = vec![&env, 100_0000000_i128];
+    /// let escrow_id = escrow.create_contract(
+    ///     &client,
+    ///     &freelancer,
+    ///     &None,
+    ///     &milestones,
+    ///     &ReleaseAuthorization::ClientOnly,
+    /// );
+    /// StellarAssetClient::new(&env, &token).mint(&client, &100_0000000);
+    /// escrow.deposit_funds(&escrow_id, &client, &100_0000000);
+    /// escrow.approve_milestone_release(&escrow_id, &client, &0);
+    ///
+    /// let released = escrow.release_milestone(&escrow_id, &client, &0);
+    /// assert!(released);
+    /// assert!(escrow.get_milestone(&escrow_id, &0).unwrap().released);
+    /// ```
     pub fn release_milestone(
         env: Env,
         contract_id: u32,
@@ -954,6 +1039,35 @@ impl Escrow {
     /// # Security
     /// Uses `now_seconds(&env)` which is the single source of truth for ledger time.
     /// Time cannot be manipulated by contract callers.
+    ///
+    /// # Examples
+    /// ```
+    /// use soroban_sdk::{testutils::Address as _, vec, Address, Env};
+    /// use escrow::{Escrow, EscrowClient, ReleaseAuthorization};
+    ///
+    /// let env = Env::default();
+    /// env.mock_all_auths();
+    ///
+    /// let contract_id = env.register(Escrow, ());
+    /// let escrow = EscrowClient::new(&env, &contract_id);
+    ///
+    /// let admin = Address::generate(&env);
+    /// escrow.initialize(&admin);
+    ///
+    /// let client = Address::generate(&env);
+    /// let freelancer = Address::generate(&env);
+    /// let milestones = vec![&env, 100_0000000_i128];
+    /// let escrow_id = escrow.create_contract(
+    ///     &client,
+    ///     &freelancer,
+    ///     &None,
+    ///     &milestones,
+    ///     &ReleaseAuthorization::ClientOnly,
+    /// );
+    ///
+    /// // No deadline was set on the milestone, so it can never be overdue.
+    /// assert!(!escrow.is_milestone_overdue(&escrow_id, &0));
+    /// ```
     pub fn is_milestone_overdue(env: Env, contract_id: u32, milestone_index: u32) -> bool {
         let contract: Contract = match env
             .storage()
@@ -1015,6 +1129,40 @@ impl Escrow {
     /// * `InsufficientFunds` - If contract doesn't have enough balance to refund
     /// * `AlreadyFinalized` - If a finalization record already exists for this contract
     /// * `InvalidState` - If contract status is not Created, Funded, or Disputed
+    ///
+    /// # Examples
+    /// ```
+    /// use soroban_sdk::{testutils::Address as _, token::StellarAssetClient, vec, Address, Env};
+    /// use escrow::{Escrow, EscrowClient, ReleaseAuthorization};
+    ///
+    /// let env = Env::default();
+    /// env.mock_all_auths_allowing_non_root_auth();
+    ///
+    /// let contract_id = env.register(Escrow, ());
+    /// let escrow = EscrowClient::new(&env, &contract_id);
+    ///
+    /// let admin = Address::generate(&env);
+    /// escrow.initialize(&admin);
+    /// let token = env.register_stellar_asset_contract(admin.clone());
+    /// escrow.bind_settlement_token(&admin, &token);
+    ///
+    /// let client = Address::generate(&env);
+    /// let freelancer = Address::generate(&env);
+    /// let milestones = vec![&env, 100_0000000_i128, 200_0000000_i128];
+    /// let escrow_id = escrow.create_contract(
+    ///     &client,
+    ///     &freelancer,
+    ///     &None,
+    ///     &milestones,
+    ///     &ReleaseAuthorization::ClientOnly,
+    /// );
+    /// StellarAssetClient::new(&env, &token).mint(&client, &300_0000000);
+    /// escrow.deposit_funds(&escrow_id, &client, &300_0000000);
+    ///
+    /// // The client (authorized implicitly) reclaims both unreleased milestones.
+    /// let refunded = escrow.refund_unreleased_milestones(&escrow_id, &vec![&env, 0u32, 1u32]);
+    /// assert_eq!(refunded, 300_0000000);
+    /// ```
     pub fn refund_unreleased_milestones(
         env: Env,
         contract_id: u32,
@@ -1184,10 +1332,17 @@ impl Escrow {
     ///
     /// # Examples
     /// ```
-    /// // Safe iteration over a range of IDs
+    /// use soroban_sdk::{testutils::Address as _, Env};
+    /// use escrow::{Escrow, EscrowClient};
+    ///
+    /// let env = Env::default();
+    /// let contract_id = env.register(Escrow, ());
+    /// let escrow = EscrowClient::new(&env, &contract_id);
+    ///
+    /// // Safe iteration over a range of IDs; no contract has been created yet.
     /// for id in 1..=100 {
-    ///     if escrow.contract_exists(id) {
-    ///         let contract = escrow.get_contract(id);
+    ///     if escrow.contract_exists(&id) {
+    ///         let _contract = escrow.get_contract(&id);
     ///         // process contract
     ///     }
     /// }
@@ -1229,12 +1384,21 @@ impl Escrow {
     ///
     /// # Examples
     /// ```
-    /// // Get the high-water mark
+    /// use soroban_sdk::{testutils::Address as _, Env};
+    /// use escrow::{Escrow, EscrowClient};
+    ///
+    /// let env = Env::default();
+    /// let contract_id = env.register(Escrow, ());
+    /// let escrow = EscrowClient::new(&env, &contract_id);
+    ///
+    /// // Get the high-water mark.
     /// let next_id = escrow.get_next_contract_id();
-    /// // All allocated IDs are in the range [1, next_id - 1]
+    /// assert_eq!(next_id, 1);
+    ///
+    /// // All allocated IDs are in the range [1, next_id - 1].
     /// for id in 1..next_id {
-    ///     if escrow.contract_exists(id) {
-    ///         let contract = escrow.get_contract(id);
+    ///     if escrow.contract_exists(&id) {
+    ///         let _contract = escrow.get_contract(&id);
     ///         // process contract
     ///     }
     /// }
@@ -1311,6 +1475,47 @@ impl Escrow {
     }
 
     /// Retrieves all milestones for a contract.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `contract_id` - The contract ID
+    ///
+    /// # Returns
+    /// The full ordered `Vec<Milestone>` for `contract_id`.
+    ///
+    /// # Errors
+    /// Panics with `ContractNotFound` if the contract's milestones were never
+    /// allocated (i.e. the contract id is unknown).
+    ///
+    /// # Examples
+    /// ```
+    /// use soroban_sdk::{testutils::Address as _, vec, Address, Env};
+    /// use escrow::{Escrow, EscrowClient, ReleaseAuthorization};
+    ///
+    /// let env = Env::default();
+    /// env.mock_all_auths();
+    ///
+    /// let contract_id = env.register(Escrow, ());
+    /// let escrow = EscrowClient::new(&env, &contract_id);
+    ///
+    /// let admin = Address::generate(&env);
+    /// escrow.initialize(&admin);
+    ///
+    /// let client = Address::generate(&env);
+    /// let freelancer = Address::generate(&env);
+    /// let milestones = vec![&env, 100_0000000_i128, 200_0000000_i128];
+    /// let escrow_id = escrow.create_contract(
+    ///     &client,
+    ///     &freelancer,
+    ///     &None,
+    ///     &milestones,
+    ///     &ReleaseAuthorization::ClientOnly,
+    /// );
+    ///
+    /// let stored = escrow.get_milestones(&escrow_id);
+    /// assert_eq!(stored.len(), 2);
+    /// assert_eq!(stored.get(0).unwrap().amount, 100_0000000);
+    /// ```
     pub fn get_milestones(env: Env, contract_id: u32) -> Vec<Milestone> {
         let milestone_key = Symbol::new(&env, "milestones");
         let milestones = env
@@ -1346,6 +1551,35 @@ impl Escrow {
     /// # Side effects
     /// Extends the milestones vector TTL on a successful read, consistent with
     /// `get_milestones`. Auth-free and otherwise non-mutating.
+    ///
+    /// # Examples
+    /// ```
+    /// use soroban_sdk::{testutils::Address as _, vec, Address, Env};
+    /// use escrow::{Escrow, EscrowClient, ReleaseAuthorization};
+    ///
+    /// let env = Env::default();
+    /// env.mock_all_auths();
+    ///
+    /// let contract_id = env.register(Escrow, ());
+    /// let escrow = EscrowClient::new(&env, &contract_id);
+    ///
+    /// let admin = Address::generate(&env);
+    /// escrow.initialize(&admin);
+    ///
+    /// let client = Address::generate(&env);
+    /// let freelancer = Address::generate(&env);
+    /// let milestones = vec![&env, 100_0000000_i128];
+    /// let escrow_id = escrow.create_contract(
+    ///     &client,
+    ///     &freelancer,
+    ///     &None,
+    ///     &milestones,
+    ///     &ReleaseAuthorization::ClientOnly,
+    /// );
+    ///
+    /// assert_eq!(escrow.get_milestone(&escrow_id, &0).unwrap().amount, 100_0000000);
+    /// assert!(escrow.get_milestone(&escrow_id, &1).is_none());
+    /// ```
     pub fn get_milestone(env: Env, contract_id: u32, milestone_index: u32) -> Option<Milestone> {
         let milestone_key = Symbol::new(&env, "milestones");
         let milestones: Vec<Milestone> = env
@@ -1385,6 +1619,44 @@ impl Escrow {
     /// storage access and TTL bump behavior.
     ///
     /// See `approve_milestone_release` and `docs/escrow/authorization.md`.
+    ///
+    /// # Examples
+    /// ```
+    /// use soroban_sdk::{testutils::Address as _, token::StellarAssetClient, vec, Address, Env};
+    /// use escrow::{Escrow, EscrowClient, ReleaseAuthorization};
+    ///
+    /// let env = Env::default();
+    /// env.mock_all_auths_allowing_non_root_auth();
+    ///
+    /// let contract_id = env.register(Escrow, ());
+    /// let escrow = EscrowClient::new(&env, &contract_id);
+    ///
+    /// let admin = Address::generate(&env);
+    /// escrow.initialize(&admin);
+    /// let token = env.register_stellar_asset_contract(admin.clone());
+    /// escrow.bind_settlement_token(&admin, &token);
+    ///
+    /// let client = Address::generate(&env);
+    /// let freelancer = Address::generate(&env);
+    /// let milestones = vec![&env, 100_0000000_i128];
+    /// let escrow_id = escrow.create_contract(
+    ///     &client,
+    ///     &freelancer,
+    ///     &None,
+    ///     &milestones,
+    ///     &ReleaseAuthorization::ClientOnly,
+    /// );
+    /// StellarAssetClient::new(&env, &token).mint(&client, &100_0000000);
+    /// escrow.deposit_funds(&escrow_id, &client, &100_0000000);
+    ///
+    /// // No approvals recorded yet.
+    /// assert!(escrow.get_milestone_approvals(&escrow_id, &0).is_none());
+    ///
+    /// escrow.approve_milestone_release(&escrow_id, &client, &0);
+    /// let approvals = escrow.get_milestone_approvals(&escrow_id, &0).unwrap();
+    /// assert!(approvals.client_approved);
+    /// assert!(!approvals.freelancer_approved);
+    /// ```
     pub fn get_milestone_approvals(
         env: Env,
         contract_id: u32,
@@ -1402,11 +1674,57 @@ impl Escrow {
         approvals
     }
 
-    /// Retrieves approval status for a milestone.
+    /// Retrieves the approval-expiry ledger for a milestone.
     ///
-    /// Returns ledgers remaining, computed against ttl::compute_expiry.
-    /// `None` when no live approval exists,
-    /// distinguishing "never approved" from "approved and evicted".
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `contract_id` - The contract ID
+    /// * `milestone_index` - The index of the milestone to check
+    ///
+    /// # Returns
+    /// * `Some(ledger_sequence)` - The absolute ledger sequence number at which
+    ///   the current approval record expires, computed as
+    ///   `env.ledger().sequence() + PENDING_APPROVAL_TTL_LEDGERS` via
+    ///   `ttl::compute_expiry`. This is a point-in-time snapshot: it reflects
+    ///   the TTL as of the call, not a live countdown.
+    /// * `None` - If no live approval record exists, distinguishing "never
+    ///   approved" from "approved and evicted".
+    ///
+    /// # Examples
+    /// ```
+    /// use soroban_sdk::{testutils::Address as _, token::StellarAssetClient, vec, Address, Env};
+    /// use escrow::{Escrow, EscrowClient, ReleaseAuthorization};
+    ///
+    /// let env = Env::default();
+    /// env.mock_all_auths_allowing_non_root_auth();
+    ///
+    /// let contract_id = env.register(Escrow, ());
+    /// let escrow = EscrowClient::new(&env, &contract_id);
+    ///
+    /// let admin = Address::generate(&env);
+    /// escrow.initialize(&admin);
+    /// let token = env.register_stellar_asset_contract(admin.clone());
+    /// escrow.bind_settlement_token(&admin, &token);
+    ///
+    /// let client = Address::generate(&env);
+    /// let freelancer = Address::generate(&env);
+    /// let milestones = vec![&env, 100_0000000_i128];
+    /// let escrow_id = escrow.create_contract(
+    ///     &client,
+    ///     &freelancer,
+    ///     &None,
+    ///     &milestones,
+    ///     &ReleaseAuthorization::ClientOnly,
+    /// );
+    /// StellarAssetClient::new(&env, &token).mint(&client, &100_0000000);
+    /// escrow.deposit_funds(&escrow_id, &client, &100_0000000);
+    ///
+    /// assert!(escrow.get_approval_deadline(&escrow_id, &0).is_none());
+    ///
+    /// escrow.approve_milestone_release(&escrow_id, &client, &0);
+    /// let deadline = escrow.get_approval_deadline(&escrow_id, &0).unwrap();
+    /// assert!(deadline > env.ledger().sequence());
+    /// ```
     pub fn get_approval_deadline(env: Env, contract_id: u32, milestone_index: u32) -> Option<u32> {
         let approval_key = DataKey::MilestoneApprovals(contract_id, milestone_index);
         if !env.storage().temporary().has(&approval_key) {

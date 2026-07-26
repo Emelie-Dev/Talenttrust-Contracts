@@ -38,6 +38,34 @@ impl Escrow {
     /// * `TotalCapExceeded`     - If the sum of milestone amounts exceeds the governed cap
     /// * `ContractIdOverflow`   - If the next id would exceed `u32::MAX`
     /// * `ContractIdCollision`  - If the allocated id slot is already occupied
+    ///
+    /// # Examples
+    /// ```
+    /// use soroban_sdk::{testutils::Address as _, vec, Address, Env};
+    /// use escrow::{Escrow, EscrowClient, ReleaseAuthorization};
+    ///
+    /// let env = Env::default();
+    /// env.mock_all_auths();
+    ///
+    /// let contract_id = env.register(Escrow, ());
+    /// let escrow = EscrowClient::new(&env, &contract_id);
+    ///
+    /// let admin = Address::generate(&env);
+    /// escrow.initialize(&admin);
+    ///
+    /// let client = Address::generate(&env);
+    /// let freelancer = Address::generate(&env);
+    /// let milestones = vec![&env, 100_0000000_i128, 200_0000000_i128];
+    ///
+    /// let escrow_id = escrow.create_contract(
+    ///     &client,
+    ///     &freelancer,
+    ///     &None,
+    ///     &milestones,
+    ///     &ReleaseAuthorization::ClientOnly,
+    /// );
+    /// assert_eq!(escrow_id, 1);
+    /// ```
     pub fn create_contract(
         env: Env,
         client: Address,
