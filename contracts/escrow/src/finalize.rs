@@ -1,8 +1,8 @@
 use soroban_sdk::{contracttype, symbol_short, Address, Env, Vec};
 
 use crate::{
-    safe_subtract_amounts, settlement, Contract, ContractStatus, ContractSummary, DataKey, Error,
-    Escrow, EscrowError, Milestone, MilestoneSummary, CONTRACT_SUMMARY_SCHEMA_VERSION,
+    authorization, safe_subtract_amounts, Contract, ContractStatus, ContractSummary, DataKey, Error, Escrow,
+    EscrowError, Milestone, MilestoneSummary, CONTRACT_SUMMARY_SCHEMA_VERSION,
 };
 
 /// Immutable metadata written when an escrow contract is closed.
@@ -63,12 +63,8 @@ impl Escrow {
     }
 
     fn require_finalizer_role(env: &Env, contract: &Contract, finalizer: &Address) {
-        let is_client = *finalizer == contract.client;
-        let is_freelancer = *finalizer == contract.freelancer;
-        let is_arbiter = contract.arbiter.clone().is_some_and(|a| a == *finalizer);
-        if !is_client && !is_freelancer && !is_arbiter {
-            env.panic_with_error(Error::UnauthorizedRole);
-        }
+        // A finalizer must be one of the three contract participants
+        authorization::require_participant(env, finalizer, contract);
     }
 
     fn summarize_contract(env: &Env, contract_id: u32, contract: &Contract) -> ContractSummary {

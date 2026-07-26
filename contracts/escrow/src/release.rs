@@ -1,5 +1,5 @@
 use crate::{
-    approvals, ttl, Contract, ContractStatus, DataKey, Error, Escrow, Milestone, MilestonesKey,
+    approvals, authorization, ttl, Contract, ContractStatus, DataKey, Error, Escrow, Milestone,
     ReleaseAuthorization,
 };
 use soroban_sdk::{Address, Env, Vec};
@@ -37,32 +37,8 @@ impl Escrow {
             env.panic_with_error(EscrowError::InvalidState);
         }
 
-        let is_client = caller == contract.client;
-        let is_freelancer = caller == contract.freelancer;
-        let is_arbiter = contract.arbiter.as_ref() == Some(&caller);
-
-        match contract.release_authorization {
-            ReleaseAuthorization::ClientOnly => {
-                if !is_client {
-                    env.panic_with_error(EscrowError::UnauthorizedRole);
-                }
-            }
-            ReleaseAuthorization::ArbiterOnly => {
-                    if !is_arbiter {
-                    env.panic_with_error(EscrowError::UnauthorizedRole);
-                }
-            }
-            ReleaseAuthorization::ClientAndArbiter => {
-                if !is_client && !is_arbiter {
-                    env.panic_with_error(EscrowError::UnauthorizedRole);
-                }
-            }
-            ReleaseAuthorization::MultiSig => {
-                if !is_client && !is_freelancer {
-                    env.panic_with_error(EscrowError::UnauthorizedRole);
-                }
-            }
-        }
+        // Check if caller is authorized to release under this contract's release mode
+        authorization::require_release_authorization(&env, &caller, &contract);
 
         let mut milestones: Vec<Milestone> = env
             .storage()
