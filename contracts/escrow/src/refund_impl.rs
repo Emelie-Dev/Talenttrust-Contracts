@@ -32,8 +32,8 @@
 //! - **Funded → Funded**: Partial refund (some milestones remain unreleased/unrefunded)
 //! - **Funded → Completed**: All milestones either released or refunded (mixed state)
 
-use crate::{settlement, Contract, ContractStatus, DataKey, EscrowError, Milestone};
-use soroban_sdk::{Env, Symbol, Vec};
+use crate::{Contract, ContractStatus, DataKey, EscrowError, Milestone};
+use soroban_sdk::{Env, Vec};
 
 /// Refunds unreleased milestones back to the client.
 ///
@@ -96,11 +96,11 @@ pub fn refund_unreleased_milestones(
         env.panic_with_error(EscrowError::ContractRefunded);
     }
 
-    // Load milestones via the typed [`MilestonesKey`] wrapper (issue #938).
+    // Load milestones
     let mut milestones: Vec<Milestone> = env
         .storage()
         .persistent()
-        .get(&MilestonesKey::new(contract_id))
+        .get(&crate::StorageKey::contract_milestones(contract_id))
         .unwrap();
 
     // Validate all milestones and calculate total refund amount
@@ -127,7 +127,7 @@ pub fn refund_unreleased_milestones(
     // Persist changes via the typed [`MilestonesKey`] wrapper (issue #938).
     env.storage()
         .persistent()
-        .set(&MilestonesKey::new(contract_id), &milestones);
+        .set(&crate::StorageKey::contract_milestones(contract_id), &milestones);
     env.storage()
         .persistent()
         .set(&DataKey::Contract(contract_id), &contract);

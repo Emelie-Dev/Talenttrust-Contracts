@@ -76,21 +76,44 @@ pub struct ContractBounds {
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
-/// Storage key variants for the escrow contract.
+/// Typed storage key for contract-owned entries that previously used ad-hoc
+/// tuple keys such as `(DataKey::Contract(id), Symbol("milestones"))`.
 ///
-/// This enum defines all persistent and temporary storage keys used by the contract.
-/// The layout follows an append-only-safe pattern: new variants are added at the end,
-/// and old variants are never reused or removed (ensuring forward compatibility).
-///
-/// **Release state source of truth:**
-/// Milestone release state is tracked exclusively via `Milestone.released` boolean
-/// in the milestone vector stored under `DataKey::Contract(u32)`. There is no
-/// separate `MilestoneReleased` key; the milestone vector is the canonical store.
-///
-/// **Approval state storage:**
-/// Temporary storage under `MilestoneApprovals(contract_id, milestone_index)` holds
-/// the approval flags for a milestone release, with TTL-based expiry for fail-closed
-/// semantics.
+/// The variants are intentionally narrow and match the storage shapes already
+/// used by the escrow contract so the public behavior stays unchanged while the
+/// call sites become clearer and more type-safe.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum StorageKey {
+    Contract(u32),
+    ContractMilestones(u32),
+    MilestoneApprovals(u32, u32),
+    Finalization(u32),
+    PendingClientMigration(u32),
+}
+
+impl StorageKey {
+    pub fn contract(contract_id: u32) -> Self {
+        Self::Contract(contract_id)
+    }
+
+    pub fn contract_milestones(contract_id: u32) -> Self {
+        Self::ContractMilestones(contract_id)
+    }
+
+    pub fn milestone_approvals(contract_id: u32, milestone_index: u32) -> Self {
+        Self::MilestoneApprovals(contract_id, milestone_index)
+    }
+
+    pub fn finalization(contract_id: u32) -> Self {
+        Self::Finalization(contract_id)
+    }
+
+    pub fn pending_client_migration(contract_id: u32) -> Self {
+        Self::PendingClientMigration(contract_id)
+    }
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DataKey {

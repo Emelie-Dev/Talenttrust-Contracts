@@ -67,7 +67,7 @@ impl Escrow {
         let mut milestones: Vec<Milestone> = env
             .storage()
             .persistent()
-            .get(&MilestonesKey::new(contract_id))
+            .get(&crate::StorageKey::contract_milestones(contract_id))
             .unwrap();
 
         ttl::extend_milestone_ttl(&env, contract_id);
@@ -128,7 +128,7 @@ impl Escrow {
 
         env.storage()
             .persistent()
-            .set(&MilestonesKey::new(contract_id), &milestones);
+            .set(&crate::StorageKey::contract_milestones(contract_id), &milestones);
         env.storage()
             .persistent()
             .set(&DataKey::Contract(contract_id), &contract);

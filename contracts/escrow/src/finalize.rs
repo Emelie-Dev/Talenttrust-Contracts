@@ -73,7 +73,7 @@ impl Escrow {
         let milestones: Vec<Milestone> = env
             .storage()
             .persistent()
-            .get(&MilestonesKey::new(contract_id))
+            .get(&crate::StorageKey::contract_milestones(contract_id))
             .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
 
         let mut total_amount: i128 = 0;

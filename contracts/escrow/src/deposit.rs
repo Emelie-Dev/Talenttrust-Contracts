@@ -55,7 +55,7 @@ pub fn validate_deposit(
     let milestones: Vec<Milestone> = env
         .storage()
         .persistent()
-        .get(&MilestonesKey::new(contract_id))
+        .get(&crate::StorageKey::contract_milestones(contract_id))
         .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
 
     /// Calculate the total amount from milestones with checked arithmetic.

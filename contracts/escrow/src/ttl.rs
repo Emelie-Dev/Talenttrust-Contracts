@@ -1,7 +1,7 @@
 //! Deterministic TTL / expiration policy for transient and persistent storage.
 
 use crate::{DataKey, Error, Milestone};
-use soroban_sdk::{Env, IntoVal, Symbol, TryFromVal, Val, Vec};
+use soroban_sdk::{Env, IntoVal, TryFromVal, Val, Vec};
 
 pub const LEDGERS_PER_DAY: u32 = 17_280;
 pub const PENDING_APPROVAL_TTL_LEDGERS: u32 = LEDGERS_PER_DAY * 7;
@@ -78,11 +78,8 @@ pub fn store_milestones(env: &Env, contract_id: u32, milestones: &Vec<Milestone>
     extend_milestone_ttl(env, contract_id);
 }
 
-pub(crate) fn milestone_storage_key(env: &Env, contract_id: u32) -> (DataKey, Symbol) {
-    (
-        DataKey::Contract(contract_id),
-        Symbol::new(env, "milestones"),
-    )
+pub(crate) fn milestone_storage_key(env: &Env, contract_id: u32) -> crate::StorageKey {
+    crate::StorageKey::contract_milestones(contract_id)
 }
 
 pub fn extend_next_contract_id_ttl(env: &Env) {

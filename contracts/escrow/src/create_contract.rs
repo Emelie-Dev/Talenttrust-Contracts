@@ -3,7 +3,7 @@ use crate::{
     amount_validation, ttl, Contract, ContractStatus, DataKey, EscrowError, GovernedParameters,
     Milestone, ReleaseAuthorization, Error, MAX_MILESTONES,
 };
-use soroban_sdk::{contractimpl, symbol_short, Address, Env, Symbol, Vec};
+use soroban_sdk::{contractimpl, symbol_short, Address, Env, Vec};
 
 pub fn execute_create_contract(
     env: Env,
@@ -110,7 +110,7 @@ pub fn execute_create_contract(
         }
         env.storage()
             .persistent()
-            .set(&MilestonesKey::new(id), &milestone_vec);
+            .set(&crate::StorageKey::contract_milestones(id), &milestone_vec);
 
         let next_id = id
             .checked_add(1)
