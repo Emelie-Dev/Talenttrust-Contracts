@@ -8,31 +8,16 @@ use soroban_sdk::{
 #[allow(dead_code)]
 pub const CONTRACT_SUMMARY_SCHEMA_VERSION: u32 = 1;
 
-// ── Contract storage schema versioning ───────────────────────────────────────
-
-/// Current on-chain layout version for the [`Contract`] record stored under
-/// `DataKey::Contract(id)`. Bump this and add a migration arm in
-/// `migration::migrate_contract_storage` whenever a field is added to or
-/// removed from [`Contract`].
-pub const CONTRACT_STORAGE_SCHEMA_VERSION: u32 = 2;
-
-/// Layout of [`Contract`] as it existed before `reputation_issued` was added
-/// (schema version 1). Contracts created by older deployments may still be
-/// stored in this shape; `migration::migrate_contract_storage` upgrades them
-/// to the current [`Contract`] layout on first read.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ContractV1 {
-    pub client: Address,
-    pub freelancer: Address,
-    pub arbiter: Option<Address>,
-    pub status: ContractStatus,
-    pub total_deposited: i128,
-    pub funded_amount: i128,
-    pub released_amount: i128,
-    pub refunded_amount: i128,
-    pub release_authorization: ReleaseAuthorization,
-}
+/// Current reputation storage schema version.
+///
+/// Increment this constant whenever the [`Reputation`] struct gains or removes
+/// fields, so the migration path can detect and upgrade stale on-chain layouts.
+///
+/// | Version | Description |
+/// |---------|-------------|
+/// | 1 (absent) | Original three-field layout: `completed_contracts`, `total_rating`, `last_rating`. |
+/// | 2 (current) | Same fields plus explicit `schema_version` marker written to storage. |
+pub const REPUTATION_STORAGE_VERSION: u32 = 2;
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -159,6 +144,10 @@ pub enum DataKey {
     PendingReputationCredits(ReputationKey),
     Reputation(ReputationKey),
     ReputationComment(u32),
+    /// Monotonically-increasing schema version for reputation storage.
+    /// Absent means v1 (original layout). Present value equals
+    /// [`REPUTATION_STORAGE_VERSION`].
+    ReputationStorageVersion(Address),
     // Client migration
     PendingClientMigration(u32),
     // Settlement token
