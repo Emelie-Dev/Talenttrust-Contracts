@@ -167,7 +167,7 @@ pub struct MainnetReadinessInfo {
 }
     MilestoneSummary, PendingAdminProposal, ReadinessChecklist, ReleaseAuthorization, Reputation,
     SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION,
-};
+}
 
 // Maximum bounds constants - re-export from amount_validation for API visibility
 pub const MAX_MILESTONES: u32 = 10;
