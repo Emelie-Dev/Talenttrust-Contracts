@@ -30,7 +30,10 @@ use crate::{
 };
 use soroban_sdk::{testutils::Address as _, vec, Address, Env};
 
-use crate::dispute::{final_status_after_resolution, resolution_payouts};
+use crate::dispute::{
+    final_status_after_resolution, resolution_payouts, PARTIAL_REFUND_DENOMINATOR,
+    PARTIAL_REFUND_FREELANCER_SHARE_NUMERATOR,
+};
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -336,7 +339,8 @@ fn resolution_payouts_conserves_available_balance() {
         let (client, freelancer) =
             resolution_payouts(&c, &DisputeResolution::PartialRefund).unwrap();
         assert_eq!(client + freelancer, available);
-        let expected_freelancer = (available * 30) / 100;
+        let expected_freelancer =
+            (available * PARTIAL_REFUND_FREELANCER_SHARE_NUMERATOR) / PARTIAL_REFUND_DENOMINATOR;
         assert_eq!(freelancer, expected_freelancer);
         assert_eq!(client, available - expected_freelancer);
 

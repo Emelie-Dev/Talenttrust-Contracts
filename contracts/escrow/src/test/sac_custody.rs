@@ -32,7 +32,7 @@ use super::{
     assert_contract_error, register_client, total_milestone_amount, MILESTONE_ONE, MILESTONE_THREE,
     MILESTONE_TWO,
 };
-use crate::{ContractStatus, EscrowError, ReleaseAuthorization};
+use crate::{ContractStatus, EscrowError, ReleaseAuthorization, BASIS_POINT_DENOMINATOR};
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -522,7 +522,7 @@ fn release_milestone_with_sac_pushes_payout_minus_fee_to_freelancer() {
     // Configure a 10% protocol fee (1000 bps of 10000 total bps).
     client.set_protocol_fee_bps(&1000u32);
     let milestone_amount = MILESTONE_ONE;
-    let fee = milestone_amount * 1000 / 10_000;
+    let fee = milestone_amount * 1000 / BASIS_POINT_DENOMINATOR as i128;
     let payout = milestone_amount - fee;
     client.approve_milestone_release(&id, &client_addr, &0);
     assert!(client.release_milestone(&id, &client_addr, &0));

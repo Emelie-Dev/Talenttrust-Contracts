@@ -51,7 +51,7 @@ pub struct ContractBounds {
     pub max_single_milestone_stroops: i128,
     /// Maximum total escrow amount for a single contract (in stroops).
     pub max_total_escrow_stroops: i128,
-    /// Maximum protocol fee in basis points (10_000 = 100%).
+    /// Maximum protocol fee in basis points (`MAX_FEE_BPS` = 100%).
     pub max_fee_bps: u32,
 }
 

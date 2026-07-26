@@ -10,7 +10,7 @@
 use crate::ttl::ADMIN_ROTATION_MIN_DELAY_LEDGERS;
 use crate::{
     DataKey, Error, Escrow, EscrowArgs, EscrowClient, GovernedParameters, PendingAdminProposal,
-    ReadinessChecklist,
+    ReadinessChecklist, MAX_FEE_BPS,
 };
 use soroban_sdk::{symbol_short, Address, Env, Symbol};
 
@@ -21,7 +21,7 @@ impl Escrow {
     /// Admin-gated: the stored admin (under [`DataKey::Admin`]) must authorize
     /// the call and the contract must be initialized.
     ///
-    /// `new_bps` must be `≤ 10_000` (100%). The fee takes effect immediately for
+    /// `new_bps` must be `≤ MAX_FEE_BPS` (100%). The fee takes effect immediately for
     /// the next `release_milestone` call.
     ///
     /// See [`docs/escrow/protocol-fees.md`](../../../docs/escrow/protocol-fees.md) for
@@ -192,7 +192,7 @@ impl Escrow {
 
     /// Set both governance parameters at once and update the readiness checklist.
     ///
-    /// Sets `protocol_fee_bps` (must be `≤ 10_000`) and `max_escrow_total_stroops`
+    /// Sets `protocol_fee_bps` (must be `≤ MAX_FEE_BPS`) and `max_escrow_total_stroops`
     /// atomically. Also flips `ReadinessChecklist::governed_params_set` to `true`.
     ///
     /// See [`docs/escrow/protocol-fees.md`](../../../docs/escrow/protocol-fees.md) for
@@ -223,7 +223,7 @@ impl Escrow {
         }
         admin.require_auth();
 
-        if protocol_fee_bps > 10_000 {
+        if protocol_fee_bps > MAX_FEE_BPS {
             env.panic_with_error(Error::InvalidProtocolParameters);
         }
 

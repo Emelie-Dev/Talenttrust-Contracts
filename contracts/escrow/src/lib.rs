@@ -93,6 +93,19 @@ pub const MAX_TOTAL_ESCROW_STROOPS: i128 = MAX_SINGLE_AMOUNT_STROOPS;
 /// Maximum number of contract IDs accepted by [`Escrow::raise_dispute_batch`].
 pub const MAX_BATCH_DISPUTES: u32 = 10;
 
+/// Basis‑point denominator: 10 000 bps ≡ 100 %.
+///
+/// Used throughout the protocol for fee calculations, fee caps, and rating
+/// scaling.  A basis point is 1/100th of one percent, so 10 000 bps = 100 %.
+pub const BASIS_POINT_DENOMINATOR: u32 = 10_000;
+
+/// Maximum configurable protocol fee in basis points (10 000 bps = 100 %).
+///
+/// This is the ceiling enforced by `set_protocol_fee_bps` and
+/// `set_governed_params`.  Any value above this cap is rejected with
+/// `Error::InvalidProtocolParameters`.
+pub const MAX_FEE_BPS: u32 = BASIS_POINT_DENOMINATOR;
+
 #[contract]
 pub struct Escrow;
 
@@ -431,7 +444,7 @@ impl Escrow {
             max_milestones: MAX_MILESTONES,
             max_single_milestone_stroops: MAX_SINGLE_AMOUNT_STROOPS,
             max_total_escrow_stroops: MAX_TOTAL_ESCROW_STROOPS,
-            max_fee_bps: 10_000,
+            max_fee_bps: MAX_FEE_BPS,
         }
     }
 
@@ -2190,20 +2203,23 @@ impl Escrow {
             .get(&DataKey::Reputation(address))
     }
 
-    /// Returns the freelancer's average rating scaled to basis points (×10 000),
-    /// or `None` if no reputation record exists or no contracts have been completed.
+    /// Returns the freelancer's average rating scaled to basis points
+    /// (×`BASIS_POINT_DENOMINATOR`), or `None` if no reputation record exists
+    /// or no contracts have been completed.
     ///
     /// # Scaling
-    /// `result = total_rating * 10_000 / completed_contracts`
+    /// `result = total_rating * BASIS_POINT_DENOMINATOR / completed_contracts`
     ///
     /// A raw rating of 5 on a single contract returns `50_000` (5.0000 on a
-    /// 1–5 scale).  Clients divide by `10_000` to recover the decimal value.
+    /// 1–5 scale).  Clients divide by `BASIS_POINT_DENOMINATOR` to recover the
+    /// decimal value.
     ///
     /// Checked arithmetic is used throughout; division by zero is impossible
     /// because `None` is returned whenever `completed_contracts == 0`.
     pub fn get_average_rating(env: Env, address: Address) -> Option<i128> {
-        /// Basis-point scaling factor (×10 000 preserves four decimal places).
-        const SCALE: i128 = 10_000;
+        /// Basis-point scaling factor (×`BASIS_POINT_DENOMINATOR` preserves
+        /// four decimal places).
+        const SCALE: i128 = BASIS_POINT_DENOMINATOR as i128;
 
         let rep: types::Reputation = env
             .storage()
@@ -2503,15 +2519,16 @@ impl Escrow {
 
     /// Computes the protocol fee for a given `amount` at `fee_bps` basis points.
     ///
-    /// Uses integer **floor division**: `fee = amount * fee_bps / 10_000`.
+    /// Uses integer **floor division**: `fee = amount * fee_bps / BASIS_POINT_DENOMINATOR`.
     /// The result always rounds down — it never rounds up — so the freelancer
     /// receives at least `amount - fee` stroops and the protocol receives at most
     /// the floored value.  Callers must ensure `fee <= amount` holds; this is
-    /// guaranteed for any `fee_bps` in `[0, 10_000]` and a non-negative `amount`.
+    /// guaranteed for any `fee_bps` in `[0, MAX_FEE_BPS]` and a non-negative `amount`.
     ///
     /// # Basis-point unit
-    /// `10_000 bps = 100%`. The maximum configurable rate is `10_000`. A rate of
-    /// `0` is the default and disables fee collection entirely.
+    /// `BASIS_POINT_DENOMINATOR bps = 100%`. The maximum configurable rate is
+    /// `MAX_FEE_BPS`. A rate of `0` is the default and disables fee collection
+    /// entirely.
     ///
     /// See [`docs/escrow/protocol-fees.md`](../../../docs/escrow/protocol-fees.md) for
     /// the full formula, rounding rules, worked numeric examples, and the sequence
@@ -2531,7 +2548,7 @@ impl Escrow {
         let product = amount
             .checked_mul(fee_bps as i128)
             .unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
-        product / 10_000
+        product / BASIS_POINT_DENOMINATOR as i128
     }
 
     // ── Internal guards ──────────────────────────────────────────────────────
