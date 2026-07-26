@@ -104,9 +104,6 @@ pub use milestones::{Milestone, MilestoneApprovals, MilestoneSummary, ReleaseAut
 pub use types::{
     Contract, ContractBounds, ContractStatus, ContractSummary, DataKey, DepositMode,
 
-};
-pub use types::Error as EscrowError;
-
 /// Default maximum number of milestones allowed per contract.
 pub const DEFAULT_MAX_MILESTONES: u32 = 10;
 
@@ -186,7 +183,6 @@ pub struct MainnetReadinessInfo {
     pub protocol_version: u32,
     pub max_escrow_total_stroops: i128,
 }
-
 
 #[contract]
 pub struct Escrow;
@@ -1792,7 +1788,18 @@ impl Escrow {
             .unwrap_or(false)
     }
 
-    // ── Cancel contract ──────────────────────────────────────────────────────
+    pub fn get_mainnet_readiness_info(env: Env) -> MainnetReadinessInfo {
+        let checklist = Self::load_checklist(&env);
+        MainnetReadinessInfo {
+            initialized: checklist.initialized,
+            governed_params_set: checklist.governed_params_set,
+            emergency_controls_enabled: checklist.emergency_controls_enabled,
+            caps_set: MAINNET_MAX_TOTAL_ESCROW_PER_CONTRACT_STROOPS > 0,
+            protocol_version: MAINNET_PROTOCOL_VERSION,
+            max_escrow_total_stroops: MAINNET_MAX_TOTAL_ESCROW_PER_CONTRACT_STROOPS,
+        }
+    }
+
     fn load_checklist(env: &Env) -> ReadinessChecklist {
         env.storage()
             .persistent()
@@ -1802,7 +1809,6 @@ impl Escrow {
 
     // ─── Configurable limits ──────────────────────────────────────────────────
 
-    /// Returns the effective max milestones, falling back to the default.
     fn effective_max_milestones(env: &Env) -> u32 {
         env.storage()
             .persistent()
@@ -1810,7 +1816,6 @@ impl Escrow {
             .unwrap_or(DEFAULT_MAX_MILESTONES)
     }
 
-    /// Returns the effective max escrow stroops, falling back to the default.
     fn effective_max_escrow_stroops(env: &Env) -> i128 {
         env.storage()
             .persistent()
@@ -1818,7 +1823,6 @@ impl Escrow {
             .unwrap_or(DEFAULT_MAX_TOTAL_ESCROW_STROOPS)
     }
 
-    /// Set the max milestones limit. Admin only. Rejects out-of-range values.
     pub fn set_max_milestones(env: Env, max_milestones: u32) -> bool {
         Self::require_initialized(&env);
         let admin: Address = env
@@ -1843,12 +1847,10 @@ impl Escrow {
         true
     }
 
-    /// Returns the current max milestones limit (or the default if not set).
     pub fn get_max_milestones(env: Env) -> u32 {
         Self::effective_max_milestones(&env)
     }
 
-    /// Set the max escrow stroops limit. Admin only. Rejects out-of-range values.
     pub fn set_max_escrow_stroops(env: Env, max_escrow_stroops: i128) -> bool {
         Self::require_initialized(&env);
         let admin: Address = env
@@ -1875,20 +1877,92 @@ impl Escrow {
         true
     }
 
-    /// Returns the current max escrow stroops limit (or the default if not set).
     pub fn get_max_escrow_stroops(env: Env) -> i128 {
         Self::effective_max_escrow_stroops(&env)
     }
 
-    // ─── Contract lifecycle ───────────────────────────────────────────────────
+    // ── Admin: set arbiter ───────────────────────────────────────────────────
 
-    /// Cancel an active contract and refund unreleased funds to the client.
-    pub fn cancel_contract(
+    pub fn set_arbiter(
         env: Env,
         contract_id: u32,
-        client: Address,
+        admin: Address,
+        new_arbiter: Option<Address>,
     ) -> bool {
+        Self::require_initialized(&env);
+        Self::require_not_paused(&env);
+        Self::validate_contract_id_bounds(&env, contract_id);
 
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::NotInitialized));
+        if admin != stored_admin {
+            env.panic_with_error(EscrowError::UnauthorizedRole);
+        }
+        admin.require_auth();
+
+        let mut contract: Contract = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Contract(contract_id))
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
+
+        ttl::extend_contract_ttl(&env, contract_id);
+        Self::require_not_finalized(&env, contract_id);
+
+        if let Some(ref arb) = new_arbiter {
+            if *arb == contract.client || *arb == contract.freelancer {
+                env.panic_with_error(EscrowError::InvalidArbiter);
+            }
+        }
+
+        if new_arbiter.is_none() {
+            match contract.release_authorization {
+                ReleaseAuthorization::ArbiterOnly | ReleaseAuthorization::ClientAndArbiter => {
+                    env.panic_with_error(EscrowError::MissingArbiter);
+                }
+                _ => {}
+            }
+        }
+
+        let old_arbiter = contract.arbiter.clone();
+        contract.arbiter = new_arbiter.clone();
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Contract(contract_id), &contract);
+
+        ttl::extend_contract_ttl(&env, contract_id);
+
+        env.events().publish(
+            (symbol_short!("arbiter"), contract_id),
+            (old_arbiter, new_arbiter, env.ledger().timestamp()),
+        );
+
+        true
+    }
+
+    // ── Cancel contract ──────────────────────────────────────────────────────
+
+    /// Cancels a contract before any milestone has been released.
+    ///
+    /// The caller must be the stored client and must authorize the call. The
+    /// contract must be in `Created` or `Funded` state, with no released
+    /// balance, and the full remaining refundable balance is sent back to the
+    /// client via the configured Stellar Asset Contract before the contract is
+    /// marked `Cancelled`. A zero-funded cancellation does not invoke a token
+    /// transfer and leaves unrelated contracts' escrowed token balances intact.
+    ///
+    /// # Errors
+    /// * `ContractPaused` - If the contract is paused while not in emergency mode.
+    /// * `EmergencyActive` - If the contract is in an active emergency pause.
+    /// * `ContractNotFound` - If the contract does not exist.
+    /// * `UnauthorizedRole` - If the caller is not the stored client.
+    /// * `AlreadyCancelled` - If the contract was already cancelled.
+    /// * `InvalidStatusTransition` - If the contract is not `Created`/`Funded` or has already released funds.
+    pub fn cancel_contract(env: Env, contract_id: u32, client: Address) -> bool {
         Self::require_not_paused(&env);
         let mut contract: Contract = env
             .storage()

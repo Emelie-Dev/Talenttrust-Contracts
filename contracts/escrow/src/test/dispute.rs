@@ -1037,7 +1037,7 @@ fn resolve_dispute_full_refund_large_amounts() {
     );
 }
 
-/// Resolve after finalize is rejected with AlreadyFinalized.
+/// Resolving after the contract has been finalized is rejected with AlreadyFinalized.
 #[test]
 fn resolve_after_finalize_is_rejected() {
     let env = make_env();

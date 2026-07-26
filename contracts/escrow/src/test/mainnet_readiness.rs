@@ -410,7 +410,6 @@ fn test_operator_workflow_transitions() {
     );
 }
 
-
 // ── Post-Upgrade Verification Tests ──────────────────────────────────────
 
 /// Sets up a fully configured escrow contract with admin, settlement token,
@@ -703,4 +702,3 @@ fn post_upgrade_in_flight_contract_integrity() {
         assert_eq!(pre_m.refunded, post_m.refunded, "milestone refunded flag must survive upgrade at index {}", i);
     }
 }
-

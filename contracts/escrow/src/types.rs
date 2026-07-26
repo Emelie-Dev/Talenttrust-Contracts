@@ -182,14 +182,12 @@ pub enum DataKey {
     AccumulatedProtocolFees,
     GovernedParameters,
     ReadinessChecklist,
-    /// Admin-configurable upper bound on single-contract storage size (bytes).
-    StorageLimit,
-    // Finalization
-    Finalization(u32),
-    // Settlement token
+    // Configurable limits
+    MaxMilestones,
+    MaxEscrowStroops,
+    // Settlement storage
     SettlementToken,
-    // Dispute configuration
-    DisputeConfigKey,
+    Finalization(u32),
 }
 
 /// Canonical contract error type for all entrypoint-facing errors.

@@ -14,7 +14,7 @@ use crate::{
 // --- Submodules ---
 mod accounting_invariants;
 mod approval_expiry;
-mod authorization_matrix_validation;
+mod arbiter_event;
 mod cancel_contract;
 mod client_migration;
 mod contract_schema_migration;

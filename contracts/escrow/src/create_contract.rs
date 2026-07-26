@@ -131,6 +131,15 @@ pub fn execute_create_contract(
             (client, freelancer_addr, env.ledger().timestamp()),
         );
 
+        // Emit arbiter assignment event so off-chain indexers can reconstruct
+        // the full arbiter history from events alone.
+        if let Some(ref arb) = contract.arbiter {
+            env.events().publish(
+                (symbol_short!("arbiter"), id),
+                (None::<Address>, arb.clone(), env.ledger().timestamp()),
+            );
+        }
+
         id
 
     }
