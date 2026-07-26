@@ -14,23 +14,6 @@ pub struct MilestoneSummary {
     pub refunded: bool,
 }
 
-/// Lightweight milestone entry returned by the paginated milestones view.
-///
-/// Carries only the fields needed for a UI listing: zero-based `index`,
-/// a compact `status` code, and the milestone `amount` in stroops.
-///
-/// Status codes:
-/// - `0` - Pending (not yet released or refunded)
-/// - `1` - Released
-/// - `2` - Refunded
-#[contracttype]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct MilestoneEntry {
-    pub index: u32,
-    pub status: u32,
-    pub amount: i128,
-}
-
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ContractSummary {
@@ -103,9 +86,10 @@ pub enum DataKey {
     AccumulatedProtocolFees,
     GovernedParameters,
     ReadinessChecklist,
-    // Configurable limits
-    MaxMilestones,
-    MaxEscrowStroops,
+    // Finalization
+    Finalization(u32),
+    // Settlement token
+    SettlementToken,
 }
 
 /// Canonical contract error type for all entrypoint-facing errors.
