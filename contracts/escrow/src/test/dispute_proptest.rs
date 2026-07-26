@@ -140,7 +140,31 @@ proptest! {
         prop_assert_eq!(f, expected_f, "PartialRefund: freelancer floor mismatch");
         prop_assert_eq!(c, available - expected_f, "PartialRefund: client calc mismatch");
 
-        // Split: test a valid split derived from the actual available.
+        // Split: derive a valid split from available (randomized proportion)
+        // Use two distinct proportions: available / 4 and 3*available / 4
+        if available > 0 {
+            let split_client = available / 4;
+            let split_freelancer = available - split_client;
+            let split = DisputeSplit {
+                client_amount: split_client,
+                freelancer_amount: split_freelancer,
+            };
+            let (c, f) = resolution_payouts(
+                &contract,
+                &DisputeResolution::Split(split),
+            ).unwrap();
+            prop_assert_eq!(c + f, available, "Split: sum != available");
+            prop_assert_eq!(c, split_client);
+            prop_assert_eq!(f, split_freelancer);
+        } else {
+            // Zero available — Split(0, 0) must work
+            let split = DisputeSplit { client_amount: 0, freelancer_amount: 0 };
+            let (c, f) = resolution_payouts(
+                &contract,
+                &DisputeResolution::Split(split),
+            ).unwrap();
+            prop_assert_eq!((c, f), (0, 0));
+        }
     }
 
     /// PartialRefund applies floor(available * 30 / 100) to freelancer
@@ -168,7 +192,7 @@ proptest! {
     }
 
     /// Split accepts a valid (a, b) where a + b == available and both >= 0.
-    /// The split is derived from the contract's actual available balance.
+    /// Tests multiple split proportions derived from available.
     #[test]
     fn prop_split_accepts_valid(
         (funded, released, refunded) in valid_accounting(MAX_AMOUNT_FOR_PARTIAL)
@@ -177,24 +201,54 @@ proptest! {
         let contract = make_contract(&env, funded, released, refunded);
         let available = funded - released - refunded;
 
-        // Generate a random valid split for THIS contract's available.
-        let client_amount = if available > 0 {
-            // Use a simple deterministic split at randomized proportions
-            available / 2
-        } else {
-            0
-        };
-        let split = DisputeSplit {
-            client_amount,
-            freelancer_amount: available - client_amount,
-        };
+        // Test several split proportions for each randomized available balance
+        for proportion in &[0u32, 1, 2, 3, 4, 5, 7, 10, 100] {
+            let denominator = (proportion + 1).max(1);
+            let client_amount = if available > 0 {
+                available / denominator as i128
+            } else {
+                0
+            };
+            let split = DisputeSplit {
+                client_amount,
+                freelancer_amount: available - client_amount,
+            };
 
-        let result = resolution_payouts(&contract, &DisputeResolution::Split(split));
-        prop_assert!(result.is_ok(), "valid split rejected: {:?} for available={}", result, available);
-        let (c, f) = result.unwrap();
-        prop_assert_eq!(c + f, available);
-        prop_assert_eq!(c, client_amount);
-        prop_assert_eq!(f, available - client_amount);
+            let result = resolution_payouts(&contract, &DisputeResolution::Split(split));
+            prop_assert!(
+                result.is_ok(),
+                "valid split rejected (denom={}): {:?} for available={}",
+                denominator, result, available
+            );
+            let (c, f) = result.unwrap();
+            prop_assert_eq!(c + f, available,
+                "sum mismatch (denom={}): {}+{} != {}", denominator, c, f, available);
+            prop_assert_eq!(c, client_amount);
+            prop_assert_eq!(f, available - client_amount);
+        }
+
+        // Also test boundary: one leg = available, other = 0
+        if available > 0 {
+            let split = DisputeSplit {
+                client_amount: available,
+                freelancer_amount: 0,
+            };
+            let result = resolution_payouts(&contract, &DisputeResolution::Split(split));
+            prop_assert!(result.is_ok(), "boundary split (all client) rejected for available={}", available);
+            let (c, f) = result.unwrap();
+            prop_assert_eq!(c, available);
+            prop_assert_eq!(f, 0);
+
+            let split = DisputeSplit {
+                client_amount: 0,
+                freelancer_amount: available,
+            };
+            let result = resolution_payouts(&contract, &DisputeResolution::Split(split));
+            prop_assert!(result.is_ok(), "boundary split (all freelancer) rejected for available={}", available);
+            let (c, f) = result.unwrap();
+            prop_assert_eq!(c, 0);
+            prop_assert_eq!(f, available);
+        }
     }
 
     /// Split rejects invalid amounts: negatives, non-conserving sums,
@@ -308,7 +362,8 @@ proptest! {
         // Sanity: this state should indeed be corrupted.
         let available = funded - released - refunded;
         prop_assert!(available < 0 || released + refunded > funded,
-            "corrupted strategy produced valid state: funded={funded}, released={released}, refunded={refunded}");
+            "corrupted strategy produced valid state: funded={}, released={}, refunded={}",
+            funded, released, refunded);
 
         let result = resolution_payouts(&contract, &DisputeResolution::FullRefund);
         prop_assert_eq!(result, Err(Error::AccountingInvariantViolated));
@@ -357,6 +412,17 @@ fn prop_zero_funded_status_is_refunded() {
         final_status_after_resolution(&contract),
         ContractStatus::Refunded,
     );
+}
+
+/// PartialRefund when `available * 30` would overflow must return
+/// `PotentialOverflow`.
+#[test]
+fn prop_partial_refund_overflow_rejected() {
+    let env = Env::default();
+    // available = i128::MAX, so available * 30 overflows
+    let contract = make_contract(&env, i128::MAX, 0, 0);
+    let result = resolution_payouts(&contract, &DisputeResolution::PartialRefund);
+    assert_eq!(result, Err(Error::PotentialOverflow));
 }
 
 /// Split with i128::MAX amounts where sum overflows must return
