@@ -17,7 +17,7 @@ mod approval_expiry;
 mod bounds_validation;
 mod cancel_contract;
 mod client_migration;
-mod contract_schema_migration;
+mod contracts;
 mod create_contract_bounds;
 mod deposit;
 mod dispute;
