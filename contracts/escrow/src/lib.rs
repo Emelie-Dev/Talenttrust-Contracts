@@ -1882,6 +1882,95 @@ impl Escrow {
         Self::effective_max_escrow_stroops(&env)
     }
 
+    // ── Admin: set arbiter ───────────────────────────────────────────────────
+
+    /// Admin-gated entrypoint that reassigns the arbiter on an existing contract.
+    ///
+    /// Stores the new arbiter (or `None` to remove one) and emits a
+    /// `symbol_short!("arbiter")` event so off-chain indexers can reconstruct
+    /// the full arbiter history without scanning contract state snapshots.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `contract_id` - The escrow contract to mutate
+    /// * `admin` - The governance admin address (must match stored admin)
+    /// * `new_arbiter` - The replacement arbiter, or `None` to clear
+    ///
+    /// # Errors
+    /// * `NotInitialized` - If `initialize` has not been called.
+    /// * `UnauthorizedRole` - If `admin` is not the stored governance admin.
+    /// * `ContractNotFound` - If `contract_id` does not exist.
+    /// * `AlreadyFinalized` - If the contract has already been finalized.
+    /// * `InvalidArbiter` - If `new_arbiter` equals the client or freelancer.
+    /// * `MissingArbiter` - If removing the arbiter while the release-authorization
+    ///   mode requires one.
+    ///
+    /// # Events
+    /// `(symbol_short!("arbiter"), contract_id)` →
+    /// `(old_arbiter: Option<Address>, new_arbiter: Option<Address>, timestamp: u64)`
+    pub fn set_arbiter(
+        env: Env,
+        contract_id: u32,
+        admin: Address,
+        new_arbiter: Option<Address>,
+    ) -> bool {
+        Self::require_initialized(&env);
+        Self::require_not_paused(&env);
+        Self::validate_contract_id_bounds(&env, contract_id);
+
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::NotInitialized));
+        if admin != stored_admin {
+            env.panic_with_error(EscrowError::UnauthorizedRole);
+        }
+        admin.require_auth();
+
+        let mut contract: Contract = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Contract(contract_id))
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
+
+        ttl::extend_contract_ttl(&env, contract_id);
+        Self::require_not_finalized(&env, contract_id);
+
+        // Validate new arbiter is distinct from both client and freelancer.
+        if let Some(ref arb) = new_arbiter {
+            if *arb == contract.client || *arb == contract.freelancer {
+                env.panic_with_error(EscrowError::InvalidArbiter);
+            }
+        }
+
+        // If the release-authorization mode requires an arbiter, reject removal.
+        if new_arbiter.is_none() {
+            match contract.release_authorization {
+                ReleaseAuthorization::ArbiterOnly | ReleaseAuthorization::ClientAndArbiter => {
+                    env.panic_with_error(EscrowError::MissingArbiter);
+                }
+                _ => {}
+            }
+        }
+
+        let old_arbiter = contract.arbiter.clone();
+        contract.arbiter = new_arbiter.clone();
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Contract(contract_id), &contract);
+
+        ttl::extend_contract_ttl(&env, contract_id);
+
+        env.events().publish(
+            (symbol_short!("arbiter"), contract_id),
+            (old_arbiter, new_arbiter, env.ledger().timestamp()),
+        );
+
+        true
+    }
+
     // ── Cancel contract ──────────────────────────────────────────────────────
 
     /// Cancels a contract before any milestone has been released.
