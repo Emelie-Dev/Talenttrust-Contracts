@@ -155,6 +155,9 @@ impl Escrow {
             (client, freelancer, env.ledger().timestamp()),
         );
 
+        // Emit indexed event carrying state & balances.
+        crate::events::emit_contract_indexed_event(&env, id, &contract);
+
         id
     }
 
