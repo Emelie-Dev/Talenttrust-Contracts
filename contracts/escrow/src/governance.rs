@@ -14,7 +14,6 @@ use crate::{
 };
 use soroban_sdk::{symbol_short, Address, Env, Symbol};
 
-#[soroban_sdk::contractimpl]
 impl Escrow {
     /// Set the protocol fee in basis points.
     ///
@@ -29,7 +28,7 @@ impl Escrow {
     ///
     /// # Events
     /// `(Symbol("protocol_fee_bps"),)` → `(old_bps, new_bps, admin, timestamp)`
-    pub fn set_protocol_fee_bps(env: Env, new_bps: u32) -> bool {
+    pub(crate) fn set_protocol_fee_bps_impl(env: Env, new_bps: u32) -> bool {
         Self::require_initialized(&env);
         let admin: Address = env
             .storage()
@@ -54,12 +53,8 @@ impl Escrow {
         true
     }
 
-    pub fn get_governance_admin(env: Env) -> Option<Address> {
-        env.storage().persistent().get(&DataKey::Admin)
-    }
-
     /// Returns the current protocol fee in basis points.
-    pub fn get_protocol_fee_bps(env: Env) -> u32 {
+    pub(crate) fn get_protocol_fee_bps_impl(env: Env) -> u32 {
         env.storage()
             .persistent()
             .get::<_, u32>(&DataKey::ProtocolFeeBps)
@@ -240,7 +235,7 @@ impl Escrow {
     ///
     /// See [`docs/escrow/protocol-fees.md`](../../../docs/escrow/protocol-fees.md) for
     /// the full basis-point model and fee lifecycle.
-    pub fn set_governed_params(
+    pub(crate) fn set_governed_params_impl(
         env: Env,
         admin: Address,
         protocol_fee_bps: u32,
@@ -292,7 +287,7 @@ impl Escrow {
     }
 
     /// Retrieve the current governed parameters.
-    pub fn get_governed_parameters(env: Env) -> Option<GovernedParameters> {
+    pub(crate) fn get_governed_parameters_impl(env: Env) -> Option<GovernedParameters> {
         env.storage().persistent().get(&DataKey::GovernedParameters)
     }
 

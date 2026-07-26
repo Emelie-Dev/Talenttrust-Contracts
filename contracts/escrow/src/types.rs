@@ -99,6 +99,8 @@ pub enum DataKey {
     Admin,
     Paused,
     Emergency,
+    SettlementToken,
+    Finalization(u32),
     // Contract storage
     Contract(u32),
     NextContractId,

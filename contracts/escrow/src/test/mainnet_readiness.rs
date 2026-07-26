@@ -1,4 +1,4 @@
-use soroban_sdk::{testutils::Address as _, testutils::Events, testutils::Ledger, Address, Env};
+use soroban_sdk::{testutils::Address as _, testutils::Events, testutils::Ledger as _, Address, Env};
 
 use super::{
     assert_contract_error, complete_contract, default_milestones, generated_participants,
