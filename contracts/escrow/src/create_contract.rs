@@ -38,6 +38,13 @@ impl Escrow {
     /// * `TotalCapExceeded`     - If the sum of milestone amounts exceeds the governed cap
     /// * `ContractIdOverflow`   - If the next id would exceed `u32::MAX`
     /// * `ContractIdCollision`  - If the allocated id slot is already occupied
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let milestones = soroban_sdk::vec![&env, 500_0000000];
+    /// let id = client.create_contract(&client_addr, &freelancer_addr, &None, &milestones, &ReleaseAuthorization::ClientOnly);
+    /// assert_eq!(id, 1);
+    /// ```
     pub fn create_contract(
         env: Env,
         client: Address,

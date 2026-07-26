@@ -27,6 +27,24 @@ impl Escrow {
     /// See [`docs/escrow/protocol-fees.md`](../../../docs/escrow/protocol-fees.md) for
     /// the basis-point model, fee formula, accrual storage, and withdrawal flow.
     ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `new_bps` - Fee rate in basis points (0 to 10 000)
+    ///
+    /// # Returns
+    /// * `bool` - `true` if set successfully
+    ///
+    /// # Errors
+    /// * `NotInitialized` - If contract is uninitialized
+    /// * `UnauthorizedRole` - If caller is not admin
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let set = client.set_protocol_fee_bps(&250); // 2.5%
+    /// assert!(set);
+    /// ```
+    ///
     /// # Events
     /// `(Symbol("protocol_fee_bps"),)` → `(old_bps, new_bps, admin, timestamp)`
     pub fn set_protocol_fee_bps(env: Env, new_bps: u32) -> bool {
@@ -54,11 +72,36 @@ impl Escrow {
         true
     }
 
+    /// Returns the stored governance admin address.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    ///
+    /// # Returns
+    /// * `Option<Address>` - `Some(Address)` of current admin, `None` if uninitialized
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let admin = client.get_governance_admin();
+    /// ```
     pub fn get_governance_admin(env: Env) -> Option<Address> {
         env.storage().persistent().get(&DataKey::Admin)
     }
 
     /// Returns the current protocol fee in basis points.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    ///
+    /// # Returns
+    /// * `u32` - Protocol fee rate in basis points (0 if unset)
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let fee_bps = client.get_protocol_fee_bps();
+    /// ```
     pub fn get_protocol_fee_bps(env: Env) -> u32 {
         env.storage()
             .persistent()
@@ -197,6 +240,27 @@ impl Escrow {
     ///
     /// See [`docs/escrow/protocol-fees.md`](../../../docs/escrow/protocol-fees.md) for
     /// the full basis-point model and fee lifecycle.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `admin` - The admin address updating parameters
+    /// * `protocol_fee_bps` - New fee in basis points
+    /// * `max_escrow_total_stroops` - Maximum total escrow capacity in stroops
+    ///
+    /// # Returns
+    /// * `bool` - `true` if parameters set successfully
+    ///
+    /// # Errors
+    /// * `NotInitialized` - If contract uninitialized
+    /// * `UnauthorizedRole` - If caller is not admin
+    /// * `InvalidProtocolParameters` - If `protocol_fee_bps > 10_000`
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// let set = client.set_governed_params(&admin, &200, &1_000_000_0000000);
+    /// assert!(set);
+    /// ```
     pub fn set_governed_params(
         env: Env,
         admin: Address,
@@ -249,6 +313,20 @@ impl Escrow {
     }
 
     /// Retrieve the current governed parameters.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    ///
+    /// # Returns
+    /// * `Option<GovernedParameters>` - `Some(GovernedParameters)` if set, `None` otherwise
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// let client = EscrowClient::new(&env, &contract_id);
+    /// if let Some(params) = client.get_governed_parameters() {
+    ///     assert_eq!(params.protocol_fee_bps, 200);
+    /// }
+    /// ```
     pub fn get_governed_parameters(env: Env) -> Option<GovernedParameters> {
         env.storage().persistent().get(&DataKey::GovernedParameters)
     }
