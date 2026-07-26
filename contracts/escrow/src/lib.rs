@@ -91,6 +91,11 @@ pub const MAX_MILESTONES: u32 = 10;
 pub const MAX_SINGLE_AMOUNT_STROOPS: i128 = crate::amount_validation::MAX_SINGLE_AMOUNT_STROOPS;
 pub const MAX_TOTAL_ESCROW_STROOPS: i128 = MAX_SINGLE_AMOUNT_STROOPS;
 
+/// Default settlement limit (max single milestone amount in stroops).
+/// Preserves the original hard-coded behaviour; admin may lower it via
+/// [`Escrow::set_settlement_limit`] but never above this absolute ceiling.
+pub const DEFAULT_SETTLEMENT_LIMIT: i128 = MAX_SINGLE_AMOUNT_STROOPS;
+
 #[contract]
 pub struct Escrow;
 
@@ -171,6 +176,8 @@ pub enum EscrowError {
     EmptyComment = 42,
     /// Reputation feedback comment exceeded the 200-character maximum.
     CommentTooLong = 43,
+    /// The settlement limit value is out of the allowed bounds.
+    SettlementLimitOutOfBounds = 44,
 }
 
 impl Escrow {
@@ -184,6 +191,15 @@ impl Escrow {
         env.storage()
             .persistent()
             .set(&DataKey::SettlementToken, token);
+    }
+
+    /// Read the admin-configurable settlement limit from storage, falling back
+    /// to [`DEFAULT_SETTLEMENT_LIMIT`] when no value has been set.
+    pub(crate) fn read_settlement_limit(env: &Env) -> i128 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::SettlementLimit)
+            .unwrap_or(DEFAULT_SETTLEMENT_LIMIT)
     }
 }
 
@@ -403,29 +419,31 @@ impl Escrow {
         env.storage().persistent().get(&DataKey::Admin)
     }
 
-    /// Returns the protocol-wide hard-coded bounds used by validation paths.
+    /// Returns the current protocol-wide bounds used by validation paths.
     ///
     /// Callers and off-chain indexers should query this endpoint to discover
-    /// the limits enforced by `create_contract` without relying on hard-coded
-    /// constants:
+    /// the limits enforced by `create_contract`:
     ///
     /// - `max_milestones`: maximum number of milestones per contract.
-    /// - `max_single_milestone_stroops`: maximum amount for any single milestone.
+    /// - `max_single_milestone_stroops`: maximum amount for any single milestone
+    ///   (admin-configurable via [`set_settlement_limit`](Self::set_settlement_limit),
+    ///   defaults to [`DEFAULT_SETTLEMENT_LIMIT`]).
     /// - `max_total_escrow_stroops`: maximum sum of all milestone amounts.
     /// - `max_fee_bps`: protocol fee ceiling in basis points (10 000 = 100 %).
     ///
-    /// These are compile-time constants — the return value never changes
-    /// between calls on the same contract binary. The function is read-only
-    /// and requires no authorization.
+    /// Most fields are compile-time constants. The settlement limit is read
+    /// from persistent storage and may change at runtime via admin governance.
     ///
     /// # Returns
     /// A [`ContractBounds`] value containing only limit fields. Unlike
     /// [`get_contract_summary`], this type carries no per-contract participant
     /// or accounting data and its schema version tracks the limits API only.
+    ///
+    /// The function is read-only and requires no authorization.
     pub fn get_bounds(_env: Env) -> ContractBounds {
         ContractBounds {
             max_milestones: MAX_MILESTONES,
-            max_single_milestone_stroops: MAX_SINGLE_AMOUNT_STROOPS,
+            max_single_milestone_stroops: Self::read_settlement_limit(&_env),
             max_total_escrow_stroops: MAX_TOTAL_ESCROW_STROOPS,
             max_fee_bps: 10_000,
         }

@@ -10,7 +10,7 @@
 use crate::ttl::ADMIN_ROTATION_MIN_DELAY_LEDGERS;
 use crate::{
     DataKey, Error, Escrow, EscrowArgs, EscrowClient, GovernedParameters, PendingAdminProposal,
-    ReadinessChecklist,
+    ReadinessChecklist, EscrowError, DEFAULT_SETTLEMENT_LIMIT,
 };
 use soroban_sdk::{symbol_short, Address, Env, Symbol};
 
@@ -251,5 +251,65 @@ impl Escrow {
     /// Retrieve the current governed parameters.
     pub fn get_governed_parameters(env: Env) -> Option<GovernedParameters> {
         env.storage().persistent().get(&DataKey::GovernedParameters)
+    }
+
+    // ── Settlement limit ──────────────────────────────────────────────────────
+
+    /// Set the per-milestone settlement limit (max single milestone amount in stroops).
+    ///
+    /// Admin-gated: the stored admin must authorize the call and the contract
+    /// must be initialized.
+    ///
+    /// `limit` must satisfy `1 ≤ limit ≤ DEFAULT_SETTLEMENT_LIMIT`. The
+    /// default (when no value has been set) preserves the original hard-coded
+    /// behaviour.
+    ///
+    /// Takes effect immediately for the next `create_contract` call.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `admin` - The admin address (must match stored admin)
+    /// * `limit` - The new settlement limit in stroops
+    ///
+    /// # Errors
+    /// * `NotInitialized` if `initialize` has not been called
+    /// * `UnauthorizedRole` if `admin` is not the stored admin
+    /// * `SettlementLimitOutOfBounds` if `limit` is outside `[1, DEFAULT_SETTLEMENT_LIMIT]`
+    ///
+    /// # Events
+    /// `(Symbol("settlement_limit"),)` → `(old_limit, new_limit, admin, timestamp)`
+    pub fn set_settlement_limit(env: Env, admin: Address, limit: i128) -> bool {
+        Self::require_initialized(&env);
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| env.panic_with_error(Error::NotInitialized));
+        if admin != stored_admin {
+            env.panic_with_error(EscrowError::UnauthorizedRole);
+        }
+        admin.require_auth();
+
+        if limit < 1 || limit > DEFAULT_SETTLEMENT_LIMIT {
+            env.panic_with_error(EscrowError::SettlementLimitOutOfBounds);
+        }
+
+        let old_limit: i128 = Self::read_settlement_limit(&env);
+        env.storage()
+            .persistent()
+            .set(&DataKey::SettlementLimit, &limit);
+
+        env.events().publish(
+            (Symbol::new(&env, "settlement_limit"),),
+            (old_limit, limit, admin, env.ledger().timestamp()),
+        );
+        true
+    }
+
+    /// Returns the current settlement limit in stroops.
+    ///
+    /// Defaults to [`DEFAULT_SETTLEMENT_LIMIT`] when no value has been set.
+    pub fn get_settlement_limit(env: Env) -> i128 {
+        Self::read_settlement_limit(&env)
     }
 }

@@ -33,12 +33,12 @@ pub struct ContractSummary {
 
 /// Protocol-wide bounds for contract validation.
 ///
-/// This type carries the hard-coded limits used by `create_contract` and other
+/// This type carries the limits used by `create_contract` and other
 /// validation paths. It is returned by `get_bounds()` for off-chain indexers
 /// and client applications.
 ///
-/// Dedicated struct for protocol bounds prevents coupling the limits ABI to the
-/// per-contract summary schema version.
+/// The settlement limit (`max_single_milestone_stroops`) is admin-configurable
+/// at runtime; all other fields are compile-time constants.
 #[contracttype]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ContractBounds {
@@ -90,6 +90,8 @@ pub enum DataKey {
     Finalization(u32),
     // Settlement token
     SettlementToken,
+    // Admin-configurable settlement limit (max single milestone amount in stroops)
+    SettlementLimit,
 }
 
 /// Canonical contract error type for all entrypoint-facing errors.
