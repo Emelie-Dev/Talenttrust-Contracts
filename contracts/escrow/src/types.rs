@@ -169,7 +169,9 @@ pub enum DataKey {
     Finalization(u32),
     // Settlement token
     SettlementToken,
-    DisputeRollback(u32),
+    // Versioned state storage
+    State,
+    StorageVersion,
 }
 
 /// Canonical contract error type for all entrypoint-facing errors.
@@ -393,4 +395,35 @@ impl DisputeResolution {
             Self::Split(_) => 3,
         }
     }
+}
+
+// ── Versioned state migration ────────────────────────────────────────────────
+
+/// Current storage version for milestone state.
+pub const CURRENT_MILESTONE_VERSION: u32 = 2;
+
+/// Legacy state layout (v1) with inline milestone amounts.
+///
+/// Prior to the versioned migration, contract state stored milestones as a
+/// flat `Vec<i128>` alongside client and freelancer addresses.  This layout
+/// is superseded by [`StateV2`] which stores milestones separately.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StateV1 {
+    pub client: Address,
+    pub freelancer: Address,
+    pub milestones: Vec<i128>,
+}
+
+/// Current state layout (v2) without inline milestones.
+///
+/// Milestones are stored in a separate keyed vector under
+/// `(DataKey::Contract(id), "milestones")`.  The `status` field tracks the
+/// contract lifecycle state that was absent in [`StateV1`].
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StateV2 {
+    pub client: Address,
+    pub freelancer: Address,
+    pub status: ContractStatus,
 }

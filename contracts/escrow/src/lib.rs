@@ -87,7 +87,7 @@ pub use types::{
     Contract, ContractBounds, ContractStatus, ContractSummary, ContractV1, DataKey, DepositMode,
     DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone, MilestoneApprovals,
     MilestoneSummary, PendingAdminProposal, ReadinessChecklist, ReleaseAuthorization, Reputation,
-    SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION, REPUTATION_STORAGE_VERSION,
+    SplitAmounts, StateV1, StateV2, CONTRACT_SUMMARY_SCHEMA_VERSION, CURRENT_MILESTONE_VERSION,
 };
 
 /// Default maximum number of milestones allowed per contract.
@@ -590,6 +590,125 @@ impl Escrow {
         migration::get_pending_client_migration_impl(&env, contract_id)
     }
 
+    // ── Versioned state migration ─────────────────────────────────────────
+
+    /// Returns the current versioned state, transparently upgrading from V1 on read.
+    ///
+    /// Reads the storage version marker from [`DataKey::StorageVersion`].
+    /// When the marker is absent or indicates v1, the legacy [`StateV1`] layout
+    /// is deserialized and promoted to [`StateV2`] (with `status` defaulting
+    /// to `Created`).  When the marker indicates v2, the [`StateV2`] record
+    /// is returned directly.
+    ///
+    /// This is a **read-only** operation — it does not persist the migrated
+    /// state.  Call [`Self::migrate_state`] to commit the upgrade to storage.
+    pub fn get_state(env: Env) -> StateV2 {
+        let version: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::StorageVersion)
+            .unwrap_or(1);
+
+        match version {
+            2 => env
+                .storage()
+                .persistent()
+                .get::<_, StateV2>(&DataKey::State)
+                .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound)),
+            _ => {
+                let v1: StateV1 = env
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::State)
+                    .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
+                StateV2 {
+                    client: v1.client,
+                    freelancer: v1.freelancer,
+                    status: ContractStatus::Created,
+                }
+            }
+        }
+    }
+
+    /// Migrates legacy v1 state to the current v2 layout and persists the result.
+    ///
+    /// Requires admin authorization. When the storage is already at the current
+    /// version this is a no-op that returns `true`.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `admin` - The admin address (must match stored admin)
+    ///
+    /// # Returns
+    /// `true` on success (including no-op when already v2).
+    ///
+    /// # Events
+    /// Emits `("state_migrated", version)` with `(admin, timestamp)` payload
+    /// when an actual migration occurs.
+    pub fn migrate_state(env: Env, admin: Address) -> bool {
+        admin.require_auth();
+
+        let version: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::StorageVersion)
+            .unwrap_or(1);
+
+        if version >= CURRENT_MILESTONE_VERSION {
+            return true;
+        }
+
+        let v1: StateV1 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::State)
+            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
+
+        let v2 = StateV2 {
+            client: v1.client,
+            freelancer: v1.freelancer,
+            status: ContractStatus::Created,
+        };
+
+        env.storage().persistent().set(&DataKey::State, &v2);
+        env.storage()
+            .persistent()
+            .set(&DataKey::StorageVersion, &CURRENT_MILESTONE_VERSION);
+
+        env.events().publish(
+            (
+                Symbol::new(&env, "state_migrated"),
+                CURRENT_MILESTONE_VERSION,
+            ),
+            (admin, env.ledger().timestamp()),
+        );
+
+        true
+    }
+
+    /// Approves a milestone for release.
+    ///
+    /// Records the caller's approval in temporary storage with a TTL of
+    /// `PENDING_APPROVAL_TTL_LEDGERS` (~7 days). Each call resets the TTL.
+    /// Duplicate approvals from the same party are rejected.
+    ///
+    /// Required approvers per mode:
+    /// - `ClientOnly` — client only
+    /// - `ArbiterOnly` — arbiter only
+    /// - `ClientAndArbiter` — client or arbiter (one is enough)
+    /// - `MultiSig` — both client and freelancer must approve
+    ///
+    /// # Errors
+    /// * `ContractPaused` - If the contract is paused while not in emergency mode
+    /// * `EmergencyActive` - If the contract is in an active emergency pause
+    /// * `AlreadyFinalized` - If the contract has already been finalized
+    /// * Approval/auth/state errors bubbled up from `approvals::approve_milestone`
+    ///
+    /// # Security
+    /// * Pause/emergency gate runs BEFORE finalization checks, auth, TTL extension,
+    ///   and approval staging so no approval state mutates while the contract is frozen.
+    ///
+    /// See `docs/escrow/approvals-and-release.md` for the full flow.
     pub fn approve_milestone_release(
         env: Env,
         contract_id: u32,
@@ -2787,3 +2906,6 @@ impl Escrow {
 
 #[cfg(test)]
 mod test;
+
+#[cfg(test)]
+mod migration_test;
