@@ -32,7 +32,7 @@ mod release_authorization;
 mod reputation;
 mod resolution_payouts_prop;
 mod security;
-mod storage;
+mod settlement_auth_matrix;
 mod ttl_tests;
 
 // --- Shared constants ---
