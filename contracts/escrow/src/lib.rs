@@ -55,7 +55,8 @@ pub use types::{
     Contract, ContractBounds, ContractStatus, ContractSummary, DataKey, DepositMode,
     DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone, MilestoneApprovals,
     MilestoneEntry, MilestoneSummary, PendingAdminProposal, ReadinessChecklist,
-    ReleaseAuthorization, Reputation, ReputationBatchItem, SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION,
+    ReleaseAuthorization, Reputation, ReputationBatchItem, SplitAmounts, StateV1, StateV2,
+    CONTRACT_SUMMARY_SCHEMA_VERSION,
 };
 
 pub const DEFAULT_MAX_MILESTONES: u32 = 10;
@@ -1554,6 +1555,98 @@ impl Escrow {
         env.events().publish(
             (symbol_short!("dispute"), symbol_short!("resolved")),
             (contract_id, resolution.code()),
+        );
+
+        true
+    }
+
+    // ── State Migration ─────────────────────────────────────────────────────────
+
+    /// Reads the current state, automatically upgrading from V1 to V2 if needed.
+    ///
+    /// This is the recommended entrypoint for all state reads. It handles:
+    /// - Reading V2 state directly
+    /// - Reading V1 state and upgrading to V2 in-place
+    /// - Panicking if no state exists
+    pub fn get_state(env: Env) -> StateV2 {
+        // Try to read as V2 first
+        if let Some(state) = env.storage().persistent().get(&DataKey::State) {
+            return state;
+        }
+
+        // Try to read as V1 and upgrade
+        if let Some(legacy) = env.storage().persistent().get::<_, StateV1>(&DataKey::State) {
+            let upgraded = StateV2 {
+                client: legacy.client,
+                freelancer: legacy.freelancer,
+                milestones: legacy.milestones,
+                status: ContractStatus::Created,
+            };
+            env.storage().persistent().set(&DataKey::State, &upgraded);
+            return upgraded;
+        }
+
+        env.panic_with_error(Error::ContractNotFound)
+    }
+
+    /// Migrates the state from V1 to V2.
+    ///
+    /// This is an administrative function that requires the stored admin's
+    /// authorization. It reads the existing V1 state, converts it to V2 with
+    /// a default status of `Created`, and writes it back.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `admin` - The admin address (must match stored admin)
+    ///
+    /// # Returns
+    /// `true` if migration was successful
+    ///
+    /// # Errors
+    /// * `NotInitialized` - If the contract hasn't been initialized
+    /// * `UnauthorizedRole` - If `admin` is not the stored admin
+    /// * `ContractNotFound` - If no state exists to migrate
+    pub fn migrate_state(env: Env, admin: Address) -> bool {
+        Self::require_initialized(&env);
+
+        let stored_admin = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| env.panic_with_error(Error::NotInitialized));
+
+        if admin != stored_admin {
+            env.panic_with_error(Error::UnauthorizedRole);
+        }
+        admin.require_auth();
+
+        // Read V1 state
+        let legacy: StateV1 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::State)
+            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
+
+        // Upgrade to V2
+        let upgraded = StateV2 {
+            client: legacy.client,
+            freelancer: legacy.freelancer,
+            milestones: legacy.milestones,
+            status: ContractStatus::Created,
+        };
+
+        env.storage().persistent().set(&DataKey::State, &upgraded);
+
+        // Extend TTL for the migrated state
+        env.storage().persistent().extend_ttl(
+            &DataKey::State,
+            ttl::PERSISTENT_BUMP_THRESHOLD,
+            ttl::PERSISTENT_TTL_LEDGERS,
+        );
+
+        env.events().publish(
+            (Symbol::new(&env, "state_migrated"),),
+            (admin, env.ledger().timestamp()),
         );
 
         true
