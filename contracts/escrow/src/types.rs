@@ -305,8 +305,8 @@ pub enum EscrowError {
     EscrowCapExceeded = 51,
     SettlementTokenNotConfigured = 52,
     MilestoneNotOverdue = 53,
-    /// The milestone schedule metadata is invalid.
-    InvalidScheduleMetadata = 54,
+    /// Milestone rollback is not allowed in the current state.
+    RollbackNotAllowed = 54,
 }
 
 #[contracttype]
@@ -344,12 +344,19 @@ pub struct Contract {
 /// settlement readiness and accrued fees without reconstructing state from
 /// events or contract activity.
 #[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq, Default)]
-pub struct SettlementState {
-    /// The bound Stellar Asset Contract used for settlement, if configured.
-    pub token: Option<Address>,
-    /// Protocol fees accrued in the settlement asset, in stroops.
-    pub accumulated_protocol_fees: i128,
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Milestone {
+    pub amount: i128,
+    pub funded_amount: i128,
+    pub protocol_fee: i128,
+    pub released: bool,
+    pub refunded: bool,
+    pub work_evidence: Option<String>,
+    pub refunded_amount: i128,
+    /// Optional Unix timestamp (seconds) after which the client may claim
+    /// a timeout refund for this milestone without arbiter involvement.
+    /// None means no deadline — the milestone never expires.
+    pub deadline: Option<u64>,
 }
 
 /// Projected outcome of a milestone release simulation.

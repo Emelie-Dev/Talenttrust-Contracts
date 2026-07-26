@@ -208,19 +208,8 @@ pub enum EscrowError {
     EmptyComment = 42,
     /// Reputation feedback comment exceeded the 200-character maximum.
     CommentTooLong = 43,
-    /// Returned when dispute metadata is missing and cannot be migrated.
-    DisputeNotFound = 44,
-    /// Returned when on-ledger dispute storage version is newer than this build.
-    UnsupportedDisputeStorageVersion = 45,
-    /// The batch settlement vector exceeded [`MAX_BATCH_SETTLEMENT`].
-    ///
-    /// Callers must split their request into chunks no larger than
-    /// [`MAX_BATCH_SETTLEMENT`] and retry.
-    BatchSettlementTooLarge = 46,
-    /// The batch settlement vector was empty.
-    ///
-    /// At least one [`SettlementItem`] must be provided.
-    BatchSettlementEmpty = 47,
+    /// Milestone rollback is not allowed in the current state.
+    RollbackNotAllowed = 44,
 }
 
 impl Escrow {
@@ -1621,6 +1610,7 @@ impl Escrow {
         milestone.released = true;
         // Record the funded amount on the milestone so it is self-describing.
         milestone.funded_amount = gross_amount;
+        milestone.protocol_fee = protocol_fee;
         milestones.set(milestone_index, milestone.clone());
         // Indexed event for off-chain milestone-history reconstruction.
         env.events().publish(
@@ -1698,6 +1688,153 @@ impl Escrow {
                 (caller, env.ledger().timestamp()),
             );
         }
+
+        true
+    }
+
+    /// Rolls back a released or refunded milestone to its prior state.
+    ///
+    /// Admin-guarded operation that undoes a milestone release or refund within
+    /// safe contract states (`Funded` or `PartiallyFunded`). The milestone must
+    /// currently be in either the released or refunded state; a milestone in the
+    /// initial state (neither released nor refunded) is rejected.
+    ///
+    /// # Invariants Preserved
+    ///
+    /// The accounting invariant
+    /// `released_amount + refunded_amount + accumulated_fees ≤ funded_amount`
+    /// is maintained by reversing the precise amounts that were recorded when
+    /// the milestone was released or refunded. No actual token transfer is
+    /// performed — the caller (admin) is responsible for recovering any tokens
+    /// that may have moved off-chain.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `contract_id` - The contract ID
+    /// * `admin` - The admin address (must match stored admin)
+    /// * `milestone_index` - The index of the milestone to rollback
+    ///
+    /// # Returns
+    /// `true` if rollback was successful
+    ///
+    /// # Errors
+    /// * `ContractPaused` - If the contract is paused while not in emergency mode
+    /// * `EmergencyActive` - If the contract is in an active emergency pause
+    /// * `ContractNotFound` - If contract doesn't exist
+    /// * `AlreadyFinalized` - If a finalization record already exists
+    /// * `RollbackNotAllowed` - If the contract status does not allow rollback
+    ///   or the milestone is not in a rollback-able state
+    /// * `IndexOutOfBounds` - If milestone_index is out of bounds
+    /// * `AccountingInvariantViolated` - If accounting state is inconsistent
+    ///
+    /// # Events
+    /// Emits `("rollback", contract_id)` with payload
+    /// `(milestone_index, admin, timestamp)` on every successful rollback.
+    pub fn rollback_milestone(
+        env: Env,
+        contract_id: u32,
+        admin: Address,
+        milestone_index: u32,
+    ) -> bool {
+        Self::require_initialized(&env);
+        Self::require_not_paused(&env);
+
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::NotInitialized));
+
+        if admin != stored_admin {
+            env.panic_with_error(EscrowError::UnauthorizedRole);
+        }
+        admin.require_auth();
+
+        let mut contract: Contract = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Contract(contract_id))
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
+
+        ttl::extend_contract_ttl(&env, contract_id);
+        Self::require_not_finalized(&env, contract_id);
+
+        // Only allow rollback in active non-terminal states
+        if contract.status != ContractStatus::Funded
+            && contract.status != ContractStatus::PartiallyFunded
+        {
+            env.panic_with_error(EscrowError::RollbackNotAllowed);
+        }
+
+        let mut milestones: Vec<Milestone> = ttl::load_milestones(&env, contract_id);
+
+        if milestone_index >= milestones.len() {
+            env.panic_with_error(Error::IndexOutOfBounds);
+        }
+
+        let mut milestone = milestones.get(milestone_index).unwrap();
+
+        // Milestone must be in a rollback-able state
+        if !milestone.released && !milestone.refunded {
+            env.panic_with_error(EscrowError::RollbackNotAllowed);
+        }
+
+        if milestone.released {
+            let net_amount = milestone
+                .amount
+                .checked_sub(milestone.protocol_fee)
+                .unwrap_or_else(|| env.panic_with_error(EscrowError::AccountingInvariantViolated));
+
+            contract.released_amount = contract
+                .released_amount
+                .checked_sub(net_amount)
+                .unwrap_or_else(|| env.panic_with_error(EscrowError::AccountingInvariantViolated));
+
+            // Reverse the protocol fee that was accrued when the milestone was released
+            if milestone.protocol_fee > 0 {
+                let accumulated_fees: i128 = env
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::AccumulatedProtocolFees)
+                    .unwrap_or(0);
+                if accumulated_fees >= milestone.protocol_fee {
+                    env.storage().persistent().set(
+                        &DataKey::AccumulatedProtocolFees,
+                        &(accumulated_fees - milestone.protocol_fee),
+                    );
+                }
+            }
+
+            milestone.released = false;
+            milestone.funded_amount = 0;
+            milestone.protocol_fee = 0;
+
+            // Clear approvals for this milestone
+            approvals::clear_approvals(&env, contract_id, milestone_index);
+        }
+
+        if milestone.refunded {
+            contract.refunded_amount = contract
+                .refunded_amount
+                .checked_sub(milestone.amount)
+                .unwrap_or_else(|| env.panic_with_error(EscrowError::AccountingInvariantViolated));
+
+            milestone.refunded = false;
+            milestone.refunded_amount = 0;
+        }
+
+        milestones.set(milestone_index, milestone);
+
+        ttl::store_milestones(&env, contract_id, &milestones);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Contract(contract_id), &contract);
+        ttl::extend_contract_ttl(&env, contract_id);
+
+        env.events().publish(
+            (Symbol::new(&env, "rollback"), contract_id),
+            (milestone_index, admin, env.ledger().timestamp()),
+        );
 
         true
     }

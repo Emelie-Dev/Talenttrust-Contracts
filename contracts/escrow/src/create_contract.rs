@@ -135,6 +135,7 @@ impl Escrow {
             milestone_vec.push_back(Milestone {
                 amount,
                 funded_amount: 0,
+                protocol_fee: 0,
                 released: false,
                 refunded: false,
                 work_evidence: None,

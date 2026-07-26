@@ -382,6 +382,7 @@ mod approval_ttl_integration {
                 [Milestone {
                     amount: 6000_0000000_i128,
                     funded_amount: 0,
+                    protocol_fee: 0,
                     released: false,
                     refunded: false,
                     work_evidence: None,
@@ -499,6 +500,7 @@ mod approval_ttl_integration {
                 [Milestone {
                     amount: 6000_0000000_i128,
                     funded_amount: 0,
+                    protocol_fee: 0,
                     released: false,
                     refunded: false,
                     work_evidence: None,
