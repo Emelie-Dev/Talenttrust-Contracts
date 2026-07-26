@@ -17,7 +17,7 @@ mod contract_schema_migration;
 mod create_contract_bounds;
 mod deposit;
 mod dispute;
-mod dispute_pause_guard;
+mod configurable_disputes_limit;
 mod emergency_controls;
 mod governance_events;
 mod events_indexing;

@@ -20,11 +20,11 @@
 //! | `migration` | Client migration proposals, acceptance checks, cancellation, and pending-migration reads. | Temporary `DataKey::PendingClientMigration(contract_id)`; reads and updates `DataKey::Contract(contract_id)`. |
 //! | `rollback` | Guarded rollback of unchanged, unresolved disputes. | `DataKey::DisputeRollback(contract_id)`; reads and updates `DataKey::Contract(contract_id)` and its milestones. |
 //! | `ttl` | TTL constants plus helpers for temporary and persistent storage renewal. | Extends caller-provided keys, especially `Contract(id)`, `(Contract(id), "milestones")`, `NextContractId`, participant indexes, approvals, and migrations. |
-//! | `types` | Shared Soroban types, error enums, summaries, governance records, dispute records, and the canonical `DataKey` enum. | Declares storage key schema only; does not access storage itself. |
-//! | `utils` | Small deterministic helpers shared by entrypoints, currently ledger timestamp access (`now_seconds`). See `docs/escrow/ledger-time-source.md`. | None. |
+//! | `types` | Shared Soroban types, error enums, summaries, governance records, dispute records, and the canonical `DataKey` enum. | Declares storage key schema only; does not access storage itself. (New in this release: `DataKey::MaxDisputes`, `DataKey::DisputeCount(contract_id)`.) |
+//! | `utils` | Small deterministic helpers shared by entrypoints, currently ledger timestamp access. | None. |
 //! | `create_contract` | Contract creation, participant/milestone validation, ID allocation, and creation events. | `DataKey::Contract(id)`, `(DataKey::Contract(id), "milestones")`, `NextContractId`, and `GovernedParameters`. |
-//! | `dispute` | Pure dispute payout arithmetic and final-status selection for dispute resolution. | None directly; root dispute entrypoints update `DataKey::Contract(contract_id)`. |
-//! | `governance` | Admin-controlled protocol fee, governed parameter, readiness, and admin-rotation entrypoints. | `DataKey::Admin`, `ProtocolFeeBps`, `PendingAdmin`, `GovernedParameters`, and `ReadinessChecklist`. |
+//! | `dispute` | Pure dispute payout arithmetic and final-status selection for dispute resolution. Root `raise_dispute`/`resolve_dispute` entrypoints update `DataKey::Contract(contract_id)` and enforce the configurable per-contract disputes limit (`DataKey::MaxDisputes`, `DataKey::DisputeCount(contract_id)`). |
+//! | `governance` | Admin-controlled protocol fee, governed parameter, disputes-limit, readiness, and admin-rotation entrypoints. | `DataKey::Admin`, `ProtocolFeeBps`, `PendingAdmin`, `GovernedParameters`, `ReadinessChecklist`, `DataKey::MaxDisputes`. |
 //!
 //! Generate this map with `cargo doc -p escrow --no-deps` and open
 //! `target/doc/escrow/index.html`.
@@ -198,6 +198,17 @@ pub const MAX_STORAGE_LIMIT: u32 = 1_000_000;
 /// [`Escrow::set_storage_limit`].
 pub const DEFAULT_STORAGE_LIMIT: u32 = 65_536;
 
+// ─── Configurable disputes limit ──────────────────────────────────────
+
+/// Default maximum number of disputes per contract.
+pub const DEFAULT_MAX_DISPUTES: u32 = 10;
+
+/// Absolute minimum for the max disputes setting.
+pub const MIN_MAX_DISPUTES: u32 = 1;
+
+/// Absolute maximum for the max disputes setting.
+pub const MAX_MAX_DISPUTES: u32 = 100;
+
 #[contract]
 pub struct Escrow;
 
@@ -280,7 +291,7 @@ pub enum EscrowError {
     EmptyComment = 42,
     /// Reputation feedback comment exceeded the 200-character maximum.
     CommentTooLong = 43,
-    /// Configured limit is out of allowed range.
+    /// The value is outside the allowed bounds for a configurable limit.
     LimitOutOfRange = 44,
 }
 
@@ -559,13 +570,89 @@ impl Escrow {
         env.storage().persistent().get(&DataKey::Admin)
     }
 
+    /// Returns the protocol-wide bounds used by validation paths.
+    ///
+    /// Callers and off-chain indexers should query this endpoint to discover
+    /// the limits enforced by `create_contract` without relying on hard-coded
+    /// constants:
+    ///
+    /// - `max_milestones`: maximum number of milestones per contract.
+    /// - `max_single_milestone_stroops`: maximum amount for any single milestone.
+    /// - `max_total_escrow_stroops`: maximum sum of all milestone amounts.
+    /// - `max_fee_bps`: protocol fee ceiling in basis points (10 000 = 100 %).
+    /// - `max_disputes`: maximum number of disputes per contract.
+    ///
+    /// The `max_disputes` field is read from persistent storage and falls back
+    /// to a default when no admin override has been stored.
+    ///
+    /// # Returns
+    /// A [`ContractBounds`] value containing only limit fields. Unlike
+    /// [`get_contract_summary`], this type carries no per-contract participant
+    /// or accounting data and its schema version tracks the limits API only.
     pub fn get_bounds(_env: Env) -> ContractBounds {
         ContractBounds {
             max_milestones: MAX_MILESTONES,
             max_single_milestone_stroops: crate::amount_validation::MAX_SINGLE_AMOUNT_STROOPS,
             max_total_escrow_stroops: MAX_TOTAL_ESCROW_STROOPS,
-            max_fee_bps: MAX_FEE_BPS,
+            max_fee_bps: 10_000,
+            max_disputes: Self::effective_max_disputes(&_env),
         }
+    }
+
+    // ─── Configurable disputes limit ──────────────────────────────────
+
+    /// Returns the effective max disputes, falling back to the default.
+    fn effective_max_disputes(env: &Env) -> u32 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::MaxDisputes)
+            .unwrap_or(DEFAULT_MAX_DISPUTES)
+    }
+
+    /// Returns the dispute count for a contract (0 if not tracked yet).
+    fn get_dispute_count(env: &Env, contract_id: u32) -> u32 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::DisputeCount(contract_id))
+            .unwrap_or(0)
+    }
+
+    /// Increments the dispute count for a contract by 1.
+    fn increment_dispute_count(env: &Env, contract_id: u32) {
+        let count = Self::get_dispute_count(env, contract_id);
+        env.storage()
+            .persistent()
+            .set(&DataKey::DisputeCount(contract_id), &(count + 1));
+    }
+
+    /// Set the max disputes limit. Admin only. Rejects out-of-range values.
+    pub fn set_max_disputes(env: Env, max_disputes: u32) -> bool {
+        Self::require_initialized(&env);
+        let admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::NotInitialized));
+        admin.require_auth();
+
+        if max_disputes < MIN_MAX_DISPUTES || max_disputes > MAX_MAX_DISPUTES {
+            env.panic_with_error(EscrowError::LimitOutOfRange);
+        }
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::MaxDisputes, &max_disputes);
+
+        env.events().publish(
+            (symbol_short!("limits"), Symbol::new(&env, "max_disputes")),
+            (max_disputes, env.ledger().timestamp()),
+        );
+        true
+    }
+
+    /// Returns the current max disputes limit (or the default if not set).
+    pub fn get_max_disputes(env: Env) -> u32 {
+        Self::effective_max_disputes(&env)
     }
 
     /// Returns the current mainnet readiness checklist.
@@ -2395,6 +2482,7 @@ impl Escrow {
     /// * `InvalidState` - If contract is not in a disputable state
     /// * `ContractPaused` - If pause or emergency controls are active
     /// * `AlreadyFinalized` - If contract has been finalized
+    /// * `LimitOutOfRange` - If the per-contract disputes limit has been reached
     ///
     /// # Security
     /// - Only contract parties (client/freelancer) can open disputes
@@ -2432,6 +2520,14 @@ impl Escrow {
             env.panic_with_error(EscrowError::ArbiterRequired);
         }
 
+        // Enforce per-contract disputes limit
+        let max_disputes = Self::effective_max_disputes(&env);
+        let dispute_count = Self::get_dispute_count(&env, contract_id);
+        if dispute_count >= max_disputes {
+            env.panic_with_error(EscrowError::LimitOutOfRange);
+        }
+
+        // Verify contract is in a disputable state (Funded or PartiallyFunded)
         match contract.status {
             ContractStatus::Funded | ContractStatus::PartiallyFunded => {}
             _ => env.panic_with_error(EscrowError::InvalidState),
@@ -2446,6 +2542,8 @@ impl Escrow {
             .set(&DataKey::Contract(contract_id), &contract);
 
         ttl::extend_contract_ttl(env, contract_id);
+
+        Self::increment_dispute_count(&env, contract_id);
 
         env.events().publish(
             (symbol_short!("dispute"), symbol_short!("opened")),

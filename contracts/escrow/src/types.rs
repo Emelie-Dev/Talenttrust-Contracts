@@ -65,6 +65,8 @@ pub struct ContractBounds {
     pub max_single_milestone_stroops: i128,
     pub max_total_escrow_stroops: i128,
     pub max_fee_bps: u32,
+    /// Maximum number of disputes per contract.
+    pub max_disputes: u32,
 }
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
@@ -153,9 +155,10 @@ pub enum DataKey {
     Finalization(u32),
     // Settlement token
     SettlementToken,
-    // Versioned state storage
-    State,
-    StorageVersion,
+    // Configurable limits
+    MaxDisputes,
+    // Per-contract dispute tracking
+    DisputeCount(u32),
 }
 
 /// Canonical contract error type for all entrypoint-facing errors.
