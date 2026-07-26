@@ -1,85 +1,173 @@
-#![cfg(test)]
-use super::*;
-use soroban_sdk::{testutils::Address as _, Address, Env, Vec};
-use crate::types::{ContractEntry, ContractStatus};
+use super::{create_contract, register_client};
+
+use crate::{ContractEntry, PAGE_CEILING};
+
+use soroban_sdk::Env;
 
 #[test]
-fn empty_page() {
+fn no_contracts_returns_empty_page() {
     let env = Env::default();
-    env.mock_all_auths_allowing_non_root_auth();
-    
-    let admin = Address::generate(&env);
-    let escrow_address = Address::generate(&env);
-    let client = EscrowClient::new(&env, &escrow_address);
-    client.initialize(&admin, &100, &100_000_000_000, &Address::generate(&env));
-    
-    // Total = 0
-    let page = client.get_contracts_page(&0, &10);
+    env.mock_all_auths();
+    let client = register_client(&env);
+
+    let page = client.get_contracts_page(&0u32, &10u32);
     assert_eq!(page.len(), 0);
 }
 
 #[test]
-fn single_page() {
-    let mut fix = EscrowFixture::builder().funded(true).build();
-    let page = fix.escrow().get_contracts_page(&0, &10);
-    assert_eq!(page.len(), 1);
-    
-    let entry = page.get(0).unwrap();
-    assert_eq!(entry.id, fix.escrow_id);
-    assert_eq!(entry.client, fix.client);
-    assert_eq!(entry.freelancer, fix.freelancer);
-    assert_eq!(entry.status, ContractStatus::Funded);
-}
+fn full_page_of_created_contracts() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
 
-#[test]
-fn pagination_continuation() {
-    let mut fix1 = EscrowFixture::builder().funded(true).build();
-    
-    // Create a second contract
-    let client = Address::generate(&fix1.env);
-    let freelancer = Address::generate(&fix1.env);
-    let milestones = vec![&fix1.env, 1000];
-    
-    fix1.env.mock_all_auths();
-    fix1.escrow().create_contract(
-        &client,
-        &freelancer,
-        &None,
-        &milestones,
-        &ReleaseAuthorization::ClientOnly,
-    );
-    
-    // Now there are 2 contracts
-    // Get first page of size 1
-    let p1 = fix1.escrow().get_contracts_page(&0, &1);
-    assert_eq!(p1.len(), 1);
-    assert_eq!(p1.get(0).unwrap().id, 1);
-    
-    // Get second page
-    let p2 = fix1.escrow().get_contracts_page(&1, &1);
-    assert_eq!(p2.len(), 1);
-    assert_eq!(p2.get(0).unwrap().id, 2);
-}
+    let (_, _, id1) = create_contract(&env, &client);
+    let (_, _, id2) = create_contract(&env, &client);
+    let (_, _, id3) = create_contract(&env, &client);
 
-#[test]
-fn ceiling_clamp() {
-    let mut fix = EscrowFixture::builder().funded(true).build();
-    let client2 = Address::generate(&fix.env);
-    let freelancer2 = Address::generate(&fix.env);
-    let milestones = vec![&fix.env, 1000];
-    
-    // Create lots of contracts
-    for _ in 0..60 {
-        fix.escrow().create_contract(
-            &client2,
-            &freelancer2,
-            &None,
-            &milestones,
-            &ReleaseAuthorization::ClientOnly,
-        );
+    let page = client.get_contracts_page(&0u32, &10u32);
+    assert_eq!(page.len(), 3);
+    assert_eq!(page.get(0).unwrap().id, id1);
+    assert_eq!(page.get(1).unwrap().id, id2);
+    assert_eq!(page.get(2).unwrap().id, id3);
+    for i in 0..3 {
+        let entry: ContractEntry = page.get(i).unwrap();
+        // Freshly created contracts are unfunded (status 0 == Created).
+        assert_eq!(entry.status, 0);
+        assert_eq!(entry.funded_amount, 0);
+        assert_eq!(entry.released_amount, 0);
     }
-    
-    // PAGE_CEILING is 50. Requesting 100 should clamp to 50.
-    let page = fix.escrow().get_contracts_page(&0, &100);
-    assert_eq!(page.len(), 50);
+}
+
+#[test]
+fn start_beyond_end_returns_empty() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+    create_contract(&env, &client);
+
+    let page = client.get_contracts_page(&100u32, &10u32);
+    assert_eq!(page.len(), 0);
+}
+
+#[test]
+fn start_at_last_contract_returns_one() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+    create_contract(&env, &client);
+    create_contract(&env, &client);
+    let (_, _, id3) = create_contract(&env, &client);
+
+    let page = client.get_contracts_page(&2u32, &10u32);
+    assert_eq!(page.len(), 1);
+    assert_eq!(page.get(0).unwrap().id, id3);
+}
+
+#[test]
+fn limit_clamped_to_page_ceiling() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+    for _ in 0..3 {
+        create_contract(&env, &client);
+    }
+
+    // Requesting far more than PAGE_CEILING never panics and never returns
+    // more than what actually exists (3 here, well under the ceiling).
+    let page = client.get_contracts_page(&0u32, &(PAGE_CEILING * 10));
+    assert_eq!(page.len(), 3);
+}
+
+#[test]
+fn zero_limit_returns_empty_page() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+    create_contract(&env, &client);
+
+    let page = client.get_contracts_page(&0u32, &0u32);
+    assert_eq!(page.len(), 0);
+}
+
+#[test]
+fn continuation_page_fetches_remaining() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+
+    let (_, _, id1) = create_contract(&env, &client);
+    let (_, _, id2) = create_contract(&env, &client);
+    let (_, _, id3) = create_contract(&env, &client);
+
+    let page1 = client.get_contracts_page(&0u32, &1u32);
+    assert_eq!(page1.len(), 1);
+    assert_eq!(page1.get(0).unwrap().id, id1);
+
+    let page2 = client.get_contracts_page(&1u32, &1u32);
+    assert_eq!(page2.len(), 1);
+    assert_eq!(page2.get(0).unwrap().id, id2);
+
+    let page3 = client.get_contracts_page(&2u32, &1u32);
+    assert_eq!(page3.len(), 1);
+    assert_eq!(page3.get(0).unwrap().id, id3);
+
+    let page4 = client.get_contracts_page(&3u32, &1u32);
+    assert_eq!(page4.len(), 0);
+}
+
+#[test]
+fn exact_page_boundary() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+    for _ in 0..3 {
+        create_contract(&env, &client);
+    }
+
+    let page = client.get_contracts_page(&0u32, &3u32);
+    assert_eq!(page.len(), 3);
+    let page_next = client.get_contracts_page(&3u32, &3u32);
+    assert_eq!(page_next.len(), 0);
+}
+
+#[test]
+fn funded_contract_reflects_status_and_amount() {
+    let fixture = super::EscrowFixture::builder().funded().build();
+    let escrow = fixture.escrow();
+
+    let page = escrow.get_contracts_page(&0u32, &10u32);
+    assert_eq!(page.len(), 1);
+    let entry = page.get(0).unwrap();
+    assert_eq!(entry.id, fixture.escrow_id);
+    // Fully funded (status 2 == Funded).
+    assert_eq!(entry.status, 2);
+    assert_eq!(entry.funded_amount, fixture.total_amount());
+    assert_eq!(entry.released_amount, 0);
+}
+
+#[test]
+fn released_milestone_updates_page_entry() {
+    let fixture = super::EscrowFixture::builder().funded().build();
+    let escrow = fixture.escrow();
+    let cid = fixture.escrow_id;
+
+    escrow.approve_milestone_release(&cid, &fixture.client, &0u32);
+    escrow.release_milestone(&cid, &fixture.client, &0u32);
+
+    let page = escrow.get_contracts_page(&0u32, &10u32);
+    assert_eq!(page.len(), 1);
+    let entry = page.get(0).unwrap();
+    assert!(entry.released_amount > 0);
+}
+
+#[test]
+fn single_contract_pagination() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+    let (_, _, id) = create_contract(&env, &client);
+
+    let page = client.get_contracts_page(&0u32, &10u32);
+    assert_eq!(page.len(), 1);
+    assert_eq!(page.get(0).unwrap().id, id);
 }

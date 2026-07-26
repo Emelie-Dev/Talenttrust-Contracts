@@ -35,13 +35,17 @@ pub struct MilestoneEntry {
 }
 
 /// Lightweight contract entry returned by the paginated contracts view.
+///
+/// Carries only the fields needed for a UI listing: the contract `id`, a
+/// numeric `status` code (the `ContractStatus` discriminant), and the
+/// escrow's `funded_amount` / `released_amount` in stroops.
 #[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ContractEntry {
     pub id: u32,
-    pub client: Address,
-    pub freelancer: Address,
-    pub status: ContractStatus,
+    pub status: u32,
+    pub funded_amount: i128,
+    pub released_amount: i128,
 }
 
 #[contracttype]
@@ -122,7 +126,9 @@ pub enum DataKey {
     // Configurable limits
     MaxMilestones,
     MaxEscrowStroops,
-    // Settlement storage
+    // Finalization
+    Finalization(u32),
+    // Settlement token
     SettlementToken,
     Finalization(u32),
 }
@@ -205,8 +211,8 @@ pub enum Error {
     EscrowCapExceeded = 51,
     SettlementTokenNotConfigured = 52,
     MilestoneNotOverdue = 53,
+    /// The contract ID is out of valid bounds.
     InvalidContractId = 54,
-    BatchItemLimitExceeded = 55,
 }
 
 #[contracttype]
@@ -371,23 +377,4 @@ impl DisputeResolution {
             Self::Split(_) => 3,
         }
     }
-}
-
-// ── State Migration Types ────────────────────────────────────────────────────
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct StateV1 {
-    pub client: Address,
-    pub freelancer: Address,
-    pub milestones: Vec<i128>,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct StateV2 {
-    pub client: Address,
-    pub freelancer: Address,
-    pub milestones: Vec<i128>,
-    pub status: ContractStatus,
 }
