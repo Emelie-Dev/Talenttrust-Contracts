@@ -20,7 +20,7 @@ use crate::{
         PENDING_APPROVAL_TTL_LEDGERS, PENDING_MIGRATION_BUMP_THRESHOLD,
         PENDING_MIGRATION_TTL_LEDGERS,
     },
-    Error, Escrow, ReleaseAuthorization,
+    Error, Escrow, MilestonesKey, ReleaseAuthorization,
 };
 
 const INSTANCE_TTL: u32 = PENDING_MIGRATION_TTL_LEDGERS * 4;
@@ -388,10 +388,9 @@ mod approval_ttl_integration {
                     deadline: None,
                 }],
             );
-            let milestone_key = Symbol::new(&env, "milestones");
             env.storage()
                 .persistent()
-                .set(&(DataKey::Contract(1), milestone_key), &milestones);
+                .set(&MilestonesKey::new(1), &milestones);
         });
 
         (
@@ -505,10 +504,9 @@ mod approval_ttl_integration {
                     deadline: None,
                 }],
             );
-            let milestone_key = Symbol::new(&env, "milestones");
             env.storage()
                 .persistent()
-                .set(&(DataKey::Contract(1), milestone_key), &milestones);
+                .set(&MilestonesKey::new(1), &milestones);
         });
 
         env.as_contract(&escrow_id, || {
