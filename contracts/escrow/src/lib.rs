@@ -1054,16 +1054,8 @@ impl Escrow {
         // Authenticate caller before any state-dependent logic
         caller.require_auth();
 
-        let mut contract: Contract = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Contract(contract_id))
-            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
-
-        // Extend TTL on contract read
-        ttl::extend_contract_ttl(&env, contract_id);
-
-        Self::require_not_finalized(&env, contract_id);
+        // Load contract, extend TTL, and assert not finalized via shared helper.
+        let mut contract: Contract = Self::load_and_check_contract(&env, contract_id);
 
         // Verify contract is in Funded state before release (deposit transitions
         // Created â†’ Funded when fully funded, so release must accept Funded).
@@ -1358,16 +1350,8 @@ impl Escrow {
             }
         }
 
-        let mut contract: Contract = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Contract(contract_id))
-            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
-
-        // Extend TTL on contract read
-        ttl::extend_contract_ttl(&env, contract_id);
-
-        Self::require_not_finalized(&env, contract_id);
+        // Load contract, extend TTL, and assert not finalized via shared helper.
+        let mut contract: Contract = Self::load_and_check_contract(&env, contract_id);
 
         // Only allow refunds while the contract is still in an active,
         // unreleased state. Cancelled, Completed, and Refunded contracts
@@ -2016,14 +2000,8 @@ impl Escrow {
     /// * `InvalidStatusTransition` - If the contract is not `Created`/`Funded` or has already released funds.
     pub fn cancel_contract(env: Env, contract_id: u32, client: Address) -> bool {
         Self::require_not_paused(&env);
-        let mut contract: Contract = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Contract(contract_id))
-            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
-        ttl::extend_contract_ttl(&env, contract_id);
-
-        Self::require_not_finalized(&env, contract_id);
+        // Load contract, extend TTL, and assert not finalized via shared helper.
+        let mut contract: Contract = Self::load_and_check_contract(&env, contract_id);
 
         if client != contract.client {
             env.panic_with_error(EscrowError::UnauthorizedRole);
@@ -2325,14 +2303,8 @@ impl Escrow {
         Self::require_not_paused(&env);
         caller.require_auth();
 
-        let contract: Contract = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Contract(contract_id))
-            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
-
-        ttl::extend_contract_ttl(&env, contract_id);
-        Self::require_not_finalized(&env, contract_id);
+        // Load contract, extend TTL, and assert not finalized via shared helper.
+        let contract: Contract = Self::load_and_check_contract(&env, contract_id);
 
         if caller != contract.freelancer {
             env.panic_with_error(Error::UnauthorizedRole);
@@ -2627,14 +2599,8 @@ impl Escrow {
         Self::require_not_paused(&env);
         caller.require_auth();
 
-        let mut contract: Contract = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Contract(contract_id))
-            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
-
-        ttl::extend_contract_ttl(&env, contract_id);
-        Self::require_not_finalized(&env, contract_id);
+        // Load contract, extend TTL, and assert not finalized via shared helper.
+        let mut contract: Contract = Self::load_and_check_contract(&env, contract_id);
 
         // Verify caller is client or freelancer
         if caller != contract.client && caller != contract.freelancer {
@@ -2711,14 +2677,8 @@ impl Escrow {
         Self::require_not_paused(&env);
         arbiter.require_auth();
 
-        let mut contract: Contract = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Contract(contract_id))
-            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
-
-        ttl::extend_contract_ttl(&env, contract_id);
-        Self::require_not_finalized(&env, contract_id);
+        // Load contract, extend TTL, and assert not finalized via shared helper.
+        let mut contract: Contract = Self::load_and_check_contract(&env, contract_id);
 
         // Verify contract is in Disputed state
         if contract.status != ContractStatus::Disputed {
