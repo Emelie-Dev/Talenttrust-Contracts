@@ -37,7 +37,7 @@ mod release_authorization;
 mod reputation;
 mod rollback;
 mod security;
-mod simulate_create_contract;
+mod simulate_release;
 mod ttl_tests;
 
 // --- Shared constants ---

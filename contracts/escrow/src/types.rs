@@ -336,6 +336,30 @@ pub struct SettlementState {
     pub accumulated_protocol_fees: i128,
 }
 
+/// Projected outcome of a milestone release simulation.
+///
+/// Returned by `simulate_release_milestone`. When `would_succeed` is `false`,
+/// `error_code` contains the numeric code of the error that the real
+/// `release_milestone` would panic with.
+#[contracttype]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SimulatedRelease {
+    /// Whether the real `release_milestone` would succeed.
+    pub would_succeed: bool,
+    /// Gross milestone amount (before fee deduction).
+    pub gross_amount: i128,
+    /// Protocol fee that would be retained.
+    pub protocol_fee: i128,
+    /// Net amount that would be transferred to the freelancer.
+    pub net_amount: i128,
+    /// The contract's `released_amount` after the projected release.
+    pub projected_released_amount: i128,
+    /// Whether this release would transition the contract to `Completed`.
+    pub would_complete_contract: bool,
+    /// Error code matching the corresponding entrypoint error, `None` on success.
+    pub error_code: Option<u32>,
+}
+
 #[contracttype]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DepositMode {

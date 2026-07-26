@@ -105,7 +105,7 @@ pub use types::{
     Contract, ContractBounds, ContractStatus, ContractSummary, DataKey, DepositMode,
     DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone, MilestoneApprovals,
     MilestoneSummary, PendingAdminProposal, ReadinessChecklist, ReleaseAuthorization, Reputation,
-    SimulateCreateContractOutcome, SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION,
+    SimulatedRelease, SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION,
 };
 
 /// Default maximum number of milestones allowed per contract.
@@ -1396,8 +1396,284 @@ impl Escrow {
         true
     }
 
-    // `release_milestone` and `is_milestone_overdue` are implemented in
-    // `contracts/escrow/src/release.rs` via their own `#[contractimpl]` block.
+    /// Read-only simulation of `release_milestone`.
+    ///
+    /// Performs all the same validation checks as `release_milestone` and
+    /// returns the projected outcome (`gross_amount`, `protocol_fee`,
+    /// `net_amount`, `projected_released_amount`, `would_complete_contract`)
+    /// without writing to storage, transferring tokens, or emitting events.
+    ///
+    /// Unlike the real entrypoint, `simulate_release_milestone` does **not**
+    /// require caller authentication so any address can preview the result.
+    ///
+    /// # Returns
+    /// [`SimulatedRelease`] — a struct with `would_succeed: true` and all
+    /// computed fields on success, or `would_succeed: false` with an
+    /// `error_code` matching the error that `release_milestone` would
+    /// panic with.
+    ///
+    /// # Errors (returned as data, not panics)
+    /// Every error that `release_milestone` panics with is returned as
+    /// `error_code` instead.
+    pub fn simulate_release_milestone(
+        env: Env,
+        contract_id: u32,
+        caller: Address,
+        milestone_index: u32,
+    ) -> SimulatedRelease {
+        // --- Pause / emergency guard (mirrors finalize::require_not_paused) ---
+        if env
+            .storage()
+            .persistent()
+            .get::<_, bool>(&DataKey::Paused)
+            .unwrap_or(false)
+        {
+            return SimulatedRelease {
+                would_succeed: false,
+                error_code: Some(Error::ContractPaused as u32),
+                ..Default::default()
+            };
+        }
+        if env
+            .storage()
+            .persistent()
+            .get::<_, bool>(&DataKey::Emergency)
+            .unwrap_or(false)
+        {
+            return SimulatedRelease {
+                would_succeed: false,
+                error_code: Some(Error::EmergencyActive as u32),
+                ..Default::default()
+            };
+        }
+
+        // --- Load contract ---
+        let contract: Contract = match env
+            .storage()
+            .persistent()
+            .get(&DataKey::Contract(contract_id))
+        {
+            Some(c) => c,
+            None => {
+                return SimulatedRelease {
+                    would_succeed: false,
+                    error_code: Some(EscrowError::ContractNotFound as u32),
+                    ..Default::default()
+                }
+            }
+        };
+
+        // --- Finalization guard (mirrors finalize::require_not_finalized) ---
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::Finalization(contract_id))
+        {
+            return SimulatedRelease {
+                would_succeed: false,
+                error_code: Some(Error::AlreadyFinalized as u32),
+                ..Default::default()
+            };
+        }
+
+        // --- Status check ---
+        if contract.status != ContractStatus::Funded {
+            return SimulatedRelease {
+                would_succeed: false,
+                error_code: Some(Error::InvalidState as u32),
+                ..Default::default()
+            };
+        }
+
+        // --- Role authorization check (no require_auth — read-only) ---
+        let is_client = caller == contract.client;
+        let is_freelancer = caller == contract.freelancer;
+        let is_arbiter = contract.arbiter.as_ref() == Some(&caller);
+
+        let authorized = match contract.release_authorization {
+            ReleaseAuthorization::ClientOnly => is_client,
+            ReleaseAuthorization::ArbiterOnly => is_arbiter,
+            ReleaseAuthorization::ClientAndArbiter => is_client || is_arbiter,
+            ReleaseAuthorization::MultiSig => is_client || is_freelancer,
+        };
+        if !authorized {
+            return SimulatedRelease {
+                would_succeed: false,
+                error_code: Some(EscrowError::UnauthorizedRole as u32),
+                ..Default::default()
+            };
+        }
+
+        // --- Load milestones ---
+        let milestone_key = Symbol::new(&env, "milestones");
+        let milestones: Vec<Milestone> = match env
+            .storage()
+            .persistent()
+            .get(&(DataKey::Contract(contract_id), milestone_key))
+        {
+            Some(m) => m,
+            None => {
+                return SimulatedRelease {
+                    would_succeed: false,
+                    error_code: Some(EscrowError::ContractNotFound as u32),
+                    ..Default::default()
+                }
+            }
+        };
+
+        // --- Index bounds ---
+        if milestone_index >= milestones.len() {
+            return SimulatedRelease {
+                would_succeed: false,
+                error_code: Some(Error::IndexOutOfBounds as u32),
+                ..Default::default()
+            };
+        }
+
+        let milestone = milestones.get(milestone_index).unwrap();
+
+        // --- Already released check ---
+        if milestone.released {
+            return SimulatedRelease {
+                would_succeed: false,
+                error_code: Some(Error::MilestoneAlreadyReleased as u32),
+                ..Default::default()
+            };
+        }
+
+        // --- Already refunded check ---
+        if milestone.refunded {
+            return SimulatedRelease {
+                would_succeed: false,
+                error_code: Some(EscrowError::AlreadyRefunded as u32),
+                ..Default::default()
+            };
+        }
+
+        // --- Approvals check ---
+        if let Err(e) = approvals::check_approvals(&env, &contract, contract_id, milestone_index) {
+            return SimulatedRelease {
+                would_succeed: false,
+                error_code: Some(e as u32),
+                ..Default::default()
+            };
+        }
+
+        // --- Available balance check (aggregate) ---
+        let available =
+            contract.funded_amount - contract.released_amount - contract.refunded_amount;
+        if available < milestone.amount {
+            return SimulatedRelease {
+                would_succeed: false,
+                error_code: Some(Error::InsufficientFunds as u32),
+                ..Default::default()
+            };
+        }
+
+        let gross_amount = milestone.amount;
+
+        // --- Protocol fee computation (mirrors release_milestone) ---
+        let protocol_fee: i128 = if Self::is_initialized(&env) {
+            let fee_bps = Self::read_protocol_fee_bps(&env);
+            if fee_bps > 0 {
+                Self::calculate_protocol_fee(&env, gross_amount, fee_bps)
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+
+        let net_amount = gross_amount - protocol_fee;
+
+        // --- Available balance check (with accumulated fees) ---
+        let accumulated_fees: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::AccumulatedProtocolFees)
+            .unwrap_or(0);
+        let available_balance = contract.funded_amount
+            - contract.released_amount
+            - contract.refunded_amount
+            - accumulated_fees;
+        if available_balance < gross_amount {
+            return SimulatedRelease {
+                would_succeed: false,
+                error_code: Some(EscrowError::InsufficientFunds as u32),
+                ..Default::default()
+            };
+        }
+
+        // --- Projected released amount ---
+        let projected_released_amount = contract
+            .released_amount
+            .checked_add(net_amount)
+            .unwrap_or(i128::MAX);
+
+        // --- Accounting invariant check ---
+        let new_accumulated = accumulated_fees + protocol_fee;
+        let invariant_sum = projected_released_amount + contract.refunded_amount + new_accumulated;
+        if invariant_sum > contract.funded_amount {
+            return SimulatedRelease {
+                would_succeed: false,
+                error_code: Some(EscrowError::AccountingInvariantViolated as u32),
+                ..Default::default()
+            };
+        }
+
+        // --- Completion check (project this milestone as released) ---
+        let would_complete: bool = milestones.iter().enumerate().all(|(i, m)| {
+            if i as u32 == milestone_index {
+                true
+            } else {
+                m.released || m.refunded
+            }
+        });
+
+        SimulatedRelease {
+            would_succeed: true,
+            gross_amount,
+            protocol_fee,
+            net_amount,
+            projected_released_amount,
+            would_complete_contract: would_complete,
+            error_code: None,
+        }
+    }
+
+    /// Checks if a specific milestone is overdue based on its deadline.
+    ///
+    /// A milestone is considered overdue if:
+    /// - It has a deadline set (Some value)
+    /// - The current time is strictly greater than the deadline (now > deadline)
+    /// - The milestone has not been released
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `contract_id` - The contract ID
+    /// * `milestone_index` - The index of the milestone to check
+    ///
+    /// # Returns
+    /// `true` if the milestone is overdue, `false` otherwise
+    ///
+    /// # Note
+    /// - Returns `false` if milestone has no deadline (None)
+    /// - Returns `false` if milestone is already released
+    /// - Boundary condition: at exactly the deadline (now == deadline), returns `false`
+    ///   because the deadline hasn't passed yet (uses strictly > comparison)
+    ///
+    /// # Security
+    /// Uses `now_seconds(&env)` which is the single source of truth for ledger time.
+    /// Time cannot be manipulated by contract callers.
+    pub fn is_milestone_overdue(env: Env, contract_id: u32, milestone_index: u32) -> bool {
+        let contract: Contract = match env
+            .storage()
+            .persistent()
+            .get(&DataKey::Contract(contract_id))
+        {
+            Some(c) => c,
+            None => return false, // Contract not found, not overdue
+        };
 
     // `refund_unreleased_milestones` is implemented in
     // `contracts/escrow/src/refund.rs` via its own `#[contractimpl]` block.
