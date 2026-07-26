@@ -1,9 +1,8 @@
 use crate::{
     amount_validation, ttl, Contract, ContractStatus, DataKey, Error, Escrow, EscrowArgs,
-    EscrowClient, EscrowError, GovernedParameters, Milestone, MilestonesKey, ReleaseAuthorization,
-    MAX_MILESTONES,
+    EscrowClient, EscrowError, GovernedParameters, Milestone, ReleaseAuthorization, MAX_MILESTONES,
 };
-use soroban_sdk::{contractimpl, symbol_short, Address, Env, Vec};
+use soroban_sdk::{contractimpl, symbol_short, Address, Env, Symbol, Vec};
 
 #[contractimpl]
 impl Escrow {

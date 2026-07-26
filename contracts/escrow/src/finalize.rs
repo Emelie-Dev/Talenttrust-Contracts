@@ -1,8 +1,8 @@
 use soroban_sdk::{contracttype, symbol_short, Address, Env, Vec};
 
 use crate::{
-    safe_subtract_amounts, Contract, ContractStatus, ContractSummary, DataKey, Error, Escrow,
-    EscrowError, Milestone, MilestoneSummary, MilestonesKey, CONTRACT_SUMMARY_SCHEMA_VERSION,
+    safe_subtract_amounts, settlement, Contract, ContractStatus, ContractSummary, DataKey, Error,
+    Escrow, EscrowError, Milestone, MilestoneSummary, CONTRACT_SUMMARY_SCHEMA_VERSION,
 };
 
 /// Immutable metadata written when an escrow contract is closed.
@@ -23,7 +23,7 @@ pub struct FinalizationRecord {
 
 impl Escrow {
     fn finalization_key(contract_id: u32) -> DataKey {
-        DataKey::Finalization(contract_id)
+        settlement::finalization_key(contract_id)
     }
 
     fn load_contract_for_finalization(env: &Env, contract_id: u32) -> Contract {
@@ -34,15 +34,11 @@ impl Escrow {
     }
 
     pub(crate) fn is_finalized(env: &Env, contract_id: u32) -> bool {
-        env.storage()
-            .persistent()
-            .has(&Self::finalization_key(contract_id))
+        settlement::is_finalized(env, contract_id)
     }
 
     pub(crate) fn require_not_finalized(env: &Env, contract_id: u32) {
-        if Self::is_finalized(env, contract_id) {
-            env.panic_with_error(Error::AlreadyFinalized);
-        }
+        settlement::require_not_finalized(env, contract_id);
     }
 
     pub(crate) fn require_not_paused(env: &Env) {
@@ -154,9 +150,7 @@ pub fn finalize_contract_impl(env: &Env, contract_id: u32, finalizer: Address) -
         summary: Escrow::summarize_contract(&env, contract_id, &contract),
     };
 
-    env.storage()
-        .persistent()
-        .set(&Escrow::finalization_key(contract_id), &record);
+    settlement::write_finalization(&env, contract_id, &record);
 
     env.events().publish(
         (symbol_short!("finalized"), contract_id),
@@ -168,7 +162,5 @@ pub fn finalize_contract_impl(env: &Env, contract_id: u32, finalizer: Address) -
 
 /// Return immutable close metadata for `contract_id`, if it has been finalized.
 pub fn get_finalization_record_impl(env: &Env, contract_id: u32) -> Option<FinalizationRecord> {
-    env.storage()
-        .persistent()
-        .get(&Escrow::finalization_key(contract_id))
+    settlement::read_finalization(env, contract_id)
 }

@@ -115,12 +115,12 @@ pub enum DataKey {
     AccumulatedProtocolFees,
     GovernedParameters,
     ReadinessChecklist,
-    // Finalization
-    Finalization(u32),
-    // Settlement token
+    // Configurable limits
+    MaxMilestones,
+    MaxEscrowStroops,
+    // Settlement storage
     SettlementToken,
-    // State migration
-    State,
+    Finalization(u32),
 }
 
 #[contracterror]

@@ -371,36 +371,16 @@ fn get_average_rating_fractional_average_is_preserved() {
     assert_eq!(client.get_average_rating(&freelancer_addr), Some(15_000));
 }
 
-// ---------------------------------------------------------------------------
-// rep_issue event tests (issue #944)
-//
-// The reputation ledger is now published as a Soroban event so off-chain
-// indexers can reconstruct per-freelancer reputation history without
-// re-fetching contract storage after every issuance. These tests pin the
-// topic, payload schema, collision-safety, and fail-closed behaviour so any
-// future contract change that breaks indexing will be caught by CI.
-// ---------------------------------------------------------------------------
+#[test]
+fn issue_reputation_rejects_invalid_contract_id_zero() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+    let client_addr = Address::generate(&env);
+    let freelancer_addr = Address::generate(&env);
 
-/// Returns the published `rep_issue` event for `contract_id`, panicking if
-/// none/more than one exist. Used by single-event assertions.
-fn find_rep_issue_event(env: &Env, contract_id: u32) -> (Address, Vec<Val>, Val) {
-    let mut found: Option<(Address, Vec<Val>, Val)> = None;
-    for ev in env.events().all().iter() {
-        if !has_topic(env, &ev, symbol_short!("rep_issue")) {
-            continue;
-        }
-        let cid: u32 = u32::from_val(env, &ev.1.get(1).unwrap());
-        if cid != contract_id {
-            continue;
-        }
-        assert!(
-            found.is_none(),
-            "more than one rep_issue event for contract_id={}",
-            contract_id
-        );
-        found = Some((ev.0.clone(), ev.1.clone(), ev.2.clone()));
-    }
-    found.unwrap_or_else(|| panic!("no rep_issue event for contract_id={}", contract_id))
+    let result = client.try_issue_reputation(&0, &client_addr, &5, &valid_comment(&env));
+    super::assert_contract_error(result, EscrowError::InvalidContractId);
 }
 
 /// Happy-path: `issue_reputation` publishes exactly one `rep_issue` event
