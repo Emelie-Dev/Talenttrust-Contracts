@@ -71,6 +71,14 @@ pub struct ContractSummary {
     pub milestones: Vec<MilestoneSummary>,
 }
 
+/// Protocol-wide bounds for contract validation.
+///
+/// This type carries the limits used by `create_contract` and other
+/// validation paths. It is returned by `get_bounds()` for off-chain indexers
+/// and client applications.
+///
+/// The settlement limit (`max_single_milestone_stroops`) is admin-configurable
+/// at runtime; all other fields are compile-time constants.
 #[contracttype]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ContractBounds {
@@ -217,7 +225,8 @@ pub enum DataKey {
     MaxEscrowStroops,
     // Settlement storage
     SettlementToken,
-    Finalization(u32),
+    // Admin-configurable settlement limit (max single milestone amount in stroops)
+    SettlementLimit,
 }
 
 /// Canonical contract error type for all entrypoint-facing errors.

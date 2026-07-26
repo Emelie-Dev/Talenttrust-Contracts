@@ -112,9 +112,94 @@ pub const MAX_MILESTONES: u32 = 10;
 pub const MAX_SINGLE_AMOUNT_STROOPS: i128 = crate::amount_validation::MAX_SINGLE_AMOUNT_STROOPS;
 pub const MAX_TOTAL_ESCROW_STROOPS: i128 = MAX_SINGLE_AMOUNT_STROOPS;
 
+/// Default settlement limit (max single milestone amount in stroops).
+/// Preserves the original hard-coded behaviour; admin may lower it via
+/// [`Escrow::set_settlement_limit`] but never above this absolute ceiling.
+pub const DEFAULT_SETTLEMENT_LIMIT: i128 = MAX_SINGLE_AMOUNT_STROOPS;
+
 #[contract]
 pub struct Escrow;
 
+mod create_contract;
+mod dispute;
+mod governance;
+
+/// Governance-level errors for admin-gated operations.
+#[contracterror]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum EscrowError {
+    InvalidParticipant = 1,
+    EmptyMilestones = 2,
+    InvalidMilestoneAmount = 3,
+    InvalidDepositAmount = 4,
+    InvalidMilestone = 5,
+    ContractNotFound = 6,
+    EmptyRefundRequest = 7,
+    DuplicateMilestoneInRefund = 8,
+    AlreadyReleased = 9,
+    AlreadyRefunded = 10,
+    InsufficientFunds = 11,
+    AlreadyInitialized = 12,
+    InsufficientAccumulatedFees = 13,
+    /// Returned by lifecycle entrypoints when `initialize` has not been called.
+    ///
+    /// All money-flow operations require initialization so the admin-controlled
+    /// safety rails (pause, emergency controls, protocol fees) are always in
+    /// scope before any funds can move.
+    NotInitialized = 14,
+    UnauthorizedRole = 15,
+    ContractPaused = 16,
+    EmergencyActive = 17,
+    InvalidState = 18,
+    InvalidRating = 19,
+    SelfRating = 20,
+    ReputationAlreadyIssued = 21,
+    NotCompleted = 22,
+    FreelancerMismatch = 23,
+    InvalidStatusTransition = 24,
+    ArbiterRequired = 25,
+    InvalidDisputeSplit = 26,
+    AccountingInvariantViolated = 27,
+    PotentialOverflow = 28,
+    AlreadyFinalized = 29,
+    AmountMustBePositive = 30,
+    /// No settlement token has been bound for custody transfers.
+    SettlementTokenNotConfigured = 31,
+    /// A settlement token has already been bound.
+    SettlementTokenAlreadyBound = 32,
+    /// The sum of milestone amounts exceeded the configured maximum or overflowed.
+    TotalCapExceeded = 33,
+    /// Too many milestones were provided.
+    TooManyMilestones = 34,
+    /// An arbiter was required by the release authorization mode but not provided.
+    MissingArbiter = 35,
+    /// The provided arbiter is invalid (same as client or freelancer).
+    InvalidArbiter = 36,
+    /// Contract is cancelled and must not accept further value-moving operations.
+    ContractCancelled = 37,
+    /// Contract has been refunded and is terminal for value-moving operations.
+    ContractRefunded = 38,
+    /// The address supplied as settlement token is not a valid token contract.
+    /// The pre-bind probe called `token::Client::balance` against the escrow
+    /// contract address and the call panicked — the address does not implement
+    /// the SAC token interface.
+    InvalidSettlementToken = 39,
+    /// The address supplied as settlement token is the escrow contract itself.
+    /// Binding self would create a circular custody reference and brick all
+    /// transfer paths.
+    SettlementTokenIsSelf = 40,
+    /// The address supplied as settlement token is the escrow admin.
+    /// Binding the admin as the custody asset conflates governance authority
+    /// with the settlement token role.
+    SettlementTokenIsAdmin = 41,
+    /// Reputation feedback comment was empty.
+    EmptyComment = 42,
+    /// Reputation feedback comment exceeded the 200-character maximum.
+    CommentTooLong = 43,
+    /// The settlement limit value is out of the allowed bounds.
+    SettlementLimitOutOfBounds = 44,
+}
 
 impl Escrow {
     pub(crate) fn validate_contract_id_bounds(env: &Env, contract_id: u32) {
@@ -200,6 +285,15 @@ impl Escrow {
             .persistent()
             .get(&key)
             .unwrap_or(Contract::default())
+    }
+
+    /// Read the admin-configurable settlement limit from storage, falling back
+    /// to [`DEFAULT_SETTLEMENT_LIMIT`] when no value has been set.
+    pub(crate) fn read_settlement_limit(env: &Env) -> i128 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::SettlementLimit)
+            .unwrap_or(DEFAULT_SETTLEMENT_LIMIT)
     }
 }
 
@@ -499,20 +593,20 @@ impl Escrow {
         env.storage().persistent().get(&DataKey::Admin)
     }
 
-    /// Returns the protocol-wide hard-coded bounds used by validation paths.
+    /// Returns the current protocol-wide bounds used by validation paths.
     ///
     /// Callers and off-chain indexers should query this endpoint to discover
-    /// the limits enforced by `create_contract` without relying on hard-coded
-    /// constants:
+    /// the limits enforced by `create_contract`:
     ///
     /// - `max_milestones`: maximum number of milestones per contract.
-    /// - `max_single_milestone_stroops`: maximum amount for any single milestone.
+    /// - `max_single_milestone_stroops`: maximum amount for any single milestone
+    ///   (admin-configurable via [`set_settlement_limit`](Self::set_settlement_limit),
+    ///   defaults to [`DEFAULT_SETTLEMENT_LIMIT`]).
     /// - `max_total_escrow_stroops`: maximum sum of all milestone amounts.
     /// - `max_fee_bps`: protocol fee ceiling in basis points (10 000 = 100 %).
     ///
-    /// These are compile-time constants — the return value never changes
-    /// between calls on the same contract binary. The function is read-only
-    /// and requires no authorization.
+    /// Most fields are compile-time constants. The settlement limit is read
+    /// from persistent storage and may change at runtime via admin governance.
     ///
     /// # Arguments
     /// * `_env` - The Soroban environment
@@ -522,16 +616,11 @@ impl Escrow {
     /// [`get_contract_summary`], this type carries no per-contract participant
     /// or accounting data and its schema version tracks the limits API only.
     ///
-    /// # Examples
-    /// ```rust,ignore
-    /// let client = EscrowClient::new(&env, &contract_id);
-    /// let bounds = client.get_bounds();
-    /// assert_eq!(bounds.max_milestones, 10);
-    /// ```
+    /// The function is read-only and requires no authorization.
     pub fn get_bounds(_env: Env) -> ContractBounds {
         ContractBounds {
             max_milestones: MAX_MILESTONES,
-            max_single_milestone_stroops: MAX_SINGLE_AMOUNT_STROOPS,
+            max_single_milestone_stroops: Self::read_settlement_limit(&_env),
             max_total_escrow_stroops: MAX_TOTAL_ESCROW_STROOPS,
             max_fee_bps: MAX_BPS,
         }
