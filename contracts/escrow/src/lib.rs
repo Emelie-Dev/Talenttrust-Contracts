@@ -2902,6 +2902,124 @@ impl Escrow {
 
         true
     }
+
+    // ── Authorization management ─────────────────────────────────────────────
+
+    /// Update the release authorization mode for an existing escrow contract.
+    ///
+    /// Off-chain indexers cannot cheaply reconstruct authorization history
+    /// without an on-chain event trail. This entrypoint updates the stored
+    /// [`ReleaseAuthorization`] and emits a well-topic'd `auth_chg` event
+    /// on every change so indexers can reconstruct the full authorization
+    /// history from events alone.
+    ///
+    /// # Authorization
+    /// Only the contract client may update the release authorization mode.
+    ///
+    /// # State guard
+    /// Authorization changes are only allowed while the contract is in the
+    /// `Created`, `Funded`, or `PartiallyFunded` state. Once a contract reaches
+    /// a terminal state (`Completed`, `Cancelled`, `Refunded`, `Disputed`) the
+    /// authorization mode is frozen.
+    ///
+    /// # No fund movement
+    /// This entrypoint **never** moves funds. It only updates the stored
+    /// `release_authorization` field and emits an event.
+    ///
+    /// # Topic collision avoidance
+    /// The event uses the distinct topic `symbol_short!("auth_chg")` which does
+    /// not collide with any other event topic in the contract:
+    /// - `"created"` — contract creation
+    /// - `"mlstn_rls"` — milestone release
+    /// - `"ctrct_cmp"` — contract completion
+    /// - `"ctrct_st"` — contract status change
+    /// - `"refunded"` — milestone refund
+    /// - `"cancelled"` — contract cancellation
+    /// - `"dispute"` — dispute opened / resolved
+    /// - `"fee"` — protocol fee withdrawal
+    /// - `"pause"` / `"unpaused"` / `"emergency"` — pause controls
+    /// - `"init"` — initialization
+    /// - `"limits"` — configurable limits
+    /// - `"auth_chg"` — **this event only**
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `contract_id` - The contract ID to update
+    /// * `caller` - The address of the caller (must be the stored client)
+    /// * `new_authorization` - The new release authorization mode
+    ///
+    /// # Returns
+    /// `true` if the update was applied.
+    ///
+    /// # Errors
+    /// * `ContractPaused` / `EmergencyActive` — if pause or emergency controls are active
+    /// * `NotInitialized` — if `initialize` has not been called
+    /// * `ContractNotFound` — if the contract does not exist
+    /// * `UnauthorizedRole` — if `caller` is not the stored client
+    /// * `InvalidState` — if the contract status is terminal
+    ///
+    /// # Events
+    /// Emits `(symbol_short!("auth_chg"), contract_id)` with payload
+    /// `(old_auth: u32, new_auth: u32, caller: Address, timestamp: u64)`
+    /// where `old_auth` and `new_auth` are the `u32` discriminants of the
+    /// [`ReleaseAuthorization`] variants:
+    /// - `0` = `ClientOnly`
+    /// - `1` = `ClientAndArbiter`
+    /// - `2` = `ArbiterOnly`
+    /// - `3` = `MultiSig`
+    pub fn set_release_authorization(
+        env: Env,
+        contract_id: u32,
+        caller: Address,
+        new_authorization: ReleaseAuthorization,
+    ) -> bool {
+        Self::require_initialized(&env);
+        Self::require_not_paused(&env);
+        caller.require_auth();
+
+        let mut contract: Contract = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Contract(contract_id))
+            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
+
+        ttl::extend_contract_ttl(&env, contract_id);
+
+        // Only the client may change the authorization mode.
+        if caller != contract.client {
+            env.panic_with_error(Error::UnauthorizedRole);
+        }
+
+        // Authorization changes are frozen once the contract reaches a terminal state.
+        match contract.status {
+            ContractStatus::Created
+            | ContractStatus::Funded
+            | ContractStatus::PartiallyFunded => {}
+            _ => env.panic_with_error(Error::InvalidState),
+        }
+
+        let old_auth = contract.release_authorization as u32;
+        let new_auth = new_authorization as u32;
+
+        contract.release_authorization = new_authorization;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Contract(contract_id), &contract);
+
+        ttl::extend_contract_ttl(&env, contract_id);
+
+        // Emit indexed event so off-chain indexers can reconstruct the full
+        // authorization history without scanning raw storage diffs.
+        //
+        // Topic  : `(symbol_short!("auth_chg"), contract_id: u32)`
+        // Payload: `(old_auth: u32, new_auth: u32, caller: Address, timestamp: u64)`
+        env.events().publish(
+            (symbol_short!("auth_chg"), contract_id),
+            (old_auth, new_auth, caller, env.ledger().timestamp()),
+        );
+
+        true
+    }
 }
 
 /// Property-based invariant tests are compiled only for native test builds, never wasm.
