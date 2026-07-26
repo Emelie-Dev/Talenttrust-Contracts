@@ -111,7 +111,8 @@ but serve different purposes and must not be conflated:
 milestones vector. Its `schema_version` tracks the limits ABI only.
 `ContractSummary` is the per-contract snapshot used by `get_contract_summary`
 and embedded in `FinalizationRecord`; its schema version tracks per-contract
-data.
+data. Note that `reputation_issued` in `ContractSummary` tracks whether a rating
+was given for the contract by reading the storage-backed `DataKey::ReputationIssued`.
 
 Indexers discovering limits should call `get_bounds()`. Indexers snapshotting
 contract state should call `get_contract_summary()`.

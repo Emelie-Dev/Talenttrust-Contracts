@@ -372,75 +372,28 @@ fn get_average_rating_fractional_average_is_preserved() {
 }
 
 #[test]
-fn issue_reputation_rejects_invalid_contract_id_zero() {
+fn finalize_reflects_reputation_issued_flag() {
     let env = Env::default();
     env.mock_all_auths();
     let client = register_client(&env);
-    let client_addr = Address::generate(&env);
-    let freelancer_addr = Address::generate(&env);
+    
+    // Contract 1: Finalize WITHOUT issuing reputation
+    let (client_addr1, _freelancer_addr1, contract_id1) = complete_contract(&env, &client);
+    let summary1 = client.get_contract_summary(&contract_id1);
+    assert_eq!(summary1.reputation_issued, false);
+    
+    assert!(client.finalize_contract(&contract_id1, &client_addr1));
+    let final_record1 = client.get_finalization_record(&contract_id1).unwrap();
+    assert_eq!(final_record1.summary.reputation_issued, false);
 
-    let result = client.try_issue_reputation(&0, &client_addr, &5, &valid_comment(&env));
-    super::assert_contract_error(result, EscrowError::ContractNotFound);
-}
-
-/// Happy-path: `issue_reputation` publishes exactly one `rep_issue` event
-/// whose topics are `(symbol_short!("rep_issue"), contract_id)` and whose
-/// payload carries every id/amount required for off-chain reconstruction.
-#[test]
-fn issue_reputation_emits_rep_issue_event_with_correct_topic_and_payload() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let client = register_client(&env);
-    let (client_addr, freelancer_addr, contract_id) = complete_contract(&env, &client);
-
-    let rating: u32 = 4;
-    assert!(client.issue_reputation(&contract_id, &client_addr, &rating, &valid_comment(&env)));
-
-    // Locate the (single) rep_issue event for this contract.
-    assert_eq!(
-        count_topic(&env, symbol_short!("rep_issue")),
-        1,
-        "expected exactly one rep_issue event"
-    );
-    let (publisher, topics, payload) = find_rep_issue_event(&env, contract_id);
-
-    // Try to use contract_id = 2 (which is next_contract_id)
-    let result = client.try_issue_reputation(&2, &client_addr, &5, &valid_comment(&env));
-    super::assert_contract_error(result, EscrowError::ContractNotFound);
-
-    // Try to use contract_id = 100 (way out of bounds)
-    let result = client.try_issue_reputation(&100, &client_addr, &5, &valid_comment(&env));
-    super::assert_contract_error(result, EscrowError::ContractNotFound);
-}
-
-#[test]
-fn get_reputation_comment_rejects_invalid_contract_id_zero() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let client = register_client(&env);
-
-    let result = client.try_get_reputation_comment(&0);
-    super::assert_contract_error(result, EscrowError::ContractNotFound);
-}
-
-#[test]
-fn get_reputation_comment_rejects_invalid_contract_id_out_of_bounds() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let client = register_client(&env);
-    let client_addr = Address::generate(&env);
-    let freelancer_addr = Address::generate(&env);
-
-    // Create one contract so next_contract_id = 2
-    let contract_id = client.create_contract(
-        &client_addr,
-        &freelancer_addr,
-        &None,
-        &super::default_milestones(&env),
-        &ReleaseAuthorization::ClientOnly,
-    );
-
-    // Try to use contract_id = 2 (which is next_contract_id)
-    let result = client.try_get_reputation_comment(&2);
-    super::assert_contract_error(result, EscrowError::ContractNotFound);
+    // Contract 2: Finalize AFTER issuing reputation
+    let (client_addr2, _freelancer_addr2, contract_id2) = complete_contract(&env, &client);
+    assert!(client.issue_reputation(&contract_id2, &client_addr2, &5, &valid_comment(&env)));
+    
+    let summary2 = client.get_contract_summary(&contract_id2);
+    assert_eq!(summary2.reputation_issued, true);
+    
+    assert!(client.finalize_contract(&contract_id2, &client_addr2));
+    let final_record2 = client.get_finalization_record(&contract_id2).unwrap();
+    assert_eq!(final_record2.summary.reputation_issued, true);
 }

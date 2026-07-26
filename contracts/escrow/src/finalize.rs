@@ -100,13 +100,19 @@ impl Escrow {
             });
         }
 
+        let reputation_issued = env
+            .storage()
+            .persistent()
+            .get::<_, bool>(&DataKey::ReputationIssued(contract_id))
+            .unwrap_or(false);
+
         ContractSummary {
             schema_version: 1,
             client: contract.client.clone(),
             freelancer: contract.freelancer.clone(),
             arbiter: contract.arbiter.clone(),
             status: contract.status,
-            reputation_issued: contract.reputation_issued,
+            reputation_issued,
             total_amount,
             funded_amount: contract.funded_amount,
             released_amount: contract.released_amount,

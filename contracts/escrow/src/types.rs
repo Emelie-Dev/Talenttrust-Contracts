@@ -52,6 +52,9 @@ pub struct ArbiterEntry {
     pub arbiter: Address,
 }
 
+/// A point-in-time snapshot of the contract state.
+/// This structure is used for both indexing (`get_contract_summary`) and
+/// the immutable close metadata stored at finalization.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ContractSummary {
@@ -60,6 +63,8 @@ pub struct ContractSummary {
     pub freelancer: Address,
     pub arbiter: Option<Address>,
     pub status: ContractStatus,
+    /// Indicates whether reputation has been issued for this contract.
+    /// This is determined by reading the `DataKey::ReputationIssued` storage entry.
     pub reputation_issued: bool,
     pub total_amount: i128,
     pub funded_amount: i128,
