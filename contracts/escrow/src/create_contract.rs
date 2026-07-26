@@ -109,7 +109,7 @@ pub fn execute_create_contract(
 
         // Build and persist the milestone vector.
         let mut milestone_vec: Vec<Milestone> = Vec::new(&env);
-        for amount in milestones.iter() {
+        for (idx, amount) in milestones.iter().enumerate() {
             milestone_vec.push_back(Milestone {
                 amount,
                 funded_amount: 0,
@@ -119,6 +119,11 @@ pub fn execute_create_contract(
                 refunded_amount: 0,
                 deadline: None,
             });
+            // Indexed event for off-chain milestone-history reconstruction.
+            env.events().publish(
+                (symbol_short!("mlstn_idx"), id, idx as u32),
+                (amount, false, false, env.ledger().timestamp()),
+            );
         }
         env.storage()
             .persistent()
