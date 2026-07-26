@@ -28,12 +28,12 @@
 //!
 //! # Status Transitions
 //!
-//! - **Funded → Refunded**: All unreleased milestones refunded (no releases)
-//! - **Funded → Funded**: Partial refund (some milestones remain unreleased/unrefunded)
-//! - **Funded → Completed**: All milestones either released or refunded (mixed state)
+//! - **Funded â†’ Refunded**: All unreleased milestones refunded (no releases)
+//! - **Funded â†’ Funded**: Partial refund (some milestones remain unreleased/unrefunded)
+//! - **Funded â†’ Completed**: All milestones either released or refunded (mixed state)
 
 use crate::{Contract, ContractStatus, DataKey, EscrowError, Milestone};
-use soroban_sdk::{Env, Symbol, Vec};
+use soroban_sdk::{symbol_short, Env, Symbol, Vec};
 
 /// Refunds unreleased milestones back to the client.
 ///
@@ -120,6 +120,14 @@ pub fn refund_unreleased_milestones(
 
     // Mark milestones as refunded
     mark_milestones_refunded(&mut milestones, milestone_indices);
+    for idx in milestone_indices.iter() {
+        let m = milestones.get(idx).unwrap();
+        // Indexed event for off-chain milestone-history reconstruction.
+        env.events().publish(
+            (symbol_short!("mlstn_idx"), contract_id, idx),
+            (m.amount, m.released, m.refunded, env.ledger().timestamp()),
+        );
+    }
 
     // Update contract state
     contract.refunded_amount += total_refund_amount;
@@ -208,9 +216,9 @@ fn mark_milestones_refunded(milestones: &mut Vec<Milestone>, milestone_indices: 
 ///
 /// # Status Transition Logic
 ///
-/// - If all milestones are refunded → `Refunded`
-/// - If all milestones are either released or refunded → `Completed`
-/// - Otherwise → remains `Funded`
+/// - If all milestones are refunded â†’ `Refunded`
+/// - If all milestones are either released or refunded â†’ `Completed`
+/// - Otherwise â†’ remains `Funded`
 fn update_contract_status(contract: &mut Contract, milestones: &Vec<Milestone>) {
     let all_refunded_or_released = milestones.iter().all(|m| m.released || m.refunded);
 

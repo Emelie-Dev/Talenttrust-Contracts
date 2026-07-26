@@ -139,7 +139,7 @@ impl Escrow {
 
         // Build and persist the milestone vector.
         let mut milestone_vec: Vec<Milestone> = Vec::new(&env);
-        for amount in milestones.iter() {
+        for (idx, amount) in milestones.iter().enumerate() {
             milestone_vec.push_back(Milestone {
                 amount,
                 funded_amount: 0,
@@ -149,6 +149,11 @@ impl Escrow {
                 refunded_amount: 0,
                 deadline: None,
             });
+            // Indexed event for off-chain milestone-history reconstruction.
+            env.events().publish(
+                (symbol_short!("mlstn_idx"), id, idx as u32),
+                (amount, false, false, env.ledger().timestamp()),
+            );
         }
         let milestone_key = Symbol::new(&env, "milestones");
         env.storage()

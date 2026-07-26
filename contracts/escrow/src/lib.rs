@@ -156,7 +156,7 @@ pub enum EscrowError {
     ContractRefunded = 38,
     /// The address supplied as settlement token is not a valid token contract.
     /// The pre-bind probe called `token::Client::balance` against the escrow
-    /// contract address and the call panicked — the address does not implement
+    /// contract address and the call panicked Ã¢â‚¬â€ the address does not implement
     /// the SAC token interface.
     InvalidSettlementToken = 39,
     /// The address supplied as settlement token is the escrow contract itself.
@@ -208,9 +208,9 @@ impl Escrow {
     ///    interface, the call panics and the bind is rejected with
     ///    `InvalidSettlementToken`.
     /// 2. Rejects `env.current_contract_address()` (the escrow contract itself)
-    ///    with `SettlementTokenIsSelf` — binding self creates a circular custody
+    ///    with `SettlementTokenIsSelf` Ã¢â‚¬â€ binding self creates a circular custody
     ///    reference.
-    /// 3. Rejects the stored admin address with `SettlementTokenIsAdmin` —
+    /// 3. Rejects the stored admin address with `SettlementTokenIsAdmin` Ã¢â‚¬â€
     ///    conflating governance authority with the settlement token role is a
     ///    privilege-separation violation.
     ///
@@ -222,8 +222,8 @@ impl Escrow {
     /// state is finalized *before* any `token::Client::transfer` call.  A
     /// malicious token contract that re-enters the escrow during a transfer will
     /// observe the already-mutated state and cannot double-spend or front-run
-    /// the operation.  The probe itself performs no state mutation — it only
-    /// reads the token balance — so it cannot be used as a reentrancy vector.
+    /// the operation.  The probe itself performs no state mutation Ã¢â‚¬â€ it only
+    /// reads the token balance Ã¢â‚¬â€ so it cannot be used as a reentrancy vector.
     ///
     /// See [`docs/escrow/sac-custody.md`](../../../docs/escrow/sac-custody.md) for the
     /// full custody model, accounting invariant, and lifecycle sequence diagram.
@@ -272,15 +272,15 @@ impl Escrow {
             env.panic_with_error(EscrowError::SettlementTokenAlreadyBound);
         }
 
-        // ── Pre-bind probe (issue #723) ─────────────────────────────────────
+        // Ã¢â€â‚¬Ã¢â€â‚¬ Pre-bind probe (issue #723) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
         //
-        // Reject the escrow contract's own address — binding self would create
+        // Reject the escrow contract's own address Ã¢â‚¬â€ binding self would create
         // a circular custody reference and brick every transfer path.
         if token == env.current_contract_address() {
             env.panic_with_error(EscrowError::SettlementTokenIsSelf);
         }
 
-        // Reject the admin address — conflating governance authority with the
+        // Reject the admin address Ã¢â‚¬â€ conflating governance authority with the
         // settlement token role is a privilege-separation violation.
         if token == stored_admin {
             env.panic_with_error(EscrowError::SettlementTokenIsAdmin);
@@ -294,7 +294,7 @@ impl Escrow {
         // This is safe because:
         // - `balance` is a read-only entrypoint (no state mutation on the
         //   token contract).
-        // - We have not yet written anything to storage — a panic here leaves
+        // - We have not yet written anything to storage Ã¢â‚¬â€ a panic here leaves
         //   no partial state.
         // - The probe cannot be used for reentrancy: it calls `balance`, not
         //   `transfer`, and the escrow has no callback the token could invoke.
@@ -341,7 +341,7 @@ impl Escrow {
     /// This is the recommended cheap pre-flight readiness check before calling
     /// `deposit_funds`, which panics when no settlement token has been bound.
     /// Integrators that only need to know *whether* the escrow can accept
-    /// deposits — without caring about the specific token address — should use
+    /// deposits Ã¢â‚¬â€ without caring about the specific token address Ã¢â‚¬â€ should use
     /// this instead of fetching and discarding the `Address` from
     /// `get_settlement_token`.
     ///
@@ -355,7 +355,7 @@ impl Escrow {
         Self::read_settlement_token(&env).is_some()
     }
 
-    // ── Initialization ───────────────────────────────────────────────────────
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Initialization Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
     /// Initializes the escrow contract with the operational admin.
     ///
@@ -414,7 +414,7 @@ impl Escrow {
     /// - `max_total_escrow_stroops`: maximum sum of all milestone amounts.
     /// - `max_fee_bps`: protocol fee ceiling in basis points (10 000 = 100 %).
     ///
-    /// These are compile-time constants — the return value never changes
+    /// These are compile-time constants Ã¢â‚¬â€ the return value never changes
     /// between calls on the same contract binary. The function is read-only
     /// and requires no authorization.
     ///
@@ -587,10 +587,10 @@ impl Escrow {
     /// Duplicate approvals from the same party are rejected.
     ///
     /// Required approvers per mode:
-    /// - `ClientOnly` — client only
-    /// - `ArbiterOnly` — arbiter only
-    /// - `ClientAndArbiter` — client or arbiter (one is enough)
-    /// - `MultiSig` — both client and freelancer must approve
+    /// - `ClientOnly` Ã¢â‚¬â€ client only
+    /// - `ArbiterOnly` Ã¢â‚¬â€ arbiter only
+    /// - `ClientAndArbiter` Ã¢â‚¬â€ client or arbiter (one is enough)
+    /// - `MultiSig` Ã¢â‚¬â€ both client and freelancer must approve
     ///
     /// # Errors
     /// * `ContractPaused` - If the contract is paused while not in emergency mode
@@ -630,7 +630,7 @@ impl Escrow {
 
     /// Releases a specific milestone, transferring the net payout to the freelancer.
     ///
-    /// Executes `SAC::transfer(from: escrow_address, to: freelancer, milestone.amount − fee)`.
+    /// Executes `SAC::transfer(from: escrow_address, to: freelancer, milestone.amount Ã¢Ë†â€™ fee)`.
     /// The protocol fee is retained inside the contract under
     /// `DataKey::AccumulatedProtocolFees` and stays commingled with the escrow balance
     /// until `withdraw_protocol_fees` is called.
@@ -648,7 +648,7 @@ impl Escrow {
     /// both of those addresses have approved the same milestone.
     ///
     /// Approvals are cleared from temporary storage after a successful release.
-    /// Missing or expired approvals are fail-closed — they produce
+    /// Missing or expired approvals are fail-closed Ã¢â‚¬â€ they produce
     /// `InsufficientApprovals` and the call panics without mutating state.
     ///
     /// See `approve_milestone_release`, `get_milestone_approvals`, and
@@ -709,7 +709,7 @@ impl Escrow {
         Self::require_not_finalized(&env, contract_id);
 
         // Verify contract is in Funded state before release (deposit transitions
-        // Created → Funded when fully funded, so release must accept Funded).
+        // Created Ã¢â€ â€™ Funded when fully funded, so release must accept Funded).
         if contract.status != ContractStatus::Funded {
             env.panic_with_error(Error::InvalidState);
         }
@@ -799,7 +799,7 @@ impl Escrow {
         // Compute the protocol fee up-front so the available-balance check can
         // account for both the net payout and the fee that stays in the contract.
         //
-        /// `protocol_fee` — the portion of `gross_amount` retained by the
+        /// `protocol_fee` Ã¢â‚¬â€ the portion of `gross_amount` retained by the
         /// protocol. Deducted from the gross milestone amount before transfer
         /// so the escrow balance is never overdrawn.
         let protocol_fee: i128 = if Self::is_initialized(&env) {
@@ -813,7 +813,7 @@ impl Escrow {
             0
         };
 
-        /// `net_amount` — the amount actually transferred to the freelancer
+        /// `net_amount` Ã¢â‚¬â€ the amount actually transferred to the freelancer
         /// after deducting the protocol fee.
         let net_amount = gross_amount - protocol_fee;
 
@@ -857,6 +857,11 @@ impl Escrow {
         // Record the funded amount on the milestone so it is self-describing.
         milestone.funded_amount = gross_amount;
         milestones.set(milestone_index, milestone.clone());
+        // Indexed event for off-chain milestone-history reconstruction.
+        env.events().publish(
+            (symbol_short!("mlstn_idx"), contract_id, milestone_index),
+            (milestone.amount, true, false, env.ledger().timestamp()),
+        );
         // released_amount tracks net amounts paid out to freelancers.
         // accumulated_fees tracks protocol fees retained in the contract.
         // Together: released_amount + refunded_amount + accumulated_fees <= funded_amount.
@@ -892,14 +897,14 @@ impl Escrow {
         // Extend TTL on contract write (milestone TTL already extended by store_milestones)
         ttl::extend_contract_ttl(&env, contract_id);
 
-        // ── Events ──────────────────────────────────────────────────────────
+        // Ã¢â€â‚¬Ã¢â€â‚¬ Events Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
         //
         // Emitted only after all state mutations succeed (fail-closed guarantee:
         // if execution reaches here, the release was accepted). Events contain
-        // no secrets — all fields are already public contract state or
+        // no secrets Ã¢â‚¬â€ all fields are already public contract state or
         // caller-supplied arguments.
 
-        /// `mlstn_rls` — fired on every successful milestone release.
+        /// `mlstn_rls` Ã¢â‚¬â€ fired on every successful milestone release.
         ///
         /// Topics : `(symbol_short!("mlstn_rls"), contract_id: u32)`
         /// Data   : `(milestone_index: u32, amount: i128, fee: i128,
@@ -916,7 +921,7 @@ impl Escrow {
             ),
         );
 
-        // `ctrct_cmp` — fired only when this release completes the contract.
+        // `ctrct_cmp` Ã¢â‚¬â€ fired only when this release completes the contract.
         //
         /// Topics : `(symbol_short!("ctrct_cmp"), contract_id: u32)`
         /// Data   : `(caller: Address, timestamp: u64)`
@@ -1117,7 +1122,13 @@ impl Escrow {
             let mut milestone = milestones.get(idx).unwrap();
             milestone.refunded = true;
             milestone.refunded_amount = milestone.amount;
+            let mlstn_idx_amount = milestone.amount;
             milestones.set(idx, milestone);
+            // Indexed event for off-chain milestone-history reconstruction.
+            env.events().publish(
+                (symbol_short!("mlstn_idx"), contract_id, idx),
+                (mlstn_idx_amount, false, true, env.ledger().timestamp()),
+            );
         }
 
         contract.refunded_amount = contract
@@ -1225,7 +1236,7 @@ impl Escrow {
     /// * `env` - The contract environment
     ///
     /// # Returns
-    /// The next contract ID to be allocated (always ≥ 1)
+    /// The next contract ID to be allocated (always Ã¢â€°Â¥ 1)
     ///
     /// # Examples
     /// ```
@@ -1371,7 +1382,7 @@ impl Escrow {
     /// Retrieves approval status for a milestone.
     ///
     /// Returns `None` when no approval record exists or when the TTL has
-    /// elapsed. Treat `None` and an all-`false` struct identically — neither
+    /// elapsed. Treat `None` and an all-`false` struct identically Ã¢â‚¬â€ neither
     /// unblocks `release_milestone`.
     ///
     /// On a successful read, this entrypoint renews the temporary approval
@@ -1416,7 +1427,7 @@ impl Escrow {
         Some(ttl::compute_expiry(&env, ttl::PENDING_APPROVAL_TTL_LEDGERS))
     }
 
-    // ── Pause / unpause ──────────────────────────────────────────────────────
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Pause / unpause Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
     /// Pause all state-changing escrow operations.
     ///
@@ -1438,7 +1449,7 @@ impl Escrow {
 
     /// Unpause operations, clearing the `Paused` flag.
     ///
-    /// Blocked while `Emergency` is active — use `resolve_emergency` instead.
+    /// Blocked while `Emergency` is active Ã¢â‚¬â€ use `resolve_emergency` instead.
     /// Requires the stored admin's authorization.
     ///
     /// # Events
@@ -1472,7 +1483,7 @@ impl Escrow {
             .unwrap_or(false)
     }
 
-    // ── Emergency pause ──────────────────────────────────────────────────────
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Emergency pause Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
     /// Activate emergency pause, setting both `Emergency` and `Paused` flags.
     ///
@@ -1572,7 +1583,7 @@ impl Escrow {
             .unwrap_or(false)
     }
 
-    // ── Cancel contract ──────────────────────────────────────────────────────
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Cancel contract Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
     /// Cancels a contract before any milestone has been released.
     ///
@@ -1650,9 +1661,9 @@ impl Escrow {
         true
     }
 
-    // ── Dispute management ────────────────────────────────────────────────────
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Dispute management Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
-    // ── Reputation ───────────────────────────────────────────────────────────
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Reputation Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
     /// Issues reputation credit for a completed contract.
     ///
@@ -1781,19 +1792,19 @@ impl Escrow {
             .get(&DataKey::Reputation(address))
     }
 
-    /// Returns the freelancer's average rating scaled to basis points (×10 000),
+    /// Returns the freelancer's average rating scaled to basis points (Ãƒâ€”10 000),
     /// or `None` if no reputation record exists or no contracts have been completed.
     ///
     /// # Scaling
     /// `result = total_rating * 10_000 / completed_contracts`
     ///
     /// A raw rating of 5 on a single contract returns `50_000` (5.0000 on a
-    /// 1–5 scale).  Clients divide by `10_000` to recover the decimal value.
+    /// 1Ã¢â‚¬â€œ5 scale).  Clients divide by `10_000` to recover the decimal value.
     ///
     /// Checked arithmetic is used throughout; division by zero is impossible
     /// because `None` is returned whenever `completed_contracts == 0`.
     pub fn get_average_rating(env: Env, address: Address) -> Option<i128> {
-        /// Basis-point scaling factor (×10 000 preserves four decimal places).
+        /// Basis-point scaling factor (Ãƒâ€”10 000 preserves four decimal places).
         const SCALE: i128 = 10_000;
 
         let rep: types::Reputation = env
@@ -1840,16 +1851,16 @@ impl Escrow {
     /// * `evidence`    - Deliverable reference; max 256 bytes
     ///
     /// # Errors
-    /// * `NotInitialized`     — `initialize` has not been called
-    /// * `ContractPaused` / `EmergencyActive` — pause/emergency gate
-    /// * `ContractNotFound`   — unknown `contract_id`
-    /// * `AlreadyFinalized`   — contract has been finalized
-    /// * `UnauthorizedRole`   — `caller` is not the freelancer
-    /// * `InvalidState`       — contract is not `Funded`
-    /// * `IndexOutOfBounds`   — `milestone_index` exceeds milestone count
-    /// * `MilestoneAlreadyReleased` — milestone is already released
-    /// * `AlreadyRefunded`    — milestone has been refunded
-    /// * `EvidenceTooLong`    — evidence string exceeds 256 bytes
+    /// * `NotInitialized`     Ã¢â‚¬â€ `initialize` has not been called
+    /// * `ContractPaused` / `EmergencyActive` Ã¢â‚¬â€ pause/emergency gate
+    /// * `ContractNotFound`   Ã¢â‚¬â€ unknown `contract_id`
+    /// * `AlreadyFinalized`   Ã¢â‚¬â€ contract has been finalized
+    /// * `UnauthorizedRole`   Ã¢â‚¬â€ `caller` is not the freelancer
+    /// * `InvalidState`       Ã¢â‚¬â€ contract is not `Funded`
+    /// * `IndexOutOfBounds`   Ã¢â‚¬â€ `milestone_index` exceeds milestone count
+    /// * `MilestoneAlreadyReleased` Ã¢â‚¬â€ milestone is already released
+    /// * `AlreadyRefunded`    Ã¢â‚¬â€ milestone has been refunded
+    /// * `EvidenceTooLong`    Ã¢â‚¬â€ evidence string exceeds 256 bytes
     pub fn submit_work_evidence(
         env: Env,
         contract_id: u32,
@@ -1965,9 +1976,9 @@ impl Escrow {
     // Internal helpers
     // -----------------------------------------------------------------------
 
-    // ── Finalization ─────────────────────────────────────────────────────────
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Finalization Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
-    // ── Governance ───────────────────────────────────────────────────────────
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Governance Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
     /// Returns the total accumulated protocol fees in stroops.
     ///
@@ -1997,7 +2008,7 @@ impl Escrow {
     /// full custody model, accounting invariant, and security notes on commingled fees.
     ///
     /// See [`docs/escrow/protocol-fees.md`](../../../docs/escrow/protocol-fees.md) for
-    /// the complete fee lifecycle — basis-point model, accrual, withdrawal authorization,
+    /// the complete fee lifecycle Ã¢â‚¬â€ basis-point model, accrual, withdrawal authorization,
     /// worked examples, and the release-to-withdrawal sequence diagram.
     ///
     /// Requires the stored admin's authorization. Only an amount up to the
@@ -2010,7 +2021,7 @@ impl Escrow {
     pub fn withdraw_protocol_fees(env: Env, amount: i128, to: Address) -> bool {
         Self::require_initialized(&env);
 
-        // Block withdrawal while paused or in emergency — consistent with all
+        // Block withdrawal while paused or in emergency Ã¢â‚¬â€ consistent with all
         // other mutating entrypoints in this contract.
         if env
             .storage()
@@ -2081,7 +2092,7 @@ impl Escrow {
         proposal.map(|p| p.proposed_at_ledger)
     }
 
-    // ── Protocol fee helpers ─────────────────────────────────────────────────
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Protocol fee helpers Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
     /// Reads the stored protocol fee in basis points (0 = no fee).
     ///
@@ -2097,7 +2108,7 @@ impl Escrow {
     /// Computes the protocol fee for a given `amount` at `fee_bps` basis points.
     ///
     /// Uses integer **floor division**: `fee = amount * fee_bps / 10_000`.
-    /// The result always rounds down — it never rounds up — so the freelancer
+    /// The result always rounds down Ã¢â‚¬â€ it never rounds up Ã¢â‚¬â€ so the freelancer
     /// receives at least `amount - fee` stroops and the protocol receives at most
     /// the floored value.  Callers must ensure `fee <= amount` holds; this is
     /// guaranteed for any `fee_bps` in `[0, 10_000]` and a non-negative `amount`.
@@ -2127,7 +2138,7 @@ impl Escrow {
         product / 10_000
     }
 
-    // ── Internal guards ──────────────────────────────────────────────────────
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Internal guards Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
     /// Panics with `NotInitialized` unless `initialize` has been called.
     pub(crate) fn require_initialized(env: &Env) {
