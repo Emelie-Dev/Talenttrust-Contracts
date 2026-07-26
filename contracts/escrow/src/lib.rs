@@ -81,11 +81,10 @@ pub use migration::PendingClientMigration;
 pub use ttl::{ADMIN_ROTATION_MIN_DELAY_LEDGERS, PENDING_MIGRATION_TTL_LEDGERS};
 
 pub use types::{
-    Contract, ContractBounds, ContractEntry, ContractStatus, ContractSummary, DataKey, DepositMode,
-    DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone, MilestoneApprovals,
-    MilestoneEntry, MilestoneSummary, PendingAdminProposal, ReadinessChecklist,
-    ReleaseAuthorization, Reputation, ReputationBatchItem, SplitAmounts, StateV1, StateV2,
-    CONTRACT_SUMMARY_SCHEMA_VERSION,
+    BatchContractResult, Contract, ContractBounds, ContractItem, ContractStatus, ContractSummary,
+    DataKey, DepositMode, DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone,
+    MilestoneApprovals, MilestoneEntry, MilestoneSummary, PendingAdminProposal, ReadinessChecklist,
+    ReleaseAuthorization, Reputation, SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION,
 };
 
 pub const DEFAULT_MAX_MILESTONES: u32 = 10;
@@ -103,6 +102,16 @@ pub const PAGE_CEILING: u32 = 50;
 pub const MIN_MAX_MILESTONES: u32 = 1;
 pub const MAX_MAX_MILESTONES: u32 = 100;
 pub const MIN_MAX_ESCROW_STROOPS: i128 = 1_000_000;
+
+/// Maximum amount allowed for a single milestone (in stroops).
+pub const MAX_SINGLE_AMOUNT_STROOPS: i128 = 1_000_000_000_000_000;
+
+/// Maximum number of items in a paginated view page.
+pub const PAGE_CEILING: u32 = 50;
+
+/// Maximum number of contracts allowed in a single batch creation call.
+pub const BATCH_CAP: u32 = 10;
+
 pub const MAINNET_PROTOCOL_VERSION: u32 = 1u32;
 pub const MAINNET_MAX_TOTAL_ESCROW_PER_CONTRACT_STROOPS: i128 = 1_000_000_000_000_000i128;
 pub const MAX_REPUTATION_BATCH_SIZE: usize = 10;
@@ -293,10 +302,12 @@ pub enum EscrowError {
     EmptyComment = 42,
     /// Reputation feedback comment exceeded the 200-character maximum.
     CommentTooLong = 43,
-    /// The contract ID is out of valid bounds.
-    InvalidContractId = 54,
-    /// A configurable limit value was outside the allowed range.
-    LimitOutOfRange = 55,
+    /// The batch size exceeds the maximum allowed contracts per batch.
+    BatchExceedsCap = 44,
+    /// The provided limit value is out of the allowed range.
+    LimitOutOfRange = 45,
+    /// The contract ID is invalid (e.g. zero).
+    InvalidContractId = 46,
 }
 
 impl Escrow {
@@ -344,6 +355,13 @@ impl Escrow {
     pub(crate) fn validate_contract_id_bounds(env: &Env, contract_id: u32) {
         if contract_id == 0 {
             env.panic_with_error(EscrowError::InvalidContractId);
+        }
+    }
+
+    /// Validate that a contract ID is within acceptable bounds.
+    pub(crate) fn validate_contract_id_bounds(env: &Env, contract_id: u32) {
+        if contract_id == 0 {
+            env.panic_with_error(Error::InvalidContractId);
         }
     }
 }
@@ -447,6 +465,31 @@ impl Escrow {
             max_total_escrow_stroops: MAX_TOTAL_ESCROW_STROOPS,
             max_fee_bps: MAX_FEE_BPS,
         }
+    }
+
+    /// Returns the current mainnet readiness checklist.
+    ///
+    /// The checklist tracks critical configuration steps that must be completed
+    /// before the escrow contract is considered ready for mainnet production:
+    ///
+    /// - **`initialized`**: Flipped to `true` when `initialize` completes successfully.
+    ///   Ensures that an admin has been bound to the contract.
+    /// - **`governed_params_set`**: Flipped to `true` when governance/protocol parameters
+    ///   (such as fees and maximum caps) are configured. Flipped during `initialize_protocol_governance`
+    ///   or parameter updates.
+    /// - **`emergency_controls_enabled`**: Flipped to `true` when emergency pause controls are exercised
+    ///   for the first time (via `activate_emergency_pause`). This verifies the operator has functioning
+    ///   emergency access.
+    ///
+    /// # Implications for a Clean Deploy
+    /// Activating the emergency pause to flip the `emergency_controls_enabled` flag leaves the contract
+    /// in a paused state. To complete a clean deploy and allow normal operations, the operator must
+    /// subsequently call `resolve_emergency` to unpause the contract.
+    pub fn get_readiness_checklist(env: Env) -> ReadinessChecklist {
+        env.storage()
+            .persistent()
+            .get(&DataKey::ReadinessChecklist)
+            .unwrap_or_default()
     }
 
     /// Creates a new escrow contract with the specified client, freelancer, and milestone amounts.
@@ -1257,24 +1300,9 @@ impl Escrow {
 
     // ── Cancel contract ──────────────────────────────────────────────────────
 
-    /// Cancels a contract before any milestone has been released.
-    ///
-    /// The caller must be the stored client and must authorize the call. The
-    /// contract must be in `Created` or `Funded` state, with no released
-    /// balance, and the full remaining refundable balance is sent back to the
-    /// client via the configured Stellar Asset Contract before the contract is
-    /// marked `Cancelled`. A zero-funded cancellation does not invoke a token
-    /// transfer and leaves unrelated contracts' escrowed token balances intact.
-    ///
-    /// # Errors
-    /// * `ContractPaused` - If the contract is paused while not in emergency mode.
-    /// * `EmergencyActive` - If the contract is in an active emergency pause.
-    /// * `ContractNotFound` - If the contract does not exist.
-    /// * `UnauthorizedRole` - If the caller is not the stored client.
-    /// * `AlreadyCancelled` - If the contract was already cancelled.
-    /// * `InvalidStatusTransition` - If the contract is not `Created`/`Funded` or has already released funds.
     pub fn cancel_contract(env: Env, contract_id: u32, client: Address) -> bool {
         Self::require_not_paused(&env);
+        Self::validate_contract_id_bounds(&env, contract_id);
         let mut contract: Contract = env
             .storage()
             .persistent()
@@ -1303,12 +1331,8 @@ impl Escrow {
         client.require_auth();
 
         let old_status = contract.status;
-        let refund_amount = crate::checked_available_balance(
-            contract.funded_amount,
-            contract.released_amount,
-            contract.refunded_amount,
-        )
-        .unwrap_or_else(|e| env.panic_with_error(e));
+        let refund_amount =
+            contract.funded_amount - contract.released_amount - contract.refunded_amount;
         if refund_amount > 0 {
             Self::require_settlement_token(&env).transfer(
                 &env.current_contract_address(),
