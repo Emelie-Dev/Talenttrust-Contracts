@@ -52,6 +52,36 @@ pub struct ContractBounds {
     pub max_fee_bps: u32,
 }
 
+/// Simulated outcome of creating a contract without actually writing to storage.
+///
+/// This type is returned by `simulate_create_contract` and represents the
+/// projected state that would result from a contract creation. The operation
+/// performs all validation checks but makes no storage writes or events.
+///
+/// # Read-only guarantee
+/// - No storage mutations
+/// - No events emitted
+/// - All validation from `create_contract` is applied
+/// - Outcome matches what `create_contract` would produce
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SimulateCreateContractOutcome {
+    /// The contract ID that would be assigned
+    pub contract_id: u32,
+    /// The client address
+    pub client: Address,
+    /// The freelancer address
+    pub freelancer: Address,
+    /// The optional arbiter address
+    pub arbiter: Option<Address>,
+    /// The release authorization mode
+    pub release_authorization: ReleaseAuthorization,
+    /// The milestone amounts (in stroops)
+    pub milestones: Vec<i128>,
+    /// Total escrow amount across all milestones
+    pub total_amount: i128,
+}
+
 // ── Core contract state ──────────────────────────────────────────────────────
 
 // ─── Storage keys ──────────────────────────────────────────────────────────────

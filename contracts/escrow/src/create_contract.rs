@@ -1,6 +1,7 @@
 use crate::{
     amount_validation, ttl, Contract, ContractStatus, DataKey, Error, Escrow, EscrowArgs,
-    EscrowClient, EscrowError, GovernedParameters, Milestone, ReleaseAuthorization, MAX_MILESTONES,
+    EscrowClient, EscrowError, GovernedParameters, Milestone, ReleaseAuthorization,
+    SimulateCreateContractOutcome, MAX_MILESTONES,
 };
 use soroban_sdk::{contractimpl, symbol_short, Address, Env, Symbol, Vec};
 
@@ -171,6 +172,153 @@ impl Escrow {
         );
 
         id
+    }
+
+    /// Simulates contract creation without writing to storage or emitting events.
+    ///
+    /// This is a read-only variant of [`create_contract`](Self::create_contract) that
+    /// performs all the same validation checks but returns the projected outcome without:
+    /// - Mutating storage
+    /// - Emitting events
+    /// - Incrementing the contract ID counter
+    ///
+    /// The simulated contract ID is based on the current `NextContractId` value at the
+    /// time of the call. If validation fails, the function panics with the same error
+    /// as the real `create_contract` would.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `client` - The address of the client funding the contract
+    /// * `freelancer` - The address of the freelancer performing the work
+    /// * `arbiter` - Optional arbiter address for dispute resolution
+    /// * `milestones` - Vector of milestone amounts (in stroops)
+    /// * `release_authorization` - Authorization mode for milestone releases
+    ///
+    /// # Returns
+    /// A [`SimulateCreateContractOutcome`] containing the projected contract details,
+    /// including the simulated contract ID and all input parameters.
+    ///
+    /// # Errors
+    /// Same as [`create_contract`](Self::create_contract):
+    /// * `InvalidParticipant`   - If client and freelancer are the same address
+    /// * `EmptyMilestones`      - If no milestones are provided
+    /// * `InvalidMilestoneAmount` - If any milestone amount is <= 0
+    /// * `MissingArbiter`       - If arbiter is required but not provided
+    /// * `InvalidArbiter`       - If arbiter is same as client or freelancer
+    /// * `TooManyMilestones`    - If the number of milestones exceeds `MAX_MILESTONES`
+    /// * `TotalCapExceeded`     - If the sum of milestone amounts exceeds the governed cap
+    ///
+    /// # Notes
+    /// - The simulated contract ID is **not** consumed; `create_contract` will still
+    ///   use the same ID (or the next available one if contract creation occurs after simulation).
+    /// - The `client` address **does not** require authorization for this read-only operation.
+    /// - All participant validation (distinct client/freelancer, valid arbiter) is performed.
+    /// - All milestone validation (non-empty, positive amounts, within cap) is performed.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let outcome = escrow.simulate_create_contract(
+    ///     &env,
+    ///     &client,
+    ///     &freelancer,
+    ///     &None,
+    ///     &milestones,
+    ///     &ReleaseAuthorization::ClientOnly,
+    /// );
+    /// // outcome.contract_id is the ID that would be assigned
+    /// // No storage has been modified
+    /// ```
+    pub fn simulate_create_contract(
+        env: Env,
+        client: Address,
+        freelancer: Address,
+        arbiter: Option<Address>,
+        milestones: Vec<i128>,
+        release_authorization: ReleaseAuthorization,
+    ) -> SimulateCreateContractOutcome {
+        // Validate that client and freelancer are distinct participants.
+        if client == freelancer {
+            env.panic_with_error(EscrowError::InvalidParticipant);
+        }
+
+        // Validate arbiter requirement based on release authorization mode.
+        match release_authorization {
+            ReleaseAuthorization::ArbiterOnly | ReleaseAuthorization::ClientAndArbiter
+                if arbiter.is_none() =>
+            {
+                env.panic_with_error(EscrowError::MissingArbiter);
+            }
+            _ => {}
+        }
+
+        // Validate arbiter is distinct from both client and freelancer.
+        if let Some(ref arb) = arbiter {
+            if arb == &client || arb == &freelancer {
+                env.panic_with_error(EscrowError::InvalidArbiter);
+            }
+        }
+
+        // Validate at least one milestone is specified.
+        if milestones.is_empty() {
+            env.panic_with_error(EscrowError::EmptyMilestones);
+        }
+
+        // Enforce maximum number of milestones.
+        if milestones.len() > MAX_MILESTONES {
+            env.panic_with_error(EscrowError::TooManyMilestones);
+        }
+
+        // Retrieve governed parameters for total escrow cap; allow any total if unset.
+        let max_total = env
+            .storage()
+            .persistent()
+            .get::<_, GovernedParameters>(&DataKey::GovernedParameters)
+            .map(|params| params.max_escrow_total_stroops)
+            .unwrap_or(i128::MAX);
+
+        // Validate milestone amounts and enforce the total cap via the canonical helper.
+        let mut native_milestones = [0_i128; MAX_MILESTONES as usize];
+        let len = milestones.len() as usize;
+        for i in 0..len {
+            native_milestones[i] = milestones.get(i as u32).unwrap();
+        }
+        match amount_validation::validate_milestone_amounts(&native_milestones[..len], max_total) {
+            Ok(_) => (),
+            Err(err) => match err {
+                EscrowError::InvalidMilestoneAmount => {
+                    env.panic_with_error(EscrowError::InvalidMilestoneAmount)
+                }
+                EscrowError::TotalCapExceeded => {
+                    env.panic_with_error(EscrowError::TotalCapExceeded)
+                }
+                _ => env.panic_with_error(EscrowError::InvalidMilestoneAmount),
+            },
+        }
+
+        // Get the next contract ID (read-only, no state mutation)
+        let simulated_id: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::NextContractId)
+            .unwrap_or(1);
+
+        // Calculate total amount (sum of all milestones)
+        let mut total_amount: i128 = 0;
+        for milestone_amount in milestones.iter() {
+            total_amount = total_amount
+                .checked_add(milestone_amount)
+                .unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
+        }
+
+        SimulateCreateContractOutcome {
+            contract_id: simulated_id,
+            client,
+            freelancer,
+            arbiter,
+            release_authorization,
+            milestones,
+            total_amount,
+        }
     }
 }
 

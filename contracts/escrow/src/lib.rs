@@ -83,7 +83,7 @@ pub use types::{
     Contract, ContractBounds, ContractStatus, ContractSummary, DataKey, DepositMode,
     DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone, MilestoneApprovals,
     MilestoneSummary, PendingAdminProposal, ReadinessChecklist, ReleaseAuthorization, Reputation,
-    SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION,
+    SimulateCreateContractOutcome, SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION,
 };
 
 // Maximum bounds constants - re-export from amount_validation for API visibility
@@ -1244,6 +1244,56 @@ impl Escrow {
             .persistent()
             .get(&DataKey::NextContractId)
             .unwrap_or(1)
+    }
+
+    /// Simulates contract creation without writing to storage or emitting events.
+    ///
+    /// This is a read-only variant of `create_contract` that performs all the same
+    /// validation checks but returns the projected outcome without:
+    /// - Mutating storage
+    /// - Emitting events
+    /// - Incrementing the contract ID counter
+    /// - Requiring caller authorization
+    ///
+    /// The simulated contract ID is based on the current `NextContractId` value at the
+    /// time of the call. If validation fails, the function panics with the same error
+    /// as the real `create_contract` would.
+    ///
+    /// # Use cases
+    /// - Clients can preview what contract ID and outcomes would result from their parameters
+    /// - Off-chain indexers can validate contract parameters before submitting transactions
+    /// - Testing and debugging contract creation logic
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `client` - The address of the client funding the contract
+    /// * `freelancer` - The address of the freelancer performing the work
+    /// * `arbiter` - Optional arbiter address for dispute resolution
+    /// * `milestones` - Vector of milestone amounts (in stroops)
+    /// * `release_authorization` - Authorization mode for milestone releases
+    ///
+    /// # Returns
+    /// A [`SimulateCreateContractOutcome`] containing the projected contract details,
+    /// including the simulated contract ID and all input parameters.
+    ///
+    /// # Errors
+    /// Same as `create_contract`:
+    /// * `InvalidParticipant`   - If client and freelancer are the same address
+    /// * `EmptyMilestones`      - If no milestones are provided
+    /// * `InvalidMilestoneAmount` - If any milestone amount is <= 0
+    /// * `MissingArbiter`       - If arbiter is required but not provided
+    /// * `InvalidArbiter`       - If arbiter is same as client or freelancer
+    /// * `TooManyMilestones`    - If the number of milestones exceeds `MAX_MILESTONES`
+    /// * `TotalCapExceeded`     - If the sum of milestone amounts exceeds the governed cap
+    pub fn simulate_create_contract(
+        env: Env,
+        client: Address,
+        freelancer: Address,
+        arbiter: Option<Address>,
+        milestones: soroban_sdk::Vec<i128>,
+        release_authorization: ReleaseAuthorization,
+    ) -> SimulateCreateContractOutcome {
+        Self::simulate_create_contract(env, client, freelancer, arbiter, milestones, release_authorization)
     }
 
     /// Returns a structured summary of the contract and its milestones.
