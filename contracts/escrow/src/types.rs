@@ -103,4 +103,173 @@ pub enum Error {
     EmptyMilestones = 25,
     InvalidMilestoneAmount = 26,
     ContractIdCollision = 27,
-    ContractIdOverflow = 28
+    ContractIdOverflow = 28,
+    EmptyComment = 29,
+    CommentTooLong = 30,
+    InvalidParticipant = 31,
+    InvalidDepositAmount = 32,
+    InvalidMilestone = 33,
+    AlreadyInitialized = 34,
+    InsufficientAccumulatedFees = 35,
+    NotInitialized = 36,
+    ContractPaused = 37,
+    EmergencyActive = 38,
+    SelfRating = 39,
+    NotCompleted = 40,
+    InvalidStatusTransition = 41,
+    ArbiterRequired = 42,
+    InvalidDisputeSplit = 43,
+    AccountingInvariantViolated = 44,
+    PotentialOverflow = 45,
+    AlreadyFinalized = 46,
+    AlreadyCancelled = 50,
+    EvidenceTooLong = 47,
+    TimelockNotElapsed = 48,
+    InvalidProtocolParameters = 49,
+    EscrowCapExceeded = 51,
+    SettlementTokenNotConfigured = 52,
+    MilestoneNotOverdue = 53,
+    InvalidContractId = 54,
+    BatchItemLimitExceeded = 55,
+}
+
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ContractStatus {
+    Created = 0,
+    Accepted = 1,
+    Funded = 2,
+    Completed = 3,
+    Disputed = 4,
+    Cancelled = 5,
+    Refunded = 6,
+    PartiallyFunded = 7,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Contract {
+    pub client: Address,
+    pub freelancer: Address,
+    pub arbiter: Option<Address>,
+    pub status: ContractStatus,
+    pub total_deposited: i128,
+    pub funded_amount: i128,
+    pub released_amount: i128,
+    pub refunded_amount: i128,
+    pub release_authorization: ReleaseAuthorization,
+    pub reputation_issued: bool,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Milestone {
+    pub amount: i128,
+    pub funded_amount: i128,
+    pub released: bool,
+    pub refunded: bool,
+    pub work_evidence: Option<String>,
+    pub refunded_amount: i128,
+    pub deadline: Option<u64>,
+}
+
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReleaseAuthorization {
+    ClientOnly = 0,
+    ClientAndArbiter = 1,
+    ArbiterOnly = 2,
+    MultiSig = 3,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MilestoneApprovals {
+    pub client_approved: bool,
+    pub freelancer_approved: bool,
+    pub arbiter_approved: bool,
+}
+
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DepositMode {
+    ExactTotal = 0,
+    Incremental = 1,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReadinessChecklist {
+    pub initialized: bool,
+    pub governed_params_set: bool,
+    pub emergency_controls_enabled: bool,
+}
+
+impl Default for ReadinessChecklist {
+    fn default() -> Self {
+        ReadinessChecklist {
+            initialized: false,
+            governed_params_set: false,
+            emergency_controls_enabled: false,
+        }
+    }
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GovernedParameters {
+    pub protocol_fee_bps: u32,
+    pub max_escrow_total_stroops: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PendingAdminProposal {
+    pub proposed: Address,
+    pub proposed_at_ledger: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq, Default)]
+pub struct Reputation {
+    pub completed_contracts: i128,
+    pub total_rating: i128,
+    pub last_rating: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReputationBatchItem {
+    pub contract_id: u32,
+    pub rating: u32,
+    pub comment: String,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DisputeSplit {
+    pub client_amount: i128,
+    pub freelancer_amount: i128,
+}
+
+pub type SplitAmounts = DisputeSplit;
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DisputeResolution {
+    FullRefund,
+    PartialRefund,
+    FullPayout,
+    Split(DisputeSplit),
+}
+
+impl DisputeResolution {
+    pub fn code(&self) -> u32 {
+        match self {
+            Self::FullRefund => 0,
+            Self::PartialRefund => 1,
+            Self::FullPayout => 2,
+            Self::Split(_) => 3,
+        }
+    }
+}
