@@ -103,6 +103,10 @@ pub use ttl::{
 pub use milestones::{Milestone, MilestoneApprovals, MilestoneSummary, ReleaseAuthorization};
 pub use types::{
     Contract, ContractBounds, ContractStatus, ContractSummary, DataKey, DepositMode,
+    DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone, MilestoneApprovals,
+    MilestoneSummary, PendingAdminProposal, ReadinessChecklist, ReleaseAuthorization, Reputation,
+    SimulateDepositResult, SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION,
+};
 
 /// Default maximum number of milestones allowed per contract.
 pub const DEFAULT_MAX_MILESTONES: u32 = 10;
@@ -750,6 +754,85 @@ impl Escrow {
         deposit::apply_validated_deposit(&env, contract_id, caller, validated)
     }
 
+    /// Simulate a deposit without mutating state or moving tokens.
+    ///
+    /// Runs the same preflight validation as [`deposit_funds`](Self::deposit_funds)
+    /// — initialization check, pause guard, deposit validation, settlement-token
+    /// configuration — and returns the projected [`SimulateDepositResult`] that a
+    /// real deposit would produce, but without executing the SAC transfer, writing
+    /// storage, or emitting events.
+    ///
+    /// Because the simulation never calls into the token contract, it does **not**
+    /// require the caller's authorization (no `require_auth`). This makes it a cheap
+    /// read-only pre-flight that callers can invoke to preview the deposit outcome
+    /// before committing to the actual transaction.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `contract_id` - The contract ID
+    /// * `caller` - The address of the caller
+    /// * `amount` - The amount to simulate depositing (in stroops)
+    ///
+    /// # Returns
+    /// A [`SimulateDepositResult`] with the projected funded amounts and status
+    ///
+    /// # Errors
+    /// Returns the same errors as [`deposit_funds`](Self::deposit_funds):
+    /// * `NotInitialized` if `initialize` has not been called
+    /// * `ContractPaused` if the contract is paused
+    /// * `AmountMustBePositive` if amount is ≤ 0
+    /// * `ContractNotFound` if the contract doesn't exist
+    /// * `UnauthorizedRole` if `caller` is not the client
+    /// * `InvalidState` if the contract is not in `Created` or `PartiallyFunded` state
+    /// * `InvalidDepositAmount` if the deposit would exceed the total milestone amount
+    /// * `SettlementTokenNotConfigured` if no settlement token has been bound
+    pub fn simulate_deposit_funds(
+        env: Env,
+        contract_id: u32,
+        caller: Address,
+        amount: i128,
+    ) -> SimulateDepositResult {
+        Self::require_initialized(&env);
+        Self::require_not_paused(&env);
+
+        // Validate all the same preconditions as the real deposit path.
+        let validated = deposit::validate_deposit(&env, contract_id, &caller, amount);
+
+        // Check settlement-token configuration (same guard as deposit_funds).
+        let _token = Self::read_settlement_token(&env)
+            .unwrap_or_else(|| env.panic_with_error(Error::SettlementTokenNotConfigured));
+
+        // Project the contract status that would result from the deposit.
+        let projected_status = {
+            let total = validated.total_amount;
+            if validated.new_funded_amount == total {
+                ContractStatus::Funded
+            } else {
+                ContractStatus::PartiallyFunded
+            }
+        };
+
+        SimulateDepositResult {
+            current_funded_amount: validated.contract.funded_amount,
+            new_funded_amount: validated.new_funded_amount,
+            projected_status,
+            total_milestone_amount: validated.total_amount,
+        }
+    }
+
+    /// Finalize an escrow contract by writing immutable close metadata.
+    ///
+    /// `finalizer` must authorize the call and must be the stored client,
+    /// freelancer, or assigned arbiter. Finalization is allowed only while the
+    /// contract is `Completed` or `Disputed`. Once finalized, future
+    /// contract-specific mutations fail with `AlreadyFinalized`.
+    ///
+    /// # Errors
+    /// - `ContractPaused` when pause or emergency controls are active.
+    /// - `ContractNotFound` when `contract_id` is unknown.
+    /// - `AlreadyFinalized` when a close record already exists.
+    /// - `UnauthorizedRole` when `finalizer` is not a contract participant.
+    /// - `InvalidStatusTransition` unless status is `Completed` or `Disputed`.
     pub fn finalize_contract(env: Env, contract_id: u32, finalizer: Address) -> bool {
         finalize::finalize_contract_impl(&env, contract_id, finalizer)
     }

@@ -313,6 +313,31 @@ pub enum DepositMode {
     Incremental = 1,
 }
 
+// ── Simulation result types ───────────────────────────────────────────────────
+
+/// Result of a simulated deposit operation.
+///
+/// Returned by [`simulate_deposit_funds`](crate::Escrow::simulate_deposit_funds)
+/// to let callers preview the state transition that a real `deposit_funds`
+/// call would produce, without executing any token transfer or writing storage.
+///
+/// All amounts are in stroops.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SimulateDepositResult {
+    /// The `funded_amount` on the contract before the simulated deposit.
+    pub current_funded_amount: i128,
+    /// The `funded_amount` that would result after the deposit.
+    pub new_funded_amount: i128,
+    /// The contract status that would result after the deposit.
+    pub projected_status: ContractStatus,
+    /// The sum of all milestone amounts for the contract.
+    pub total_milestone_amount: i128,
+}
+
+// ── Governance / readiness ───────────────────────────────────────────────────
+
+/// Readiness checklist stored under [`DataKey::ReadinessChecklist`].
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReadinessChecklist {

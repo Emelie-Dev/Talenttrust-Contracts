@@ -37,7 +37,7 @@ mod release_authorization;
 mod reputation;
 mod proptest_contracts;
 mod security;
-mod storage_index_events;
+mod simulate_deposit;
 mod ttl_tests;
 
 // --- Shared constants ---
