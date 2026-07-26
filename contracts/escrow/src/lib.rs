@@ -80,7 +80,7 @@ pub use ttl::{ADMIN_ROTATION_MIN_DELAY_LEDGERS, PENDING_MIGRATION_TTL_LEDGERS};
 // `DisputeResolution` and `DisputeSplit` are defined once in `types.rs` and
 // re-exported here; `dispute.rs` uses them via `crate::DisputeResolution`.
 pub use types::{
-    Contract, ContractBounds, ContractStatus, ContractSummary, DataKey, DepositMode,
+    Contract, ContractBounds, ContractEntry, ContractStatus, ContractSummary, DataKey, DepositMode,
     DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone, MilestoneApprovals,
     MilestoneSummary, MilestoneEntry, MilestoneSummary, PendingAdminProposal, ReadinessChecklist,
     ReleaseAuthorization, Reputation, ReputationKey, SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION,
@@ -1487,14 +1487,50 @@ impl Escrow {
             .unwrap_or(1)
     }
 
-    /// Validates that `contract_id` is within the allocated range.
+    /// Returns a bounded, paginated view of contracts records.
     ///
-    /// Valid IDs are non-zero and strictly less than the next ID to be assigned.
-    /// This rejects both unallocated IDs and the uninitialized zero ID.
-    pub fn validate_contract_id_bounds(env: &Env, contract_id: u32) {
-        if contract_id == 0 || contract_id >= Self::get_next_contract_id(env.clone()) {
-            env.panic_with_error(Error::InvalidContractId);
+    /// This is a read-only endpoint for UIs that need to enumerate contracts.
+    /// Returns at most `PAGE_CEILING` entries per call.
+    ///
+    /// # Pagination
+    ///
+    /// - `start` is the zero-based index of the first contract to return.
+    ///   An out-of-range `start` produces an empty page (never a panic).
+    /// - `limit` is clamped to `[0, PAGE_CEILING]` before use.
+    ///
+    /// # Side effects
+    /// Extends the contract TTL on a successful read for each returned contract.
+    pub fn get_contracts_page(
+        env: Env,
+        start: u32,
+        limit: u32,
+    ) -> Vec<ContractEntry> {
+        let capped_limit = core::cmp::min(limit, PAGE_CEILING);
+        let next_id = Self::get_next_contract_id(env.clone());
+        let total = next_id.saturating_sub(1);
+
+        if total == 0 || start >= total {
+            return Vec::new(&env);
         }
+
+        let mut result = Vec::new(&env);
+        let mut count: u32 = 0;
+        let mut id = start + 1; // start is 0-based, IDs start at 1
+
+        while id < next_id && count < capped_limit {
+            if let Some(contract) = env.storage().persistent().get::<_, Contract>(&DataKey::Contract(id)) {
+                ttl::extend_contract_ttl(&env, id);
+                result.push_back(ContractEntry {
+                    id,
+                    client: contract.client,
+                    freelancer: contract.freelancer,
+                    status: contract.status,
+                });
+            }
+            id += 1;
+            count += 1;
+        }
+        result
     }
 
     /// Returns a structured summary of the contract and its milestones.
