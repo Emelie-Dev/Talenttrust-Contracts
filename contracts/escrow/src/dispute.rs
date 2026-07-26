@@ -6,6 +6,21 @@
 //! or `Refunded`. The root entrypoints own authentication, token transfer, event
 //! publication, and writes to `DataKey::Contract(contract_id)`.
 
+/// Freelancer's share numerator for the PartialRefund dispute resolution (30%).
+///
+/// When a dispute is resolved with `PartialRefund`, the freelancer receives
+/// `floor(available * PARTIAL_REFUND_FREELANCER_SHARE_NUMERATOR / PARTIAL_REFUND_DENOMINATOR)`
+/// stroops and the client receives the remainder.  The current value of `30`
+/// means the freelancer gets 30% of the available escrow balance.
+pub const PARTIAL_REFUND_FREELANCER_SHARE_NUMERATOR: i128 = 30;
+
+/// Denominator for the PartialRefund dispute resolution split.
+///
+/// Together with [`PARTIAL_REFUND_FREELANCER_SHARE_NUMERATOR`] this defines the
+/// freelancer's share as a percentage.  With `NUMERATOR = 30` and
+/// `DENOMINATOR = 100` the split is 30 % to the freelancer, 70 % to the client.
+pub const PARTIAL_REFUND_DENOMINATOR: i128 = 100;
+
 use soroban_sdk::{contractimpl, symbol_short, Address, Env};
 
 use crate::{
@@ -43,10 +58,10 @@ pub fn resolution_payouts(
     match resolution {
         DisputeResolution::FullRefund => Ok((available, 0)),
         DisputeResolution::PartialRefund => {
-            // freelancer gets floor(available * 30 / 100), client gets remainder
+            // freelancer gets floor(available * NUMERATOR / DENOMINATOR), client gets remainder
             let freelancer_payout = available
-                .checked_mul(30)
-                .and_then(|value| value.checked_div(100))
+                .checked_mul(PARTIAL_REFUND_FREELANCER_SHARE_NUMERATOR)
+                .and_then(|value| value.checked_div(PARTIAL_REFUND_DENOMINATOR))
                 .ok_or(Error::PotentialOverflow)?;
             Ok((available - freelancer_payout, freelancer_payout))
         }

@@ -6,7 +6,7 @@
 //   2. max_milestones  == MAX_MILESTONES
 //   3. max_single_milestone_stroops == MAX_SINGLE_AMOUNT_STROOPS
 //   4. max_total_escrow_stroops     == MAX_TOTAL_ESCROW_STROOPS
-//   5. max_fee_bps                  == 10_000 (100 %)
+//   5. max_fee_bps                  == MAX_FEE_BPS (100 %)
 //   6. Idempotent — two calls return identical values
 //   7. No auth required (works before initialize)
 //   8. Consistency: max_single == max_total (current policy)
@@ -28,8 +28,8 @@
 use soroban_sdk::{testutils::Address as _, vec, Address, Env, Vec};
 
 use crate::{
-    ContractBounds, Escrow, EscrowClient, EscrowError, ReleaseAuthorization, MAX_MILESTONES,
-    MAX_SINGLE_AMOUNT_STROOPS, MAX_TOTAL_ESCROW_STROOPS,
+    ContractBounds, Escrow, EscrowClient, EscrowError, ReleaseAuthorization, MAX_FEE_BPS,
+    MAX_MILESTONES, MAX_SINGLE_AMOUNT_STROOPS, MAX_TOTAL_ESCROW_STROOPS,
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -109,15 +109,15 @@ fn get_bounds_max_total_escrow_stroops_equals_constant() {
     );
 }
 
-/// `max_fee_bps` must be 10_000 (100%).
+/// `max_fee_bps` must be `MAX_FEE_BPS` (100%).
 #[test]
-fn get_bounds_max_fee_bps_is_10000() {
+fn get_bounds_max_fee_bps_is_max_fee_bps() {
     let (env, cid) = setup();
     let client = EscrowClient::new(&env, &cid);
     let bounds = client.get_bounds();
     assert_eq!(
-        bounds.max_fee_bps, 10_000,
-        "max_fee_bps must be 10_000 (100 %)"
+        bounds.max_fee_bps, MAX_FEE_BPS,
+        "max_fee_bps must be MAX_FEE_BPS (100 %)"
     );
 }
 
@@ -177,16 +177,16 @@ fn get_bounds_all_fields_are_positive() {
     assert!(bounds.max_fee_bps > 0, "max_fee_bps must be > 0");
 }
 
-/// `max_fee_bps` must not exceed 10_000 — higher values would imply a fee
-/// greater than the payout itself.
+/// `max_fee_bps` must not exceed `MAX_FEE_BPS` — higher values would imply a
+/// fee greater than the payout itself.
 #[test]
-fn get_bounds_fee_bps_does_not_exceed_100_percent() {
+fn get_bounds_fee_bps_does_not_exceed_max_fee_bps() {
     let (env, cid) = setup();
     let client = EscrowClient::new(&env, &cid);
     let bounds = client.get_bounds();
     assert!(
-        bounds.max_fee_bps <= 10_000,
-        "max_fee_bps must not exceed 10_000 (100 %)"
+        bounds.max_fee_bps <= MAX_FEE_BPS,
+        "max_fee_bps must not exceed MAX_FEE_BPS (100 %)"
     );
 }
 

@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use soroban_sdk::{testutils::Address as _, Address, Env, vec};
-use crate::{Escrow, EscrowClient, DataKey, Error, ReleaseAuthorization};
+use crate::{Escrow, EscrowClient, DataKey, Error, ReleaseAuthorization, MAX_FEE_BPS};
 
 #[test]
 fn test_default_fees_are_zero() {
@@ -55,7 +55,7 @@ fn test_get_protocol_fee_bps_after_configuration() {
     assert_eq!(client.get_protocol_fee_bps(), 1000);
 }
 
-/// Test that protocol fee updates accept 0 and 10_000 basis points.
+/// Test that protocol fee updates accept 0 and MAX_FEE_BPS.
 #[test]
 fn test_set_protocol_fee_bps_accepts_boundary_values() {
     let env = Env::default();
@@ -70,8 +70,8 @@ fn test_set_protocol_fee_bps_accepts_boundary_values() {
     assert!(client.set_protocol_fee_bps(&0u32));
     assert_eq!(client.get_protocol_fee_bps(), 0);
 
-    assert!(client.set_protocol_fee_bps(&10_000u32));
-    assert_eq!(client.get_protocol_fee_bps(), 10_000);
+    assert!(client.set_protocol_fee_bps(&MAX_FEE_BPS));
+    assert_eq!(client.get_protocol_fee_bps(), MAX_FEE_BPS);
 }
 
 /// Test that protocol fee updates reject values above 100%.
@@ -87,7 +87,7 @@ fn test_set_protocol_fee_bps_rejects_values_above_100_percent() {
     client.initialize(&admin);
     assert!(client.set_protocol_fee_bps(&0u32));
 
-    let result = client.try_set_protocol_fee_bps(&10_001u32);
+    let result = client.try_set_protocol_fee_bps(&(MAX_FEE_BPS + 1));
     super::assert_contract_error(result, Error::InvalidProtocolParameters);
     assert_eq!(client.get_protocol_fee_bps(), 0);
 }
@@ -121,17 +121,17 @@ fn test_get_accumulated_protocol_fees_after_releases() {
 
     assert_eq!(client.get_accumulated_protocol_fees(), 0);
 
-    // Fee: 1000 * 1000 / 10_000 = 100
+    // Fee: 1000 * 1000 / MAX_FEE_BPS = 100
     client.approve_milestone_release(&id, &client_addr, &0);
     client.release_milestone(&id, &client_addr, &0);
     assert_eq!(client.get_accumulated_protocol_fees(), 100);
 
-    // Fee: 2500 * 1000 / 10_000 = 250
+    // Fee: 2500 * 1000 / MAX_FEE_BPS = 250
     client.approve_milestone_release(&id, &client_addr, &1);
     client.release_milestone(&id, &client_addr, &1);
     assert_eq!(client.get_accumulated_protocol_fees(), 350);
 
-    // Fee: 3333 * 1000 / 10_000 = 333
+    // Fee: 3333 * 1000 / MAX_FEE_BPS = 333
     client.approve_milestone_release(&id, &client_addr, &2);
     client.release_milestone(&id, &client_addr, &2);
     assert_eq!(client.get_accumulated_protocol_fees(), 683);
