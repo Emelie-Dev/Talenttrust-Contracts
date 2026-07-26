@@ -1678,6 +1678,33 @@ impl Escrow {
     /// * Pause/emergency gate runs BEFORE contract state read so paused
     ///   contracts cannot have reputation mutated while paused.
     /// * The 200-byte cap prevents unbounded on-chain storage growth.
+    ///
+    /// # Events
+    /// On a successful issuance this publishes a `rep_issue` event so
+    /// off-chain indexers can cheaply reconstruct the full reputation
+    /// history of every freelancer without re-fetching contract storage.
+    ///
+    /// * Topics: `(Symbol "rep_issue", contract_id: u32)`
+    /// * Data: `(client: Address, freelancer: Address, rating: u32,
+    ///          total_rating: i128, completed_contracts: i128,
+    ///          timestamp: u64)`
+    ///
+    /// **Back-compat:** strictly additive. Pre-existing reputation records
+    /// are NOT retroactively emitted; indexers that previously reconstructed
+    /// history from contract storage will see one NEW `rep_issue` event
+    /// per successful issuance from this point forward, alongside their
+    /// existing data sources.
+    ///
+    /// **Payload cost:** the `comment` text is deliberately NOT included
+    /// in the payload (capped at 200 bytes per comment). Off-chain
+    /// indexers that need the feedback string should follow up with
+    /// `get_reputation_comment(contract_id)` rather than embedding the
+    /// full-field event into their index, keeping per-event size bounded
+    /// under ~150 bytes on the wire.
+    ///
+    /// The event only fires after every storage mutation succeeds
+    /// (fail-closed). All payload fields are already public state, so
+    /// the event surface contains no secrets.
     pub fn issue_reputation(
         env: Env,
         contract_id: u32,
@@ -1755,6 +1782,60 @@ impl Escrow {
             &comment_key,
             ttl::PERSISTENT_BUMP_THRESHOLD,
             ttl::PERSISTENT_TTL_LEDGERS,
+        );
+
+        // ── Events ──────────────────────────────────────────────────────────
+        //
+        // Emitted only after every storage mutation has succeeded (fail-closed
+        // guarantee: a panic in any earlier check prevents this publish, so the
+        // event observes only fully-applied reputation state).
+        //
+        /// `rep_issue` — fired on every successful reputation issuance so
+        /// off-chain indexers can cheaply reconstruct the full reputation
+        /// history of every freelancer without re-fetching contract storage
+        /// after each individual `issue_reputation` call.
+        ///
+        /// Topics : `(symbol_short!("rep_issue"), contract_id: u32)`
+        ///   - `rep_issue` is a `symbol_short!` 9-char ASCII string, fitting
+        ///     within the Soroban compile-time short-symbol length check.
+        ///   - The topic does not collide with any other event topic in this
+        ///     contract (`init`, `mlstn_rls`, `ctrct_cmp`, `refunded`,
+        ///     `pause`, `unpaused`, `cancelled`, `evidence`, `fee`,
+        ///     `dispute`), giving indexers an unambiguous per-action filter.
+        ///   - The second topic element is `contract_id`, matching the
+        ///     per-contract scoping used by `mlstn_rls`, `ctrct_cmp`,
+        ///     `refunded`, `cancelled`, and `evidence`. This lets an indexer
+        ///     subscribe to a single contract's reputation stream, and —
+        ///     since each contract can only call `issue_reputation` once —
+        ///     the topic guarantees at-most-one event per contract_id.
+        ///   - Indexers that want a per-freelancer feed can filter on
+        ///     `freelancer` in the data payload instead.
+        ///
+        /// Data   : `(client: Address, freelancer: Address, rating: u32,
+        ///            total_rating: i128, completed_contracts: i128,
+        ///            timestamp: u64)`
+        ///   - `client`: the rater (must equal the stored `contract.client`,
+        ///     an invariant enforced by the caller-auth check above).
+        ///   - `freelancer`: the reputation subject; indexable as the
+        ///     primary key for a per-freelancer reputation feed.
+        ///   - `rating`: the per-issuance rating value (1..=5).
+        ///   - `total_rating`: the cumulative rating sum after this
+        ///     issuance, so the indexer can compute running averages
+        ///     without an extra storage read.
+        ///   - `completed_contracts`: cumulative count of completed
+        ///     contracts after this issuance, paired with `total_rating`
+        ///     for the same reason.
+        ///   - `timestamp`: ledger timestamp at issuance.
+        env.events().publish(
+            (symbol_short!("rep_issue"), contract_id),
+            (
+                contract.client.clone(),
+                contract.freelancer.clone(),
+                rating,
+                rep.total_rating,
+                rep.completed_contracts,
+                env.ledger().timestamp(),
+            ),
         );
 
         true
