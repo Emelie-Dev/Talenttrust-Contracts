@@ -22,10 +22,17 @@ impl Escrow {
     /// the call and the contract must be initialized.
     ///
     /// `new_bps` must be `≤ 10_000` (100%). The fee takes effect immediately for
-    /// the next `release_milestone` call.
+    /// the next `release_milestone` call. Values above 10_000 are rejected with
+    /// `InvalidProtocolParameters` because a fee exceeding 100% would make every
+    /// milestone release net negative for the freelancer.
     ///
     /// See [`docs/escrow/protocol-fees.md`](../../../docs/escrow/protocol-fees.md) for
     /// the basis-point model, fee formula, accrual storage, and withdrawal flow.
+    ///
+    /// # Errors
+    /// * `NotInitialized` - if `initialize` has not been called
+    /// * `UnauthorizedRole` - if the caller is not the stored admin
+    /// * `InvalidProtocolParameters` - if `new_bps > 10_000`
     ///
     /// # Events
     /// `(Symbol("protocol_fee_bps"),)` → `(old_bps, new_bps, admin, timestamp)`
@@ -37,6 +44,12 @@ impl Escrow {
             .get(&DataKey::Admin)
             .unwrap_or_else(|| env.panic_with_error(Error::NotInitialized));
         admin.require_auth();
+
+        // Reject any fee above 100 % (10_000 bps). A fee > 100 % would make every
+        // milestone release impossible — the net payout would be negative.
+        if new_bps > 10_000 {
+            env.panic_with_error(Error::InvalidProtocolParameters);
+        }
 
         let old_bps: u32 = env
             .storage()
