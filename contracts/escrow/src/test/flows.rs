@@ -24,8 +24,8 @@ fn multiple_contracts_for_same_freelancer() {
     assert!(client.release_milestone(&second_id, &client_addr, &0));
     assert!(client.release_milestone(&second_id, &client_addr, &1));
     assert!(client.release_milestone(&second_id, &client_addr, &2));
-    assert!(client.issue_reputation(&first_id, &first_client_addr, &5_u32, &soroban_sdk::String::from_str(&env, "Great")));
-    assert!(client.issue_reputation(&second_id, &client_addr, &5_u32, &soroban_sdk::String::from_str(&env, "Great")));
+    assert!(client.issue_reputation(&first_id, &first_client_addr, &freelancer_addr, &5));
+    assert!(client.issue_reputation(&second_id, &client_addr, &freelancer_addr, &4));
 
     let record = client.get_reputation(&freelancer_addr).unwrap();
     assert_eq!(record.completed_contracts, 2);
@@ -40,7 +40,7 @@ fn scenario_reputation_invalid_rating_zero_fails() {
 
     let (client_addr, freelancer_addr, contract_id) = complete_contract(&env, &client);
 
-    let result = client.try_issue_reputation(&contract_id, &client_addr, &5_u32, &soroban_sdk::String::from_str(&env, "Great"));
+    let result = client.try_issue_reputation(&contract_id, &client_addr, &freelancer_addr, &0);
     super::assert_contract_error(result, EscrowError::InvalidRating);
 }
 
@@ -52,7 +52,7 @@ fn scenario_reputation_invalid_rating_six_fails() {
 
     let (client_addr, freelancer_addr, contract_id) = complete_contract(&env, &client);
 
-    let result = client.try_issue_reputation(&contract_id, &client_addr, &5_u32, &soroban_sdk::String::from_str(&env, "Great"));
+    let result = client.try_issue_reputation(&contract_id, &client_addr, &freelancer_addr, &6);
     super::assert_contract_error(result, EscrowError::InvalidRating);
 }
 

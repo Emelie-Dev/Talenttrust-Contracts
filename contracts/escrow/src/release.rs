@@ -64,7 +64,14 @@ impl Escrow {
             }
         }
 
-        let mut milestones: Vec<Milestone> = ttl::load_milestones(&env, contract_id);
+        let milestone_key = Symbol::new(&env, "milestones");
+        let mut milestones: Vec<Milestone> = env
+            .storage()
+            .persistent()
+            .get(&(DataKey::Contract(contract_id), milestone_key.clone()))
+            .unwrap();
+
+        ttl::extend_milestone_ttl(&env, contract_id);
 
         if milestone_index >= milestones.len() {
             env.panic_with_error(Error::IndexOutOfBounds);
@@ -120,12 +127,15 @@ impl Escrow {
             env.storage().persistent().set(&pending_key, &(pending + 1));
         }
 
-        ttl::store_milestones(env, contract_id, &milestones);
+        env.storage().persistent().set(
+            &(DataKey::Contract(contract_id), milestone_key),
+            &milestones,
+        );
         env.storage()
             .persistent()
             .set(&DataKey::Contract(contract_id), &contract);
 
-        ttl::extend_contract_ttl(env, contract_id);
+        ttl::extend_contract_and_milestones_ttl(env, contract_id);
 
         env.events().publish(
             (Symbol::new(&env, "milestone_released"), contract_id),
