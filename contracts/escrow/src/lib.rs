@@ -1412,6 +1412,16 @@ impl Escrow {
             .unwrap_or(1)
     }
 
+    /// Validates that `contract_id` is within the allocated range.
+    ///
+    /// Valid IDs are non-zero and strictly less than the next ID to be assigned.
+    /// This rejects both unallocated IDs and the uninitialized zero ID.
+    pub fn validate_contract_id_bounds(env: &Env, contract_id: u32) {
+        if contract_id == 0 || contract_id >= Self::get_next_contract_id(env.clone()) {
+            env.panic_with_error(Error::InvalidContractId);
+        }
+    }
+
     /// Returns a structured summary of the contract and its milestones.
     ///
     /// Extends contract and milestone TTL on read without requiring caller auth.
