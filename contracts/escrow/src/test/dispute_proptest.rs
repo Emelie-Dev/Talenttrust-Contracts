@@ -227,7 +227,8 @@ proptest! {
         prop_assert_eq!(
             result.err(),
             Some(Error::AccountingInvariantViolated),
-            "corrupted accounting must be rejected (funded={funded}, released={released}, refunded={refunded})"
+            "corrupted accounting must be rejected (funded={}, released={}, refunded={})",
+            funded, released, refunded
         );
 
         // Split variant on the same corrupted state must also fail with the
@@ -311,13 +312,15 @@ proptest! {
         if !is_neg && sum_matches {
             prop_assert!(
                 result.is_ok(),
-                "exact-conserving split must be accepted (c={client_in}, f={freelancer_in}, funded={funded})",
+                "exact-conserving split must be accepted (c={}, f={}, funded={})",
+                client_in, freelancer_in, funded,
             );
         } else if is_neg {
             prop_assert_eq!(
                 result.err(),
                 Some(Error::InvalidDisputeSplit),
-                "negative leg must be InvalidDisputeSplit (c={client_in}, f={freelancer_in})",
+                "negative leg must be InvalidDisputeSplit (c={}, f={})",
+                client_in, freelancer_in,
             );
         } else {
             // either_over and !sum_matches collapse here: a non-negative leg
@@ -327,8 +330,8 @@ proptest! {
             prop_assert_eq!(
                 result.err(),
                 Some(Error::InvalidDisputeSplit),
-                "non-conserving split must be InvalidDisputeSplit (c={client_in}, f={freelancer_in}, funded={funded}, sum={:?})",
-                sum,
+                "non-conserving split must be InvalidDisputeSplit (c={}, f={}, funded={}, sum={:?})",
+                client_in, freelancer_in, funded, sum,
             );
         }
     }
@@ -416,7 +419,7 @@ fn dispute_resolution_code_uniqueness() {
         freelancer_amount: 0,
     })
     .code();
-    let mut codes = [full_refund, partial_refund, full_payout, split];
+    let mut codes: std::vec::Vec<u32> = std::vec![full_refund, partial_refund, full_payout, split];
     codes.sort_unstable();
     codes.dedup();
     assert_eq!(codes.len(), 4, "codes must be unique: {:?}", codes);
