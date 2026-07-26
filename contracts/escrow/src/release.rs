@@ -26,7 +26,7 @@ impl Escrow {
             .storage()
             .persistent()
             .get(&DataKey::Contract(contract_id))
-            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
 
         ttl::extend_contract_ttl(&env, contract_id);
 
@@ -34,7 +34,7 @@ impl Escrow {
         Self::require_not_finalized(&env, contract_id);
 
         if contract.status != ContractStatus::Funded {
-            env.panic_with_error(Error::InvalidState);
+            env.panic_with_error(EscrowError::InvalidState);
         }
 
         let is_client = caller == contract.client;
@@ -44,22 +44,22 @@ impl Escrow {
         match contract.release_authorization {
             ReleaseAuthorization::ClientOnly => {
                 if !is_client {
-                    env.panic_with_error(Error::UnauthorizedRole);
+                    env.panic_with_error(EscrowError::UnauthorizedRole);
                 }
             }
             ReleaseAuthorization::ArbiterOnly => {
-                if !is_arbiter {
-                    env.panic_with_error(Error::UnauthorizedRole);
+                    if !is_arbiter {
+                    env.panic_with_error(EscrowError::UnauthorizedRole);
                 }
             }
             ReleaseAuthorization::ClientAndArbiter => {
                 if !is_client && !is_arbiter {
-                    env.panic_with_error(Error::UnauthorizedRole);
+                    env.panic_with_error(EscrowError::UnauthorizedRole);
                 }
             }
             ReleaseAuthorization::MultiSig => {
                 if !is_client && !is_freelancer {
-                    env.panic_with_error(Error::UnauthorizedRole);
+                    env.panic_with_error(EscrowError::UnauthorizedRole);
                 }
             }
         }
@@ -73,7 +73,7 @@ impl Escrow {
         ttl::extend_milestone_ttl(&env, contract_id);
 
         if milestone_index >= milestones.len() {
-            env.panic_with_error(Error::IndexOutOfBounds);
+            env.panic_with_error(EscrowError::IndexOutOfBounds);
         }
 
         let mut milestone = milestones.get(milestone_index).unwrap().clone();
@@ -83,7 +83,7 @@ impl Escrow {
         }
 
         if milestone.refunded {
-            env.panic_with_error(Error::AlreadyRefunded);
+            env.panic_with_error(EscrowError::AlreadyRefunded);
         }
 
         approvals::check_approvals(&env, &contract, contract_id, milestone_index)
@@ -92,7 +92,7 @@ impl Escrow {
         let available_balance =
             contract.funded_amount - contract.released_amount - contract.refunded_amount;
         if available_balance < milestone.amount {
-            env.panic_with_error(Error::InsufficientFunds);
+            env.panic_with_error(EscrowError::InsufficientFunds);
         }
 
         let _release_amount = milestone.amount;

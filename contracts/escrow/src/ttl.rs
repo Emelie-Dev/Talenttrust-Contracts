@@ -67,7 +67,7 @@ pub fn load_milestones(env: &Env, contract_id: u32) -> Vec<Milestone> {
         .storage()
         .persistent()
         .get(&key)
-        .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
+        .unwrap_or_else(|| env.panic_with_error(crate::EscrowError::ContractNotFound));
     extend_milestone_ttl(env, contract_id);
     milestones
 }

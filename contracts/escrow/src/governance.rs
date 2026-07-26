@@ -34,8 +34,15 @@ impl Escrow {
             .storage()
             .persistent()
             .get(&DataKey::Admin)
-            .unwrap_or_else(|| env.panic_with_error(Error::NotInitialized));
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::NotInitialized));
         admin.require_auth();
+
+        // Reject fee rates >= 10_000 bps (100%).  A fee that equals or exceeds
+        // the milestone amount would leave the freelancer with zero or negative
+        // net payout — a critical invariant violation.
+        if new_bps >= 10_000 {
+            env.panic_with_error(EscrowError::InvalidProtocolParameters);
+        }
 
         let old_bps: u32 = env
             .storage()
@@ -117,7 +124,7 @@ impl Escrow {
             .storage()
             .persistent()
             .get(&DataKey::Admin)
-            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
         admin.require_auth();
 
         env.storage().persistent().set(
@@ -146,14 +153,14 @@ impl Escrow {
             .storage()
             .persistent()
             .get(&DataKey::PendingAdmin)
-            .unwrap_or_else(|| env.panic_with_error(Error::InvalidState));
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::InvalidState));
 
         let elapsed = env
             .ledger()
             .sequence()
             .saturating_sub(pending.proposed_at_ledger);
         if elapsed < ADMIN_ROTATION_MIN_DELAY_LEDGERS {
-            env.panic_with_error(Error::TimelockNotElapsed);
+            env.panic_with_error(EscrowError::TimelockNotElapsed);
         }
 
         let pending_admin = pending.proposed;
@@ -163,7 +170,7 @@ impl Escrow {
             .storage()
             .persistent()
             .get(&DataKey::Admin)
-            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
 
         env.storage()
             .persistent()
@@ -198,14 +205,14 @@ impl Escrow {
             .storage()
             .persistent()
             .get(&DataKey::Admin)
-            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
         admin.require_auth();
 
         let pending: PendingAdminProposal = env
             .storage()
             .persistent()
             .get(&DataKey::PendingAdmin)
-            .unwrap_or_else(|| env.panic_with_error(Error::InvalidState));
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::InvalidState));
 
         env.storage().persistent().remove(&DataKey::PendingAdmin);
 
@@ -247,22 +254,22 @@ impl Escrow {
             .get::<_, bool>(&crate::DataKey::Initialized)
             .unwrap_or(false)
         {
-            env.panic_with_error(Error::NotInitialized);
+            env.panic_with_error(EscrowError::NotInitialized);
         }
 
         let stored_admin: Address = env
             .storage()
             .persistent()
             .get(&DataKey::Admin)
-            .unwrap_or_else(|| env.panic_with_error(Error::NotInitialized));
+            .unwrap_or_else(|| env.panic_with_error(EscrowError::NotInitialized));
 
         if admin != stored_admin {
-            env.panic_with_error(Error::UnauthorizedRole);
+            env.panic_with_error(EscrowError::UnauthorizedRole);
         }
         admin.require_auth();
 
-        if protocol_fee_bps > MAX_FEE_BPS {
-            env.panic_with_error(Error::InvalidProtocolParameters);
+        if protocol_fee_bps > 10_000 {
+            env.panic_with_error(EscrowError::InvalidProtocolParameters);
         }
 
         let params = GovernedParameters {

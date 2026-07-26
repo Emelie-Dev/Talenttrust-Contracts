@@ -1,131 +1,167 @@
 # Escrow storage model and invariants
 
-This document describes the on-ledger storage used by the Soroban escrow
-contract. It is intentionally tied to the current implementation:
-[`DataKey`](../contracts/escrow/src/types.rs) defines the key schema,
-[`ttl`](../contracts/escrow/src/ttl.rs) defines the retention policy, and the
-entrypoints below are the authoritative read and write paths.
+This document describes the live storage layout used by the escrow contract in [contracts/escrow/src/types.rs](../contracts/escrow/src/types.rs), [contracts/escrow/src/lib.rs](../contracts/escrow/src/lib.rs), and the supporting modules in [contracts/escrow/src](../contracts/escrow/src/).
 
-## Storage classes
+The model is intentionally simple:
 
-The contract uses persistent and temporary Soroban storage. It does not keep
-application records in instance storage.
+- Persistent storage holds the long-lived contract state, protocol configuration, and admin/governance state.
+- Temporary storage holds short-lived approval and migration records that are allowed to expire.
+- The contract record and the milestone vector are the authoritative sources for lifecycle and accounting state.
 
-| Class | Records | Retention rule |
+## 1. Storage classes
+
+### Persistent storage
+
+Used for state that must survive across calls and remain available until the contract is evicted by Soroban TTL rules.
+
+- Contract records under `DataKey::Contract(contract_id)`.
+- Milestone vectors under `(DataKey::Contract(contract_id), "milestones")`.
+- Initialization, admin, pause, emergency, governance, settlement-token, and reputation state under the dedicated `DataKey` variants.
+
+### Temporary storage
+
+Used for records with a bounded lifetime, such as milestone approvals and pending migration requests.
+
+- Approval records under `DataKey::MilestoneApprovals(contract_id, milestone_index)`.
+- Pending client-migration requests under `DataKey::PendingClientMigration(contract_id)`.
+
+The TTL policy for these entries is defined in [contracts/escrow/src/ttl.rs](../contracts/escrow/src/ttl.rs).
+
+## 2. Core storage schema
+
+The storage keys are declared in [contracts/escrow/src/types.rs](../contracts/escrow/src/types.rs).
+
+| Key | Value shape | Purpose |
 | --- | --- | --- |
-| Persistent | Configuration, escrow contracts, milestone vectors, accounting, reputation, governance, and finalization records | Contract and milestone helpers renew to 30 days when fewer than 7 days remain. Other persistent keys have the host's normal persistent lifetime unless their writer explicitly renews them. |
-| Temporary | Outstanding milestone approvals and pending client migrations | Approvals live for 7 days; migrations live for 21 days. An expired or absent record is treated as unavailable. |
+| `DataKey::Initialized` | `bool` | Marks whether `initialize` has completed. |
+| `DataKey::Admin` | `Address` | Current governance/admin address. |
+| `DataKey::Paused` | `bool` | Global pause flag. |
+| `DataKey::Emergency` | `bool` | Emergency-control flag. |
+| `DataKey::Contract(contract_id)` | `Contract` | Main escrow record for one contract. |
+| `DataKey::NextContractId` | `u32` | Monotonic allocator for contract IDs. |
+| `(DataKey::Contract(contract_id), "milestones")` | `Vec<Milestone>` | Per-contract milestone list. |
+| `DataKey::MilestoneApprovals(contract_id, milestone_index)` | `MilestoneApprovals` | Temporary approval state. |
+| `DataKey::PendingReputationCredits(address)` | `i128` | Pending reputation credits for a freelancer. |
+| `DataKey::Reputation(address)` | `Reputation` | Reputation record for a participant. |
+| `DataKey::ReputationComment(contract_id)` | `String` | Comment attached to a reputation issuance. |
+| `DataKey::ReputationIssued(contract_id)` | `bool` | Marks whether reputation has been issued for that contract. |
+| `DataKey::PendingClientMigration(contract_id)` | `PendingClientMigration` | Temporary migration request. |
+| `DataKey::ProtocolFeeBps` | `u32` | Current protocol fee in basis points. |
+| `DataKey::AccumulatedProtocolFees` | `i128` | Fees accrued but not yet withdrawn. |
+| `DataKey::GovernedParameters` | `GovernedParameters` | Global escrow cap settings. |
+| `DataKey::ReadinessChecklist` | `ReadinessChecklist` | Deployment-readiness flags. |
+| `DataKey::PendingAdmin` | `PendingAdminProposal` | Pending two-step admin rotation. |
+| `DataKey::SettlementToken` | `Address` | Bound SAC settlement token. |
 
-TTL values are ledger counts, using `17,280` ledgers per day. Temporary
-entries are deliberately fail-closed: expiry cannot preserve an authorization
-or migration request. See [`ttl.rs`](../contracts/escrow/src/ttl.rs) for the
-constants and helpers.
+## 3. The authoritative data structures
 
-## Key and value schema
+### Contract record
 
-All application keys are variants of `DataKey`, except the milestone vector,
-which is a composite persistent key.
+The `Contract` object stored under `DataKey::Contract(contract_id)` contains the aggregate lifecycle state:
 
-| Key | Storage | Value | Lifecycle / owner |
-| --- | --- | --- | --- |
-| `Initialized` | persistent | `bool` | Written once by `initialize`; gates lifecycle operations. |
-| `Admin` | persistent | `Address` | Written by `initialize`; changed only through the two-step admin flow. |
-| `SettlementToken` | persistent | `Address` | Written once by `bind_settlement_token`; identifies the SAC used for transfers. |
-| `Paused`, `Emergency` | persistent | `bool` | Admin controls. A true value blocks protected mutations. |
-| `NextContractId` | persistent | `u32` | Starts at 1 and is advanced by successful contract creation. |
-| `Contract(id)` | persistent | `Contract` | Per-escrow participants, status, cumulative amounts, release mode, and reputation flag. |
-| `(Contract(id), "milestones")` | persistent | `Vec<Milestone>` | The matching contract's ordered milestones, including per-milestone funding, release, refund, deadline, and evidence state. |
-| `MilestoneApprovals(id, index)` | temporary | `MilestoneApprovals` | Live approval flags for one unreleased milestone. Removed when that milestone is settled. |
-| `PendingClientMigration(id)` | temporary | `PendingClientMigration` | Proposed client replacement; currently exposed by migration helpers and cancellation. |
-| `ProtocolFeeBps`, `AccumulatedProtocolFees` | persistent | `u32`, `i128` | Fee configuration and the fees retained during releases. |
-| `PendingAdmin` | persistent | `PendingAdminProposal` | Candidate administrator and proposal ledger; removed on acceptance or cancellation. |
-| `GovernedParameters` | persistent | `GovernedParameters` | Admin-configured fee and escrow cap used at creation. |
-| `ReadinessChecklist` | persistent | `ReadinessChecklist` | Operational setup markers. |
-| `ReputationIssued(id)` | persistent | `bool` | One-time issuance guard. |
-| `PendingReputationCredits(address)` | persistent | `i128` | Credits accrued by completed releases for a freelancer. |
-| `Reputation(address)` | persistent | `Reputation` | Aggregated completed-contract and rating record. |
-| `ReputationComment(id)` | persistent | `String` | Comment associated with issued reputation. |
-| `Finalization(id)` | persistent | `FinalizationRecord` | Immutable close snapshot; its presence blocks later contract-specific mutations. |
+- `client`, `freelancer`, `arbiter`
+- `status` (`Created`, `Accepted`, `Funded`, `Completed`, `Disputed`, `Cancelled`, `Refunded`, `PartiallyFunded`)
+- `total_deposited`, `funded_amount`, `released_amount`, `refunded_amount`
+- `release_authorization`
+- `reputation_issued`
 
-`MilestoneReleased`, `GovernanceAdmin`, `PendingGovernanceAdmin`, and
-`ProtocolParameters` remain declared `DataKey` variants, but the current
-implementation does not read or write them. In particular, release state is
-not duplicated: `Milestone.released` in the milestone vector is the sole
-source of truth.
+### Milestone vector
 
-## Invariants
+Each milestone is stored in the `Vec<Milestone>` attached to the contract id. The milestone entry carries:
 
-1. **A contract and its milestone vector are a pair.** Successful
-   `create_contract` writes both keys before advancing `NextContractId`.
-   Readers treat a missing member of the pair as `ContractNotFound`.
-2. **Contract IDs are unique and monotonic.** The counter begins at 1,
-   checks its candidate slot for collision, uses checked addition, and is only
-   advanced after the records have been stored. IDs are never reused.
-3. **Milestone state is canonical and monotonic.** The ordered vector is the
-   only record of release/refund flags and per-milestone funding. A release or
-   refund rejects an already-settled milestone; a separate
-   `MilestoneReleased` key must not be introduced as a second authority.
-4. **Accounting is conserved.** For a contract,
-   `refundable_balance = funded_amount - released_amount - refunded_amount`.
-   All amount changes use validated positive amounts and checked arithmetic;
-   funding cannot exceed the sum of milestone amounts.
-5. **Authorization is short-lived where it should be.** A release approval is
-   keyed by both contract ID and milestone index, must be live, and is cleared
-   after settlement. Missing and expired approvals are equivalent.
-6. **Settlement configuration is immutable.** `SettlementToken` is
-   write-once after initialization. It cannot be the escrow contract or the
-   admin address, and it is checked as a SAC before storage.
-7. **Finalization is immutable.** Once `Finalization(id)` exists, protected
-   per-contract mutations fail before changing state.
-8. **TTL is part of availability.** Contract and milestone reads/writes renew
-   their persistent entries together. Integrators needing long-lived escrows
-   should keep both entries active; an evicted persistent record is not
-   recoverable by a normal getter.
+- `amount`
+- `funded_amount`
+- `released`
+- `refunded`
+- `work_evidence`
+- `refunded_amount`
+- `deadline`
 
-## Entrypoints that touch storage
+The important detail is that milestone release/refund state is not stored in a separate `DataKey::MilestoneReleased` entry. The current implementation uses the `released` and `refunded` booleans inside the milestone vector as the source of truth.
 
-| Entrypoint group | Keys read or written |
-| --- | --- |
-| Setup: `initialize`, `bind_settlement_token` | `Initialized`, `Admin`, `NextContractId`, `ReadinessChecklist`, `SettlementToken` |
-| Creation: `create_contract` | `Initialized`, `Paused`, `Emergency`, `GovernedParameters`, `NextContractId`, `Contract(id)`, milestone vector |
-| Funding and settlement: `deposit_funds`, `release_milestone`, `refund_unreleased_milestones`, `cancel_contract` | `SettlementToken`, `ProtocolFeeBps`, `AccumulatedProtocolFees`, `Contract(id)`, milestone vector, and release approvals where applicable |
-| Release consent: `approve_milestone_release`, approval checks | `Contract(id)`, milestone vector, temporary `MilestoneApprovals(id, index)` |
-| Governance and safety: fee, governed-parameter, admin-transfer, pause, and emergency entrypoints | `Admin`, `PendingAdmin`, `ProtocolFeeBps`, `GovernedParameters`, `ReadinessChecklist`, `Paused`, `Emergency` |
-| Reputation and evidence: `submit_work_evidence`, `issue_reputation` | `Contract(id)`, milestone vector, `ReputationIssued(id)`, `PendingReputationCredits(address)`, `Reputation(address)`, `ReputationComment(id)` |
-| Close and reads: `finalize_contract`, summaries, getters | `Finalization(id)`, `Contract(id)`, milestone vector, plus the relevant configuration and safety keys |
-| Migration helpers | `Contract(id)` and temporary `PendingClientMigration(id)` |
+## 4. Invariants
 
-## Worked example: create, fund, approve, and release milestone 0
+The contract logic enforces the following invariants at the storage layer.
 
-Assume a newly initialized escrow, `NextContractId = 1`, and one milestone of
-100 stroops.
+### 4.1 Lifecycle invariants
 
-1. `create_contract` validates the participants and milestone amount, writes
-   `Contract(1)` with zero cumulative amounts, writes
-   `(Contract(1), "milestones")` with one unreleased/unrefunded milestone, and
-   advances `NextContractId` to 2.
-2. `deposit_funds(1, client, 100)` transfers the bound SAC amount and writes
-   the paired contract records so both `Contract.funded_amount` and the
-   milestone's `funded_amount` are 100. The pair's persistent TTL is renewed.
-3. `approve_milestone_release(1, 0, approver)` writes temporary
-   `MilestoneApprovals(1, 0)` and gives it the seven-day approval TTL. The
-   exact flags required depend on `Contract.release_authorization`.
-4. `release_milestone(1, 0, caller)` verifies the live approval and the
-   milestone vector, transfers the payout, marks `milestones[0].released`,
-   increases `Contract.released_amount`, records any protocol fee, clears the
-   temporary approval key, and renews the persistent pair.
+- A contract must be initialized before any money-flow entrypoint can run.
+- `create_contract` writes a new `Contract` record and its milestone vector atomically with the new contract id.
+- A deposit is only accepted for `Created` or `PartiallyFunded` contracts and cannot be used after `Cancelled` or `Refunded`.
+- A release can only happen when the contract is in `Funded` state and the target milestone is still unreleased and unrefunded.
 
-At the end, the milestone vector and `Contract(1)` agree that the full
-100-stroop obligation has been released; the temporary approval no longer
-authorizes anything.
+### 4.2 Accounting invariants
 
-## Review and test pointers
+The core invariant is:
 
-The storage-focused coverage is in
-[`contracts/escrow/src/test/storage.rs`](../contracts/escrow/src/test/storage.rs),
-[`persistence.rs`](../contracts/escrow/src/test/persistence.rs), and
-[`ttl_tests.rs`](../contracts/escrow/src/test/ttl_tests.rs). The allocation,
-approval, migration, and finalization modules contain their own targeted
-tests. Run `cargo fmt --all -- --check`,
-`cargo clippy --all-targets -- -D warnings`, and `cargo test` from the
-repository root before merging storage-related changes.
+- `available_balance = funded_amount - released_amount - refunded_amount`
+- `available_balance >= 0`
+- A release or refund must never make that value negative.
+
+The code checks this before mutating storage in the release and refund paths, and it panics with `AccountingInvariantViolated` when the state would become impossible.
+
+A second, contract-level guard ensures that a milestone release never exceeds the amount available to cover it:
+
+- `milestone.amount <= available_balance`
+
+This is what prevents over-release and keeps the persisted accounting consistent.
+
+### 4.3 Milestone consistency invariants
+
+- The milestone vector is the canonical place for milestone release/refund flags.
+- The aggregate `released_amount` and `refunded_amount` in the `Contract` record must remain consistent with the milestone-level booleans.
+- A contract reaches `Completed` only after every milestone is either released or refunded.
+
+### 4.4 Approval invariants
+
+Approval records are temporary and fail closed:
+
+- Missing approvals are treated as insufficient and block release.
+- Expired approvals are treated as absent.
+- Duplicate approvals from the same participant are rejected.
+
+### 4.5 Governance and configuration invariants
+
+- `Admin` is the only address permitted to mutate governance-controlled settings.
+- `PendingAdmin` is cleared after acceptance or cancellation of a governance transfer.
+- `SettlementToken` is bound once and is not overwritten by later calls.
+
+## 5. Entrypoints that touch storage
+
+The following entrypoints are the main storage writers and readers.
+
+| Entrypoint | Storage touched | Notes |
+| --- | --- | --- |
+| `initialize` | `Initialized`, `Admin`, `NextContractId`, `ReadinessChecklist` | Bootstraps global state. |
+| `create_contract` | `DataKey::Contract(id)`, milestone vector, `NextContractId` | Creates the main contract record. |
+| `deposit_funds` | `DataKey::Contract(id)` | Updates funding counters and transitions `Created`/`PartiallyFunded` to `Funded`. |
+| `approve_milestone_release` | `DataKey::MilestoneApprovals(contract_id, milestone_index)` | Persists temporary approvals with TTL. |
+| `release_milestone` | `DataKey::Contract(id)`, milestone vector, approvals cleanup, `AccumulatedProtocolFees`, pending reputation credits | Mutates lifecycle and accounting state. |
+| `refund_*` | `DataKey::Contract(id)`, milestone vector | Updates refund counters and milestone flags. |
+| `bind_settlement_token` | `DataKey::SettlementToken` | Binds the SAC token used for custody transfers. |
+| `set_protocol_fee_bps` | `DataKey::ProtocolFeeBps` | Updates protocol fee configuration. |
+| `propose_governance_admin` / `accept_governance_admin` / `cancel_governance_admin_proposal` | `DataKey::PendingAdmin`, `DataKey::Admin` | Manage two-step admin transfers. |
+| `issue_reputation` | `DataKey::ReputationIssued(contract_id)`, `DataKey::Reputation(address)`, `DataKey::ReputationComment(contract_id)`, `DataKey::PendingReputationCredits(address)` | Records feedback and pending credit state. |
+| `request_client_migration` / migration helpers | `DataKey::PendingClientMigration(contract_id)` | Stores temporary migration requests. |
+
+## 6. Worked example
+
+Consider a simple contract with one milestone worth `1000` stroops.
+
+1. `create_contract` writes:
+   - `DataKey::Contract(1)` with `status = Created`, `funded_amount = 0`, `released_amount = 0`, `refunded_amount = 0`
+   - `(DataKey::Contract(1), "milestones")` with one milestone whose `released` and `refunded` flags are both `false`
+   - `DataKey::NextContractId = 2`
+2. `deposit_funds` updates the contract record so that `funded_amount` becomes `1000` and the status becomes `Funded`.
+3. `approve_milestone_release` writes a temporary approval record under `DataKey::MilestoneApprovals(1, 0)`.
+4. `release_milestone` reads the same milestone from the vector, flips that milestone’s `released` flag to `true`, increments `released_amount` in the contract record, and clears the approval entry.
+5. If the contract is fully released, the contract status changes to `Completed` and the pending reputation credit counter is incremented for the freelancer.
+
+That flow is the easiest way to see how the storage model behaves in practice: each entrypoint mutates the contract record, the milestone vector, or the temporary approval record, but the invariants remain the same across all paths.
+
+## 7. Notes for auditors and reviewers
+
+- The storage model is intentionally split between persistent and temporary state, and the TTL policy is part of the safety story.
+- The milestone vector is the canonical source of milestone-level release/refund state.
+- The relevant tests live in [contracts/escrow/src/test/storage.rs](../contracts/escrow/src/test/storage.rs) and [contracts/escrow/src/test/accounting_invariants.rs](../contracts/escrow/src/test/accounting_invariants.rs).
+- When reading the contract, start with the contract record and the milestone vector; the rest of the storage keys are either configuration, governance, or auxiliary state.
