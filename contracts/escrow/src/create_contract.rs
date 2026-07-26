@@ -1,8 +1,9 @@
 use crate::{
     amount_validation, ttl, Contract, ContractStatus, DataKey, Error, Escrow, EscrowArgs,
-    EscrowClient, EscrowError, GovernedParameters, Milestone, ReleaseAuthorization, MAX_MILESTONES,
+    EscrowClient, EscrowError, GovernedParameters, Milestone, MilestonesKey, ReleaseAuthorization,
+    MAX_MILESTONES,
 };
-use soroban_sdk::{contractimpl, symbol_short, Address, Env, Symbol, Vec};
+use soroban_sdk::{contractimpl, symbol_short, Address, Env, Vec};
 
 #[contractimpl]
 impl Escrow {
@@ -137,7 +138,9 @@ impl Escrow {
             .persistent()
             .set(&DataKey::Contract(id), &contract);
 
-        // Build and persist the milestone vector.
+        // Build and persist the milestone vector. Routes through the typed
+        // [`MilestonesKey`] (issue #938) so the storage-key shape is enforced
+        // at the type level instead of duplicated at every call site.
         let mut milestone_vec: Vec<Milestone> = Vec::new(&env);
         for amount in milestones.iter() {
             milestone_vec.push_back(Milestone {
@@ -150,10 +153,9 @@ impl Escrow {
                 deadline: None,
             });
         }
-        let milestone_key = Symbol::new(&env, "milestones");
         env.storage()
             .persistent()
-            .set(&(DataKey::Contract(id), milestone_key), &milestone_vec);
+            .set(&MilestonesKey::new(id), &milestone_vec);
 
         // Advance the counter. `next_contract_id` already checked `id < u32::MAX`;
         // the `checked_add` here is a defense-in-depth guard.

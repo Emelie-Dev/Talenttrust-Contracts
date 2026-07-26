@@ -1,7 +1,8 @@
 use crate::{
     accumulate_amounts, ttl, Contract, ContractStatus, DataKey, Error, EscrowError, Milestone,
+    MilestonesKey,
 };
-use soroban_sdk::{Address, Env, Symbol, Vec};
+use soroban_sdk::{Address, Env, Vec};
 
 /// Validated deposit data that is safe to use before any token transfer.
 pub struct ValidatedDeposit {
@@ -51,11 +52,10 @@ pub fn validate_deposit(
         env.panic_with_error(Error::InvalidState);
     }
 
-    let milestone_key = Symbol::new(env, "milestones");
     let milestones: Vec<Milestone> = env
         .storage()
         .persistent()
-        .get(&(DataKey::Contract(contract_id), milestone_key))
+        .get(&MilestonesKey::new(contract_id))
         .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
 
     /// Calculate the total amount from milestones with checked arithmetic.

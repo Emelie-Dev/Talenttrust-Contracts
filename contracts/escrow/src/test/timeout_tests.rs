@@ -25,11 +25,11 @@
 
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
-    Address, Env, Symbol, Vec as SorobanVec,
+    Address, Env, Vec as SorobanVec,
 };
 
 use super::{create_contract, register_client};
-use crate::{DataKey, Milestone};
+use crate::{MilestonesKey, Milestone};
 
 /// Set the ledger timestamp to an absolute number of seconds.
 fn set_now(env: &Env, secs: u64) {
@@ -41,6 +41,11 @@ fn set_now(env: &Env, secs: u64) {
 /// Overwrite milestone `index`'s `deadline` and `released` flag directly in
 /// persistent storage, bypassing any setter entrypoint. The new state is
 /// observable through `is_milestone_overdue`.
+///
+/// Uses the typed [`MilestonesKey`] (issue #938) so the storage key shape
+/// stays consistent with `create_contract` / `release_milestone`. The
+/// underlying bytes match the legacy tuple form, so this is also a valid
+/// round-trip exercise for the typed key.
 fn set_milestone_deadline_and_released(
     env: &Env,
     contract_addr: &Address,
@@ -50,7 +55,7 @@ fn set_milestone_deadline_and_released(
     released: bool,
 ) {
     env.as_contract(contract_addr, || {
-        let key = (DataKey::Contract(contract_id), Symbol::new(env, "milestones"));
+        let key = MilestonesKey::new(contract_id);
         let mut milestones: SorobanVec<Milestone> =
             env.storage().persistent().get(&key).unwrap();
         let mut m = milestones.get(index).unwrap();

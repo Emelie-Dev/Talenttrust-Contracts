@@ -3,15 +3,11 @@ use super::{
     generated_participants, register_client, total_milestone_amount, MILESTONE_ONE,
     MILESTONE_THREE, MILESTONE_TWO,
 };
-use crate::{ttl, ContractStatus, Error, EscrowError, ReleaseAuthorization};
+use crate::{ttl, ContractStatus, Error, EscrowError, MilestonesKey, ReleaseAuthorization};
 use soroban_sdk::{
     testutils::{storage::Persistent, Address as _, Ledger},
-    vec, Address, Env, Symbol,
+    vec, Address, Env,
 };
-
-fn milestone_symbol(env: &Env) -> Symbol {
-    Symbol::new(env, "milestones")
-}
 
 /// Finalization by arbiter works on a completed contract.
 #[test]
@@ -728,12 +724,10 @@ fn get_milestones_read_extends_persistent_ttl() {
 
     let bump_threshold = ttl::PERSISTENT_BUMP_THRESHOLD as u32;
     let extension = ttl::PERSISTENT_TTL_LEDGERS as u32;
-    let milestone_key = milestone_symbol(&env);
+    let milestone_key = MilestonesKey::new(contract_id);
 
     let initial_ttl: u32 = env.as_contract(&client.address, || {
-        env.storage()
-            .persistent()
-            .get_ttl(&(crate::DataKey::Contract(contract_id), milestone_key.clone()))
+        env.storage().persistent().get_ttl(&milestone_key)
     });
 
     env.ledger().with_mut(|li| {
@@ -746,9 +740,7 @@ fn get_milestones_read_extends_persistent_ttl() {
     assert_eq!(milestones.len(), default_milestones(&env).len());
 
     let ttl_after_read: u32 = env.as_contract(&client.address, || {
-        env.storage()
-            .persistent()
-            .get_ttl(&(crate::DataKey::Contract(contract_id), milestone_key.clone()))
+        env.storage().persistent().get_ttl(&milestone_key)
     });
     assert!(
         ttl_after_read >= bump_threshold,
@@ -778,12 +770,10 @@ fn get_work_evidence_read_extends_persistent_ttl() {
 
     let bump_threshold = ttl::PERSISTENT_BUMP_THRESHOLD as u32;
     let extension = ttl::PERSISTENT_TTL_LEDGERS as u32;
-    let milestone_key = milestone_symbol(&env);
+    let milestone_key = MilestonesKey::new(contract_id);
 
     let initial_ttl: u32 = env.as_contract(&client.address, || {
-        env.storage()
-            .persistent()
-            .get_ttl(&(crate::DataKey::Contract(contract_id), milestone_key.clone()))
+        env.storage().persistent().get_ttl(&milestone_key)
     });
 
     env.ledger().with_mut(|li| {
@@ -796,9 +786,7 @@ fn get_work_evidence_read_extends_persistent_ttl() {
     assert_eq!(result, Some(ev.clone()));
 
     let ttl_after_read: u32 = env.as_contract(&client.address, || {
-        env.storage()
-            .persistent()
-            .get_ttl(&(crate::DataKey::Contract(contract_id), milestone_key.clone()))
+        env.storage().persistent().get_ttl(&milestone_key)
     });
     assert!(
         ttl_after_read >= bump_threshold,
@@ -1136,11 +1124,18 @@ fn double_finalize_rejected() {
     super::assert_contract_error(result, EscrowError::AlreadyFinalized);
 }
 
-/// Asserts that the milestone storage helper resolves to the current storage symbol.
+/// Asserts that the [`MilestonesKey`] typed key reconstructs the well-known
+/// `(DataKey::Contract(id), Symbol::new(&env, "milestones"))` tuple form so
+/// pre-#938 storage entries remain reachable. The `IntoVal` implementation
+/// in `types.rs` is byte-compatible because it delegates to the tuple.
 #[test]
-fn milestone_symbol_helper_matches_expected() {
+fn milestones_key_as_tuple_matches_expected() {
     let env = Env::default();
-    let helper_symbol = milestone_symbol(&env);
-    let expected_symbol = Symbol::new(&env, "milestones");
-    assert_eq!(helper_symbol, expected_symbol);
+    let key = MilestonesKey::new(7);
+    let (k, s) = key.as_tuple(&env);
+    assert_eq!(k, crate::DataKey::Contract(7));
+    assert_eq!(
+        s,
+        soroban_sdk::Symbol::new(&env, crate::types::MILESTONES_STORAGE_SYMBOL)
+    );
 }

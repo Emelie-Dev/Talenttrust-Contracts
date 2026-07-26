@@ -1,4 +1,7 @@
-use soroban_sdk::{contracterror, contracttype, Address, String, Vec};
+use soroban_sdk::{
+    contracterror, contracttype, Address, ConversionError, Env, IntoVal, String, Symbol,
+    TryFromVal, Val, Vec,
+};
 
 // ── Indexer summary types ────────────────────────────────────────────────────
 
@@ -90,6 +93,120 @@ pub enum DataKey {
     Finalization(u32),
     // Settlement token
     SettlementToken,
+}
+
+/// Well-known symbol that pairs with [`DataKey::Contract(contract_id)`] to
+/// form the canonical milestones storage key.
+///
+/// Reusing a single global `Symbol` instance keeps milestone reads/writes
+/// byte-identical to the historical `(DataKey::Contract(id), Symbol("milestones"))`
+/// tuple encoding. Centralising it here also lets [`MilestonesKey`]'s
+/// `IntoVal`/`TryFromVal` impls validate the second component without
+/// re-allocating the symbol on every conversion.
+///
+/// Kept `pub(crate)` so external crates cannot accidentally pin the literal —
+/// if the on-disk shape ever changes the inner `IntoVal` impl is the only
+/// reader of this constant, and tests inside the same crate remain the only
+/// external check.
+pub(crate) const MILESTONES_STORAGE_SYMBOL: &str = "milestones";
+
+/// Typed storage key for the `Vec<Milestone>` record associated with a
+/// single escrow contract.
+///
+/// Introduced in [#938]. Before this type existed the codebase used the
+/// ad-hoc tuple `(DataKey::Contract(contract_id), Symbol::new(&env,
+/// "milestones"))` at every read and write site (creation, deposit, release,
+/// refund, finalize, TTL helpers, etc.). That fan-out made the key shape
+/// easy to disagree with itself if anyone copy-paste-edited one of the
+/// sites. Centralising it here gives reviewers, future contributors, and
+/// `clippy` a single seam to reason about.
+///
+/// # Layout
+///
+/// `MilestonesKey` deliberately does NOT derive [`contracttype`]. Its
+/// `IntoVal<Env, Val>` implementation delegates to the canonical tuple,
+///
+/// ```text
+/// (DataKey::Contract(self.0), Symbol::new(&env, MILESTONES_STORAGE_SYMBOL))
+/// ```
+///
+/// so the on-disk storage bytes for any previously-written milestone
+/// vector are bit-identical to what `cargo run` produced before this
+/// refactor. New reads via `&MilestonesKey(id)` and old reads via the
+/// literal tuple return the same `Vec<Milestone>` for the same contract,
+/// because they hash to the same host-key.
+///
+/// # Usage
+///
+/// ```ignore
+/// use crate::{DataKey, MilestonesKey};
+///
+/// env.storage().persistent().set(&MilestonesKey(contract_id), &milestones);
+/// let ms: Vec<Milestone> = env.storage().persistent().get(&MilestonesKey(contract_id)).unwrap();
+/// env.storage().persistent().has(&MilestonesKey(contract_id));
+/// env.storage().persistent().extend_ttl(&MilestonesKey(contract_id), .., ..);
+/// ```
+///
+/// [`contracttype`]: soroban_sdk::contracttype
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MilestonesKey(pub u32);
+
+impl MilestonesKey {
+    /// Construct a new milestones storage key for `contract_id`.
+    pub const fn new(contract_id: u32) -> Self {
+        Self(contract_id)
+    }
+
+    /// Borrow the contract_id this key refers to.
+    pub const fn contract_id(&self) -> u32 {
+        self.0
+    }
+
+    /// Reconstruct the legacy `(DataKey::Contract(id), "milestones")` tuple
+    /// form for callers that need an explicit tuple (e.g. tests asserting
+    /// storage shape or backwards-compatibility round trips).
+    ///
+    /// `pub(crate)` because the only readers are this module's `IntoVal`
+    /// impl and a handful of round-trip tests; there is no reason for
+    /// external crates to pin the literal string.
+    pub(crate) fn as_tuple(&self, env: &Env) -> (DataKey, Symbol) {
+        (
+            DataKey::Contract(self.0),
+            Symbol::new(env, MILESTONES_STORAGE_SYMBOL),
+        )
+    }
+}
+
+impl IntoVal<Env, Val> for MilestonesKey {
+    fn into_val(&self, env: &Env) -> Val {
+        // Delegating to the tuple's IntoVal guarantees byte-identical
+        // encoding to `(DataKey::Contract(id), Symbol::new(env, "milestones"))`.
+        // See module docs for guarantees around layout preservation.
+        self.as_tuple(env).into_val(env)
+    }
+}
+
+impl TryFromVal<Env, Val> for MilestonesKey {
+    type Error = ConversionError;
+
+    fn try_from_val(env: &Env, val: &Val) -> Result<Self, Self::Error> {
+        // Recover the underlying (DataKey, Symbol) tuple and verify both halves
+        // match the milestones entry shape. Returning Err for any other shape
+        // means callers using `MilestonesKey` as a storage key cannot
+        // accidentally read back a non-milestones value stored under the same
+        // hash (which, given our layout, should never happen — but 'should
+        // never' is not a runtime invariant).
+        let (k, s): (DataKey, Symbol) =
+            <(DataKey, Symbol) as TryFromVal<Env, Val>>::try_from_val(env, val)?;
+        let contract_id = match k {
+            DataKey::Contract(id) => id,
+            _ => return Err(ConversionError),
+        };
+        if s != Symbol::new(env, MILESTONES_STORAGE_SYMBOL) {
+            return Err(ConversionError);
+        }
+        Ok(MilestonesKey(contract_id))
+    }
 }
 
 /// Canonical contract error type for all entrypoint-facing errors.

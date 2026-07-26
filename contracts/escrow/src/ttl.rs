@@ -36,11 +36,12 @@
 //! Storage ownership: this module owns TTL policy and helper access patterns,
 //! not business records. It extends caller-provided keys, with first-class
 //! helpers for `DataKey::Contract(contract_id)`, the paired milestone vector
-//! key `(DataKey::Contract(contract_id), "milestones")`, `NextContractId`,
+//! key [`MilestonesKey`] (which serialises to the same bytes as the legacy
+//! tuple `(DataKey::Contract(contract_id), "milestones")`), `NextContractId`,
 //! participant index keys, pending approvals, and pending migrations.
 //!
-use crate::{DataKey, Error, Milestone};
-use soroban_sdk::{Env, IntoVal, Symbol, TryFromVal, Val, Vec};
+use crate::{DataKey, Error, Milestone, MilestonesKey};
+use soroban_sdk::{Env, IntoVal, TryFromVal, Val, Vec};
 
 pub const LEDGERS_PER_DAY: u32 = 17_280;
 
@@ -131,8 +132,12 @@ where
 }
 
 /// Loads the milestone vector for a contract and extends its TTL.
+///
+/// Routes through the typed [`MilestonesKey`] so every read of the
+/// `Vec<Milestone>` record uses a single, reviewable key definition
+/// rather than an ad-hoc tuple literal (issue #938).
 pub fn load_milestones(env: &Env, contract_id: u32) -> Vec<Milestone> {
-    let key = milestone_storage_key(env, contract_id);
+    let key = MilestonesKey::new(contract_id);
     let milestones: Vec<Milestone> = env
         .storage()
         .persistent()
@@ -143,17 +148,12 @@ pub fn load_milestones(env: &Env, contract_id: u32) -> Vec<Milestone> {
 }
 
 /// Stores the milestone vector for a contract and extends its TTL.
+///
+/// Routes through the typed [`MilestonesKey`] (issue #938).
 pub fn store_milestones(env: &Env, contract_id: u32, milestones: &Vec<Milestone>) {
-    let key = milestone_storage_key(env, contract_id);
+    let key = MilestonesKey::new(contract_id);
     env.storage().persistent().set(&key, milestones);
     extend_milestone_ttl(env, contract_id);
-}
-
-pub(crate) fn milestone_storage_key(env: &Env, contract_id: u32) -> (DataKey, Symbol) {
-    (
-        DataKey::Contract(contract_id),
-        Symbol::new(env, "milestones"),
-    )
 }
 
 /// Extend TTL of the NextContractId counter.
@@ -177,9 +177,14 @@ pub fn extend_contract_ttl(env: &Env, contract_id: u32) {
 }
 
 /// Extend TTL of the milestones vector for a given contract.
+///
+/// Uses the typed [`MilestonesKey`] so the storage key shape is enforced
+/// at the type level. The on-disk encoding remains byte-identical to the
+/// pre-refactor `extend_ttl(&tuple, ...)` call thanks to the manual
+/// `IntoVal` implementation that delegates to the legacy tuple form.
 pub fn extend_milestone_ttl(env: &Env, contract_id: u32) {
     env.storage().persistent().extend_ttl(
-        &milestone_storage_key(env, contract_id),
+        &MilestonesKey::new(contract_id),
         PERSISTENT_BUMP_THRESHOLD,
         PERSISTENT_TTL_LEDGERS,
     );
@@ -189,6 +194,17 @@ pub fn extend_milestone_ttl(env: &Env, contract_id: u32) {
 pub fn extend_contract_and_milestones_ttl(env: &Env, contract_id: u32) {
     extend_contract_ttl(env, contract_id);
     extend_milestone_ttl(env, contract_id);
+}
+
+/// Convenience helper: returns whether a milestones entry currently exists
+/// in persistent storage for `contract_id`. Returns `false` for the absent
+/// ("never written") case as well as for entries whose TTL has elapsed.
+/// Defensive helper for tests and conditional paths; production code
+/// should rely on `ttl::load_milestones` which panics on absence.
+pub fn has_milestones(env: &Env, contract_id: u32) -> bool {
+    env.storage()
+        .persistent()
+        .has(&MilestonesKey::new(contract_id))
 }
 
 /// Extend TTL for a participant contract index entry (e.g. client or freelancer id list).

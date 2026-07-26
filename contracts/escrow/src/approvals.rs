@@ -13,6 +13,7 @@ use crate::ttl::{PENDING_APPROVAL_BUMP_THRESHOLD, PENDING_APPROVAL_TTL_LEDGERS};
 use crate::types::{
     Contract, ContractStatus, DataKey, Error, Milestone, MilestoneApprovals, ReleaseAuthorization,
 };
+use crate::MilestonesKey;
 use soroban_sdk::{Address, Env, Vec};
 
 /// Approves a milestone for release by the caller.
@@ -63,11 +64,11 @@ pub fn approve_milestone(
         return Err(Error::InvalidState);
     }
 
-    // Load milestones
+    // Load milestones via the typed [`MilestonesKey`] wrapper (issue #938).
     let milestones: Vec<Milestone> = env
         .storage()
         .persistent()
-        .get(&crate::ttl::milestone_storage_key(env, contract_id))
+        .get(&MilestonesKey::new(contract_id))
         .ok_or(Error::ContractNotFound)?;
 
     // Validate milestone index
@@ -228,7 +229,7 @@ pub fn clear_approvals(env: &Env, contract_id: u32, milestone_index: u32) {
 mod tests {
     use super::*;
     use crate::Escrow;
-    use soroban_sdk::{testutils::Address as _, Env, Symbol, Vec};
+    use soroban_sdk::{testutils::Address as _, Env, Vec};
 
     fn setup_contract_in_storage(
         env: &Env,
@@ -254,11 +255,9 @@ mod tests {
                 }],
             );
             let _ = release_auth;
-            let milestone_key = Symbol::new(env, "milestones");
-            env.storage().persistent().set(
-                &(DataKey::Contract(contract_id), milestone_key),
-                &milestones,
-            );
+            env.storage()
+                .persistent()
+                .set(&MilestonesKey::new(contract_id), &milestones);
         });
     }
 
@@ -303,11 +302,9 @@ mod tests {
                     deadline: None,
                 }],
             );
-            let milestone_key = Symbol::new(&env, "milestones");
-            env.storage().persistent().set(
-                &(DataKey::Contract(contract_id), milestone_key),
-                &milestones,
-            );
+            env.storage()
+                .persistent()
+                .set(&MilestonesKey::new(contract_id), &milestones);
 
             // Client approves
             let result = approve_milestone(&env, contract_id, 0, &client);
@@ -360,11 +357,9 @@ mod tests {
                     deadline: None,
                 }],
             );
-            let milestone_key = Symbol::new(&env, "milestones");
-            env.storage().persistent().set(
-                &(DataKey::Contract(contract_id), milestone_key),
-                &milestones,
-            );
+            env.storage()
+                .persistent()
+                .set(&MilestonesKey::new(contract_id), &milestones);
 
             // Only client approves - insufficient
             let result = approve_milestone(&env, contract_id, 0, &client);
@@ -424,11 +419,9 @@ mod tests {
                     deadline: None,
                 }],
             );
-            let milestone_key = Symbol::new(&env, "milestones");
-            env.storage().persistent().set(
-                &(DataKey::Contract(contract_id), milestone_key),
-                &milestones,
-            );
+            env.storage()
+                .persistent()
+                .set(&MilestonesKey::new(contract_id), &milestones);
 
             // First approval succeeds
             let result = approve_milestone(&env, contract_id, 0, &client);
