@@ -1757,6 +1757,15 @@ impl Escrow {
             ttl::PERSISTENT_TTL_LEDGERS,
         );
 
+        env.events().publish(
+            (symbol_short!("repr_put"), contract_id),
+            (
+                contract.freelancer.clone(),
+                rating,
+                env.ledger().timestamp(),
+            ),
+        );
+
         true
     }
 

@@ -1,7 +1,7 @@
 use crate::{
     accumulate_amounts, ttl, Contract, ContractStatus, DataKey, Error, EscrowError, Milestone,
 };
-use soroban_sdk::{Address, Env, Symbol, Vec};
+use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
 
 /// Validated deposit data that is safe to use before any token transfer.
 pub struct ValidatedDeposit {
@@ -120,6 +120,8 @@ pub fn apply_validated_deposit(
         total_amount,
     } = validated;
 
+    let deposit_amount = new_funded_amount - contract.funded_amount;
+
     ttl::extend_contract_ttl(&env, contract_id);
 
     caller.require_auth();
@@ -140,6 +142,11 @@ pub fn apply_validated_deposit(
         .set(&DataKey::Contract(contract_id), &contract);
 
     ttl::extend_contract_ttl(&env, contract_id);
+
+    env.events().publish(
+        (symbol_short!("deposit"), contract_id),
+        (deposit_amount, caller, env.ledger().timestamp()),
+    );
 
     true
 }
