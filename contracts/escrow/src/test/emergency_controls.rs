@@ -1,18 +1,13 @@
-use crate::{Error, Escrow, EscrowClient, EscrowError, ReleaseAuthorization};
+use crate::{Error, Escrow, EscrowClient, EscrowError, ReleaseAuthorization, MAX_RATING};
 use soroban_sdk::{testutils::Address as _, vec, Address, Env};
 
 fn setup_initialized() -> (Env, Address, Address) {
     let env = Env::default();
-    env.mock_all_auths_allowing_non_root_auth();
+    env.mock_all_auths();
     let contract_id = env.register(Escrow, ());
     let client = EscrowClient::new(&env, &contract_id);
     let admin = Address::generate(&env);
     assert!(client.initialize(&admin));
-
-    let token_admin = Address::generate(&env);
-    let token_address = env.register_stellar_asset_contract(token_admin);
-    client.set_settlement_token(&admin, &token_address);
-
     (env, contract_id, admin)
 }
 
@@ -27,9 +22,6 @@ fn setup_funded_contract(env: &Env, client: &EscrowClient) -> (Address, Address,
         &milestones,
         &ReleaseAuthorization::ClientOnly,
     );
-    if let Some(token) = client.get_settlement_token() {
-        soroban_sdk::token::StellarAssetClient::new(env, &token).mint(&client_addr, &300_i128);
-    }
     client.deposit_funds(&id, &client_addr, &300_i128);
     (client_addr, freelancer_addr, id)
 }
@@ -139,7 +131,7 @@ fn emergency_blocks_issue_reputation() {
 
     let comment = soroban_sdk::String::from_str(&env, "Good job");
     super::assert_contract_error(
-        client.try_issue_reputation(&id, &client_addr, &5_u32, &comment),
+        client.try_issue_reputation(&id, &client_addr, &MAX_RATING, &comment),
         Error::ContractPaused,
     );
 }
@@ -179,10 +171,6 @@ fn resolve_emergency_restores_all_operations() {
     );
     assert_eq!(id, 1);
 
-    if let Some(token) = client.get_settlement_token() {
-        env.mock_all_auths_allowing_non_root_auth();
-        soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&a, &50_i128);
-    }
     assert!(client.deposit_funds(&id, &a, &50_i128));
     assert!(client.cancel_contract(&id, &a));
 }

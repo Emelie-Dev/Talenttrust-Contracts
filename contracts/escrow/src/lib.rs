@@ -62,6 +62,8 @@ mod migration;
 mod storage;
 mod ttl;
 mod types;
+
+pub use constants::*;
 mod utils;
 
 use soroban_sdk::{
@@ -2846,7 +2848,7 @@ impl Escrow {
             env.panic_with_error(Error::UnauthorizedRole);
         }
 
-        if rating < 1 || rating > 5 {
+        if rating < MIN_RATING || rating > MAX_RATING {
             env.panic_with_error(Error::InvalidRating);
         }
 
@@ -2854,7 +2856,7 @@ impl Escrow {
             env.panic_with_error(Error::EmptyComment);
         }
 
-        if comment.len() > 200 {
+        if comment.len() > MAX_COMMENT_BYTES {
             env.panic_with_error(Error::CommentTooLong);
         }
 
@@ -2874,11 +2876,14 @@ impl Escrow {
         if pending <= 0 {
             env.panic_with_error(Error::InvalidState);
         }
+        env.storage()
+            .persistent()
+            .set(&pending_key, &(pending - REPUTATION_CREDIT_INCREMENT));
 
         let rep_key = DataKey::Reputation(contract.freelancer.clone());
         let mut rep: types::Reputation =
             env.storage().persistent().get(&rep_key).unwrap_or_default();
-        rep.completed_contracts += 1;
+        rep.completed_contracts += REPUTATION_CREDIT_INCREMENT;
         rep.total_rating += rating as i128;
         rep.last_rating = rating as i128;
         rep
@@ -3048,9 +3053,6 @@ impl Escrow {
     /// assert_eq!(escrow.get_average_rating(&freelancer_addr), Some(40_000));
     /// ```
     pub fn get_average_rating(env: Env, address: Address) -> Option<i128> {
-        /// Basis-point scaling factor (Ãƒâ€”10 000 preserves four decimal places).
-        const SCALE: i128 = 10_000;
-
         let rep: types::Reputation = env
             .storage()
             .persistent()
@@ -3061,7 +3063,7 @@ impl Escrow {
         }
 
         rep.total_rating
-            .checked_mul(SCALE)
+            .checked_mul(crate::SCALE)
             .and_then(|scaled| scaled.checked_div(rep.completed_contracts))
     }
 
