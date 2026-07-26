@@ -10,7 +10,7 @@ use crate::{
 // --- Submodules ---
 mod accounting_invariants;
 mod approval_expiry;
-mod batch_release;
+mod arbiter_page;
 mod cancel_contract;
 mod client_migration;
 mod contract_schema_migration;

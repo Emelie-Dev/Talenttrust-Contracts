@@ -97,8 +97,9 @@ pub use ttl::{
 // re-exported here; `dispute.rs` uses them via `crate::DisputeResolution`.
 pub use milestones::{Milestone, MilestoneApprovals, MilestoneSummary, ReleaseAuthorization};
 pub use types::{
-    Contract, ContractBounds, ContractStatus, ContractSummary, DataKey, DepositMode,
-    DisputeResolution, DisputeSplit, Error, GovernedParameters, PendingAdminProposal, ReadinessChecklist, Reputation,
+    ArbiterEntry, Contract, ContractBounds, ContractStatus, ContractSummary, DataKey, DepositMode,
+    DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone, MilestoneApprovals,
+    MilestoneSummary, PendingAdminProposal, ReadinessChecklist, ReleaseAuthorization, Reputation,
     SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION,
 };
 
@@ -208,6 +209,9 @@ pub const MIN_MAX_DISPUTES: u32 = 1;
 
 /// Absolute maximum for the max disputes setting.
 pub const MAX_MAX_DISPUTES: u32 = 100;
+
+/// Upper bound on the `limit` parameter of paginated read views.
+pub const PAGE_CEILING: u32 = 50;
 
 #[contract]
 pub struct Escrow;
@@ -1299,87 +1303,71 @@ impl Escrow {
             .unwrap_or(1)
     }
 
-    /// Returns a bounded, paginated view over created escrow contracts with
-    /// compact per-entry fields.
+    /// Returns a bounded, paginated view of arbiter records.
     ///
-    /// This is the contract-level counterpart to
-    /// [`get_milestones_page`](Self::get_milestones_page), for indexers and
-    /// UIs that need to enumerate contracts without walking the allocated ID
-    /// range one `get_contract` call at a time. Each returned
-    /// [`ContractEntry`] carries the contract `id`, a compact `status` code,
-    /// and the `funded_amount` / `released_amount` in stroops.
+    /// Enumerates contracts that have an assigned arbiter and returns
+    /// [`ArbiterEntry`] values in ascending contract-id order. Contracts
+    /// without an arbiter are skipped and do not consume a page slot.
     ///
-    /// Contract IDs are allocated contiguously starting at `1` and are never
-    /// removed from storage (cancellation, finalization, and disputes all
-    /// change a contract's `status` in place), so the allocated range
-    /// `[1, get_next_contract_id() - 1]` has no gaps.
+    /// # Pagination
     ///
-    /// # Pagination contract
-    ///
-    /// - `start` is the zero-based offset into the sequence of created
-    ///   contracts, ordered by ID (`start = 0` is contract ID `1`,
-    ///   `start = 1` is contract ID `2`, and so on). An out-of-range `start`
+    /// - `start` is the zero-based offset into the filtered arbiter-record
+    ///   sequence (not the raw contract-id space). An out-of-range `start`
     ///   produces an empty page (never a panic).
     /// - `limit` is clamped to `[0, PAGE_CEILING]` before use. The caller
     ///   never receives more than `PAGE_CEILING` entries per call.
-    /// - Returns an empty `Vec` when no contracts have been created yet or
-    ///   `start` is beyond the last created contract.
-    ///
-    /// # Status codes
-    ///
-    /// The `status` field is the [`ContractStatus`] discriminant: `0`
-    /// Created, `1` Accepted, `2` Funded, `3` Completed, `4` Disputed, `5`
-    /// Cancelled, `6` Refunded, `7` PartiallyFunded.
+    /// - Returns an empty `Vec` when no contracts exist or none have an
+    ///   arbiter assigned.
     ///
     /// # Arguments
     /// * `env` - The Soroban environment
-    /// * `start` - Zero-based offset of the first contract in the page
+    /// * `start` - Zero-based index of the first arbiter record in the page
     /// * `limit` - Maximum entries to return (clamped to `PAGE_CEILING`)
     ///
     /// # Returns
-    /// A [`Vec<ContractEntry>`] containing at most `min(limit, PAGE_CEILING)`
-    /// entries. Empty when no contracts exist or `start` is beyond the last
-    /// created contract.
+    /// A [`Vec<ArbiterEntry>`] containing at most `min(limit, PAGE_CEILING)`
+    /// entries.
     ///
     /// # Side effects
-    /// Extends each returned contract's TTL, consistent with `get_contract`.
-    /// Auth-free and otherwise non-mutating.
-    pub fn get_contracts_page(env: Env, start: u32, limit: u32) -> Vec<ContractEntry> {
+    /// Extends the contract TTL for each returned entry, consistent with
+    /// `get_contract`. Auth-free and otherwise non-mutating.
+    pub fn get_arbiters_page(env: Env, start: u32, limit: u32) -> Vec<ArbiterEntry> {
         let capped_limit = core::cmp::min(limit, PAGE_CEILING);
+        if capped_limit == 0 {
+            return Vec::new(&env);
+        }
 
-        let next_id: u32 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::NextContractId)
-            .unwrap_or(1);
-        // IDs are allocated contiguously starting at 1, so the number of
-        // contracts ever created is `next_id - 1`.
-        let total_allocated = next_id.saturating_sub(1);
-
-        if total_allocated == 0 || start >= total_allocated {
+        let next_id = Self::get_next_contract_id(env.clone());
+        if next_id <= 1 {
             return Vec::new(&env);
         }
 
         let mut result = Vec::new(&env);
-        let mut count: u32 = 0;
-        let mut offset = start;
-        while offset < total_allocated && count < capped_limit {
-            let contract_id = offset + 1;
-            let contract: Contract = env
+        let mut matched: u32 = 0;
+        let mut collected: u32 = 0;
+        let mut id: u32 = 1;
+
+        while id < next_id && collected < capped_limit {
+            if let Some(contract) = env
                 .storage()
                 .persistent()
-                .get(&DataKey::Contract(contract_id))
-                .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
-            ttl::extend_contract_ttl(&env, contract_id);
-            result.push_back(ContractEntry {
-                id: contract_id,
-                status: contract.status as u32,
-                funded_amount: contract.funded_amount,
-                released_amount: contract.released_amount,
-            });
-            offset += 1;
-            count += 1;
+                .get::<_, Contract>(&DataKey::Contract(id))
+            {
+                if let Some(arbiter) = contract.arbiter {
+                    if matched >= start {
+                        ttl::extend_contract_ttl(&env, id);
+                        result.push_back(ArbiterEntry {
+                            contract_id: id,
+                            arbiter,
+                        });
+                        collected += 1;
+                    }
+                    matched = matched.saturating_add(1);
+                }
+            }
+            id = id.saturating_add(1);
         }
+
         result
     }
 
