@@ -24,7 +24,7 @@ mod events_indexing;
 mod input_sanitization_amounts;
 mod input_sanitization_identities;
 mod mainnet_readiness;
-mod overflow_saturation;
+mod milestone_accessors;
 mod pause_controls;
 mod performance;
 mod persistence;
