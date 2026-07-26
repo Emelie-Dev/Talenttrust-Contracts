@@ -175,15 +175,19 @@ impl Escrow {
             env.panic_with_error(EscrowError::AlreadyRefunded);
         }
 
-        // Check contract-level funding (per-milestone funded_amount is set after
-        // release, so we check the aggregate contract balance here).
-        let available =
-            contract.funded_amount - contract.released_amount - contract.refunded_amount;
-        if available < milestone.amount {
+        approvals::check_approvals(&env, &contract, contract_id, milestone_index)
+            .unwrap_or_else(|e| env.panic_with_error(e));
+
+        let available_balance =
+            crate::amount_validation::available_balance(contract.funded_amount, contract.released_amount, contract.refunded_amount).unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
+        if available_balance < milestone.amount {
             env.panic_with_error(Error::InsufficientFunds);
         }
 
-        let gross_amount = milestone.amount;
+        let _release_amount = milestone.amount;
+        milestone.released = true;
+        milestones.set(milestone_index, milestone.clone());
+        contract.released_amount = crate::amount_validation::safe_add_amounts(contract.released_amount, milestone.amount).unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
 
         // Compute the protocol fee up-front so the available-balance check can
         // account for both the net payout and the fee that stays in the contract.

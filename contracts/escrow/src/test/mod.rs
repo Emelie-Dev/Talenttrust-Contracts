@@ -23,7 +23,7 @@ mod deposit;
 mod dispute;
 mod configurable_disputes_limit;
 mod emergency_controls;
-mod governance_events;
+mod events_overflow;
 mod input_sanitization_amounts;
 mod input_sanitization_identities;
 mod mainnet_readiness;
