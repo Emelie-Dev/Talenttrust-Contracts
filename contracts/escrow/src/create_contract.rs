@@ -5,6 +5,25 @@ use crate::{
 use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
 
 impl Escrow {
+    pub(crate) fn next_contract_id(env: &Env) -> u32 {
+        let id: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::NextContractId)
+            .unwrap_or(1);
+
+        if env
+            .storage()
+            .persistent()
+            .get::<_, Contract>(&DataKey::Contract(id))
+            .is_some()
+        {
+            env.panic_with_error(EscrowError::ContractIdCollision);
+        }
+
+        id
+    }
+
     pub fn create_contract(
         env: Env,
         client: Address,
@@ -39,7 +58,7 @@ impl Escrow {
             env.panic_with_error(EscrowError::EmptyMilestones);
         }
 
-        if milestones.len() > MAX_MILESTONES as u32 {
+        if milestones.len() > MAX_MILESTONES {
             env.panic_with_error(EscrowError::TooManyMilestones);
         }
 
@@ -75,7 +94,7 @@ impl Escrow {
         let contract = Contract {
             client: client.clone(),
             freelancer: freelancer.clone(),
-            arbiter: arbiter.clone(),
+            arbiter,
             status: ContractStatus::Created,
             total_deposited: 0,
             funded_amount: 0,
@@ -112,32 +131,10 @@ impl Escrow {
             .persistent()
             .set(&DataKey::NextContractId, &next_id);
 
-        ttl::extend_contract_ttl(&env, id);
-        ttl::extend_milestone_ttl(&env, id);
-
         env.events().publish(
             (symbol_short!("created"), id),
             (client, freelancer, env.ledger().timestamp()),
         );
-
-        id
-    }
-
-    pub(crate) fn next_contract_id(env: &Env) -> u32 {
-        let id: u32 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::NextContractId)
-            .unwrap_or(1);
-
-        if env
-            .storage()
-            .persistent()
-            .get::<_, Contract>(&DataKey::Contract(id))
-            .is_some()
-        {
-            env.panic_with_error(EscrowError::ContractIdCollision);
-        }
 
         id
     }
