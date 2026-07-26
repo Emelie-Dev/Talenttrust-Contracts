@@ -1943,148 +1943,15 @@ impl Escrow {
             ttl::PERSISTENT_TTL_LEDGERS,
         );
 
-        // ── Events ──────────────────────────────────────────────────────────
-        //
-        // Emitted only after every storage mutation has succeeded (fail-closed
-        // guarantee: a panic in any earlier check prevents this publish, so the
-        // event observes only fully-applied reputation state).
-        //
-        /// `rep_issue` — fired on every successful reputation issuance so
-        /// off-chain indexers can cheaply reconstruct the full reputation
-        /// history of every freelancer without re-fetching contract storage
-        /// after each individual `issue_reputation` call.
-        ///
-        /// Topics : `(symbol_short!("rep_issue"), contract_id: u32)`
-        ///   - `rep_issue` is a `symbol_short!` 9-char ASCII string, fitting
-        ///     within the Soroban compile-time short-symbol length check.
-        ///   - The topic does not collide with any other event topic in this
-        ///     contract (`init`, `mlstn_rls`, `ctrct_cmp`, `refunded`,
-        ///     `pause`, `unpaused`, `cancelled`, `evidence`, `fee`,
-        ///     `dispute`), giving indexers an unambiguous per-action filter.
-        ///   - The second topic element is `contract_id`, matching the
-        ///     per-contract scoping used by `mlstn_rls`, `ctrct_cmp`,
-        ///     `refunded`, `cancelled`, and `evidence`. This lets an indexer
-        ///     subscribe to a single contract's reputation stream, and —
-        ///     since each contract can only call `issue_reputation` once —
-        ///     the topic guarantees at-most-one event per contract_id.
-        ///   - Indexers that want a per-freelancer feed can filter on
-        ///     `freelancer` in the data payload instead.
-        ///
-        /// Data   : `(client: Address, freelancer: Address, rating: u32,
-        ///            total_rating: i128, completed_contracts: i128,
-        ///            timestamp: u64)`
-        ///   - `client`: the rater (must equal the stored `contract.client`,
-        ///     an invariant enforced by the caller-auth check above).
-        ///   - `freelancer`: the reputation subject; indexable as the
-        ///     primary key for a per-freelancer reputation feed.
-        ///   - `rating`: the per-issuance rating value (1..=5).
-        ///   - `total_rating`: the cumulative rating sum after this
-        ///     issuance, so the indexer can compute running averages
-        ///     without an extra storage read.
-        ///   - `completed_contracts`: cumulative count of completed
-        ///     contracts after this issuance, paired with `total_rating`
-        ///     for the same reason.
-        ///   - `timestamp`: ledger timestamp at issuance.
         env.events().publish(
-            (symbol_short!("rep_issue"), contract_id),
+            (symbol_short!("repr_put"), contract_id),
             (
-                contract.client.clone(),
                 contract.freelancer.clone(),
                 rating,
-                rep.total_rating,
-                rep.completed_contracts,
                 env.ledger().timestamp(),
             ),
         );
 
-        true
-    }
-
-    pub fn issue_reputation_batch(
-        env: Env,
-        caller: Address,
-        items: Vec<ReputationBatchItem>,
-    ) -> bool {
-        Self::require_not_paused(&env);
-        if items.len() > MAX_REPUTATION_BATCH_SIZE {
-            env.panic_with_error(Error::BatchItemLimitExceeded);
-        }
-        caller.require_auth();
-        let mut i = 0;
-        while i < items.len() {
-            let item = items.get(i).unwrap();
-            Self::validate_contract_id_bounds(&env, item.contract_id);
-            let mut contract: Contract = env
-                .storage()
-                .persistent()
-                .get(&DataKey::Contract(item.contract_id))
-                .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
-            ttl::extend_contract_ttl(&env, item.contract_id);
-            if caller != contract.client {
-                env.panic_with_error(Error::UnauthorizedRole);
-            }
-            if item.rating < 1 || item.rating > 5 {
-                env.panic_with_error(Error::InvalidRating);
-            }
-            if item.comment.len() == 0 {
-                env.panic_with_error(Error::EmptyComment);
-            }
-            if item.comment.len() > 200 {
-                env.panic_with_error(Error::CommentTooLong);
-            }
-            if contract.status != ContractStatus::Completed {
-                env.panic_with_error(Error::NotCompleted);
-            }
-            if contract.reputation_issued {
-                env.panic_with_error(Error::ReputationAlreadyIssued);
-            }
-            if contract.client == contract.freelancer {
-                env.panic_with_error(Error::SelfRating);
-            }
-            contract.reputation_issued = true;
-            env.storage()
-                .persistent()
-                .set(&DataKey::Contract(item.contract_id), &contract);
-            env.storage()
-                .persistent()
-                .set(&DataKey::ReputationIssued(item.contract_id), &true);
-            env.storage().persistent().extend_ttl(
-                &DataKey::ReputationIssued(item.contract_id),
-                ttl::PERSISTENT_BUMP_THRESHOLD,
-                ttl::PERSISTENT_TTL_LEDGERS,
-            );
-            let pending_key = DataKey::PendingReputationCredits(contract.freelancer.clone());
-            let pending: i128 = env.storage().persistent().get(&pending_key).unwrap_or(0);
-            if pending <= 0 {
-                env.panic_with_error(Error::InvalidState);
-            }
-            env.storage().persistent().set(&pending_key, &(pending - 1));
-            let rep_key = DataKey::Reputation(contract.freelancer.clone());
-            let mut rep: types::Reputation =
-                env.storage().persistent().get(&rep_key).unwrap_or_default();
-            rep.completed_contracts = rep
-                .completed_contracts
-                .checked_add(1)
-                .unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
-            rep.total_rating = rep
-                .total_rating
-                .checked_add(item.rating as i128)
-                .unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
-            rep.last_rating = item.rating as i128;
-            env.storage().persistent().set(&rep_key, &rep);
-            let comment_key = DataKey::ReputationComment(item.contract_id);
-            env.storage().persistent().set(&comment_key, &item.comment);
-            env.storage().persistent().extend_ttl(
-                &comment_key,
-                ttl::PERSISTENT_BUMP_THRESHOLD,
-                ttl::PERSISTENT_TTL_LEDGERS,
-            );
-            env.events().publish(
-                (symbol_short!("rep_iss"), item.contract_id),
-                (caller.clone(), item.rating, env.ledger().timestamp()),
-            );
-            i += 1;
-        }
         true
     }
 

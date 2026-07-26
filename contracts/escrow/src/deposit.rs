@@ -2,7 +2,7 @@ use crate::{
     accumulate_amounts, storage, ttl, Contract, ContractStatus, DataKey, Error, EscrowError,
     Milestone,
 };
-use soroban_sdk::{Address, Env, Vec};
+use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
 
 /// Validated deposit data that is safe to use before any token transfer.
 pub struct ValidatedDeposit {
@@ -112,7 +112,6 @@ pub fn apply_validated_deposit(
         total_amount,
     } = validated;
 
-    // Emit indexed deposit event carrying deposit details for off-chain reconstruction
     let deposit_amount = new_funded_amount - contract.funded_amount;
 
     ttl::extend_contract_ttl(&env, contract_id);
@@ -136,31 +135,10 @@ pub fn apply_validated_deposit(
 
     ttl::extend_contract_ttl(&env, contract_id);
 
-    // Emit indexed deposit event for off-chain reconstruction
     env.events().publish(
         (symbol_short!("deposit"), contract_id),
-        (
-            caller,
-            deposit_amount,
-            contract.funded_amount,
-            env.ledger().timestamp(),
-        ),
+        (deposit_amount, caller, env.ledger().timestamp()),
     );
-
-    // Emit a status-change event only when the status actually transitions.
-    if contract.status != old_status {
-        env.events().publish(
-            (symbol_short!("ctrct_st"), contract_id),
-            (
-                old_status as u32,
-                contract.status as u32,
-                contract.funded_amount,
-                contract.released_amount,
-                contract.refunded_amount,
-                env.ledger().timestamp(),
-            ),
-        );
-    }
 
     true
 }
