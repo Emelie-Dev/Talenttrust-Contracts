@@ -57,6 +57,12 @@ pub struct ContractBounds {
 
 // ── Core contract state ──────────────────────────────────────────────────────
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReputationKey {
+    pub user: Address,
+}
+
 // ─── Storage keys ──────────────────────────────────────────────────────────────
 
 /// Storage key variants for the escrow contract.
@@ -88,8 +94,8 @@ pub enum DataKey {
     MilestoneApprovals(u32, u32),
     // Reputation
     ReputationIssued(u32),
-    PendingReputationCredits(Address),
-    Reputation(Address),
+    PendingReputationCredits(ReputationKey),
+    Reputation(ReputationKey),
     ReputationComment(u32),
     // Client migration
     PendingClientMigration(u32),
