@@ -61,36 +61,16 @@ pub struct ContractSummary {
     pub milestones: Vec<MilestoneSummary>,
 }
 
-/// Protocol-wide bounds for contract validation.
-///
-/// This type carries the hard-coded limits used by `create_contract` and other
-/// validation paths. It is returned by `get_bounds()` for off-chain indexers
-/// and client applications.
-///
-/// Dedicated struct for protocol bounds prevents coupling the limits ABI to the
-/// per-contract summary schema version.
 #[contracttype]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ContractBounds {
-    /// Maximum number of milestones per contract.
     pub max_milestones: u32,
-    /// Maximum amount allowed for a single milestone (in stroops).
     pub max_single_milestone_stroops: i128,
-    /// Maximum total escrow amount for a single contract (in stroops).
     pub max_total_escrow_stroops: i128,
-    /// Maximum protocol fee in basis points (`MAX_FEE_BPS` = 100%).
     pub max_fee_bps: u32,
 }
 
-// ── Core contract state ──────────────────────────────────────────────────────
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ReputationKey {
-    pub user: Address,
-}
-
-// ─── Storage keys ──────────────────────────────────────────────────────────────
+// ── Storage keys ──────────────────────────────────────────────────────────────
 
 /// Storage key variants for the escrow contract.
 ///
@@ -131,8 +111,6 @@ pub enum DataKey {
     PendingGovernanceAdmin,
     ProtocolParameters,
     ProtocolFeeBps,
-    EventsLimit,
-    // Two-step admin transfer: pending admin stored here while proposal awaits acceptance
     PendingAdmin,
     AccumulatedProtocolFees,
     GovernedParameters,
@@ -141,226 +119,66 @@ pub enum DataKey {
     Finalization(u32),
     // Settlement token
     SettlementToken,
+    // State migration
+    State,
 }
 
-/// Well-known symbol that pairs with [`DataKey::Contract(contract_id)`] to
-/// form the canonical milestones storage key.
-///
-/// Reusing a single global `Symbol` instance keeps milestone reads/writes
-/// byte-identical to the historical `(DataKey::Contract(id), Symbol("milestones"))`
-/// tuple encoding. Centralising it here also lets [`MilestonesKey`]'s
-/// `IntoVal`/`TryFromVal` impls validate the second component without
-/// re-allocating the symbol on every conversion.
-///
-/// Kept `pub(crate)` so external crates cannot accidentally pin the literal —
-/// if the on-disk shape ever changes the inner `IntoVal` impl is the only
-/// reader of this constant, and tests inside the same crate remain the only
-/// external check.
-pub(crate) const MILESTONES_STORAGE_SYMBOL: &str = "milestones";
-
-/// Typed storage key for the `Vec<Milestone>` record associated with a
-/// single escrow contract.
-///
-/// Introduced in [#938]. Before this type existed the codebase used the
-/// ad-hoc tuple `(DataKey::Contract(contract_id), Symbol::new(&env,
-/// "milestones"))` at every read and write site (creation, deposit, release,
-/// refund, finalize, TTL helpers, etc.). That fan-out made the key shape
-/// easy to disagree with itself if anyone copy-paste-edited one of the
-/// sites. Centralising it here gives reviewers, future contributors, and
-/// `clippy` a single seam to reason about.
-///
-/// # Layout
-///
-/// `MilestonesKey` deliberately does NOT derive [`contracttype`]. Its
-/// `IntoVal<Env, Val>` implementation delegates to the canonical tuple,
-///
-/// ```text
-/// (DataKey::Contract(self.0), Symbol::new(&env, MILESTONES_STORAGE_SYMBOL))
-/// ```
-///
-/// so the on-disk storage bytes for any previously-written milestone
-/// vector are bit-identical to what `cargo run` produced before this
-/// refactor. New reads via `&MilestonesKey(id)` and old reads via the
-/// literal tuple return the same `Vec<Milestone>` for the same contract,
-/// because they hash to the same host-key.
-///
-/// # Usage
-///
-/// ```ignore
-/// use crate::{DataKey, MilestonesKey};
-///
-/// env.storage().persistent().set(&MilestonesKey(contract_id), &milestones);
-/// let ms: Vec<Milestone> = env.storage().persistent().get(&MilestonesKey(contract_id)).unwrap();
-/// env.storage().persistent().has(&MilestonesKey(contract_id));
-/// env.storage().persistent().extend_ttl(&MilestonesKey(contract_id), .., ..);
-/// ```
-///
-/// [`contracttype`]: soroban_sdk::contracttype
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct MilestonesKey(pub u32);
-
-impl MilestonesKey {
-    /// Construct a new milestones storage key for `contract_id`.
-    pub const fn new(contract_id: u32) -> Self {
-        Self(contract_id)
-    }
-
-    /// Borrow the contract_id this key refers to.
-    pub const fn contract_id(&self) -> u32 {
-        self.0
-    }
-
-    /// Reconstruct the legacy `(DataKey::Contract(id), "milestones")` tuple
-    /// form for callers that need an explicit tuple (e.g. tests asserting
-    /// storage shape or backwards-compatibility round trips).
-    ///
-    /// `pub(crate)` because the only readers are this module's `IntoVal`
-    /// impl and a handful of round-trip tests; there is no reason for
-    /// external crates to pin the literal string.
-    pub(crate) fn as_tuple(&self, env: &Env) -> (DataKey, Symbol) {
-        (
-            DataKey::Contract(self.0),
-            Symbol::new(env, MILESTONES_STORAGE_SYMBOL),
-        )
-    }
-}
-
-impl IntoVal<Env, Val> for MilestonesKey {
-    fn into_val(&self, env: &Env) -> Val {
-        // Delegating to the tuple's IntoVal guarantees byte-identical
-        // encoding to `(DataKey::Contract(id), Symbol::new(env, "milestones"))`.
-        // See module docs for guarantees around layout preservation.
-        self.as_tuple(env).into_val(env)
-    }
-}
-
-impl TryFromVal<Env, Val> for MilestonesKey {
-    type Error = ConversionError;
-
-    fn try_from_val(env: &Env, val: &Val) -> Result<Self, Self::Error> {
-        // Recover the underlying (DataKey, Symbol) tuple and verify both halves
-        // match the milestones entry shape. Returning Err for any other shape
-        // means callers using `MilestonesKey` as a storage key cannot
-        // accidentally read back a non-milestones value stored under the same
-        // hash (which, given our layout, should never happen — but 'should
-        // never' is not a runtime invariant).
-        let (k, s): (DataKey, Symbol) =
-            <(DataKey, Symbol) as TryFromVal<Env, Val>>::try_from_val(env, val)?;
-        let contract_id = match k {
-            DataKey::Contract(id) => id,
-            _ => return Err(ConversionError),
-        };
-        if s != Symbol::new(env, MILESTONES_STORAGE_SYMBOL) {
-            return Err(ConversionError);
-        }
-        Ok(MilestonesKey(contract_id))
-    }
-}
-
-/// Canonical contract error type for all entrypoint-facing errors.
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum Error {
-    /// The specified milestone index is out of bounds.
     IndexOutOfBounds = 3,
-    /// The milestone has already been released.
     AlreadyReleased = 4,
-    /// The refund request is empty.
     EmptyRefundRequest = 6,
-    /// Duplicate milestone indices specified in the refund request.
     DuplicateMilestoneInRefund = 7,
-    /// The milestone has already been refunded.
     AlreadyRefunded = 8,
-    /// Insufficient funds available to perform the operation.
     InsufficientFunds = 9,
-    /// The requested contract was not found.
     ContractNotFound = 10,
-    /// The caller is not authorized for this operation.
     UnauthorizedRole = 11,
-    /// The contract requires an arbiter address but none was provided.
     MissingArbiter = 12,
-    /// The provided arbiter address is invalid (e.g. same as client or freelancer).
     InvalidArbiter = 13,
-    /// The client and freelancer addresses are identical or invalid.
     InvalidParticipants = 14,
-    /// The amount must be strictly greater than zero.
     AmountMustBePositive = 15,
-    /// The contract is in an invalid state for this operation.
     InvalidState = 16,
-    /// The milestone has already been released.
     MilestoneAlreadyReleased = 17,
-    /// The milestone has already been approved.
     AlreadyApproved = 18,
-    /// The milestone has not received sufficient approvals to release.
     InsufficientApprovals = 20,
-    /// The freelancer address does not match the stored freelancer.
     FreelancerMismatch = 21,
-    /// The rating value is outside the allowed range (1 to 5).
     InvalidRating = 22,
-    /// Reputation has already been issued for this contract.
     ReputationAlreadyIssued = 23,
-    /// The milestone list cannot be empty.
     EmptyMilestones = 25,
-    /// The milestone amount is invalid.
     InvalidMilestoneAmount = 26,
-    /// A contract with the specified ID already exists.
     ContractIdCollision = 27,
-    /// The contract ID has overflowed the maximum limit.
     ContractIdOverflow = 28,
-    /// The comment string is empty.
     EmptyComment = 29,
-    /// The comment string exceeds the maximum length limit.
     CommentTooLong = 30,
-    /// The participant address is invalid.
     InvalidParticipant = 31,
-    /// The deposit amount is invalid.
     InvalidDepositAmount = 32,
-    /// The milestone configuration is invalid.
     InvalidMilestone = 33,
-    /// The contract has already been initialized.
     AlreadyInitialized = 34,
-    /// Insufficient accumulated fees available for extraction.
     InsufficientAccumulatedFees = 35,
-    /// The contract has not been initialized.
     NotInitialized = 36,
-    /// The contract is currently paused.
     ContractPaused = 37,
-    /// Emergency mode is currently active.
     EmergencyActive = 38,
-    /// Self-rating is not allowed.
     SelfRating = 39,
-    /// The contract has not been completed.
     NotCompleted = 40,
-    /// The requested contract status transition is invalid.
     InvalidStatusTransition = 41,
-    /// An arbiter is required for this operation.
     ArbiterRequired = 42,
-    /// The dispute split percentage is invalid.
     InvalidDisputeSplit = 43,
-    /// The operation would violate the core accounting invariant.
     AccountingInvariantViolated = 44,
-    /// Checked arithmetic operation resulted in an overflow.
     PotentialOverflow = 45,
-    /// The contract has already been finalized.
     AlreadyFinalized = 46,
-    /// The contract has already been cancelled.
     AlreadyCancelled = 50,
-    /// The work evidence string exceeds the maximum length limit.
     EvidenceTooLong = 47,
-    /// The governance admin rotation timelock has not elapsed.
     TimelockNotElapsed = 48,
-    /// The provided protocol parameters are invalid.
     InvalidProtocolParameters = 49,
-    /// The escrow cap would be exceeded by this operation.
     EscrowCapExceeded = 51,
-    /// No settlement token has been bound for custody transfers.
     SettlementTokenNotConfigured = 52,
-    /// The milestone deadline has not yet passed.
     MilestoneNotOverdue = 53,
+    InvalidContractId = 54,
+    BatchItemLimitExceeded = 55,
 }
 
-/// Contract lifecycle states
 #[contracttype]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ContractStatus {
@@ -374,7 +192,6 @@ pub enum ContractStatus {
     PartiallyFunded = 7,
 }
 
-/// Main escrow contract state
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Contract {
@@ -399,29 +216,18 @@ pub struct Milestone {
     pub refunded: bool,
     pub work_evidence: Option<String>,
     pub refunded_amount: i128,
-    /// Optional Unix timestamp (seconds) after which the client may claim
-    /// a timeout refund for this milestone without arbiter involvement.
-    /// None means no deadline — the milestone never expires.
     pub deadline: Option<u64>,
 }
 
-/// Defines who can approve milestone releases.
 #[contracttype]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ReleaseAuthorization {
-    /// Only client can approve.
     ClientOnly = 0,
-    /// Either client or arbiter can approve.
     ClientAndArbiter = 1,
-    /// Only arbiter can approve.
     ArbiterOnly = 2,
-    /// Both client and freelancer must approve; only either of them may release
-    /// after both approvals are present.
     MultiSig = 3,
 }
 
-/// Tracks approval status for a milestone.
-/// Stored in temporary storage with TTL for expiry grace period.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MilestoneApprovals {
@@ -437,17 +243,11 @@ pub enum DepositMode {
     Incremental = 1,
 }
 
-// ── Governance / readiness ───────────────────────────────────────────────────
-
-/// Readiness checklist stored under [`DataKey::ReadinessChecklist`].
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReadinessChecklist {
-    /// `true` after `initialize` has been called successfully.
     pub initialized: bool,
-    /// `true` after protocol governance parameters have been set.
     pub governed_params_set: bool,
-    /// `true` after an emergency control operation has been invoked.
     pub emergency_controls_enabled: bool,
 }
 
@@ -468,17 +268,12 @@ pub struct GovernedParameters {
     pub max_escrow_total_stroops: i128,
 }
 
-/// Stores a pending governance admin proposal with the proposed address
-/// and the ledger sequence when it was proposed.
-/// Used for the admin rotation timelock mechanism.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PendingAdminProposal {
     pub proposed: Address,
     pub proposed_at_ledger: u32,
 }
-
-// ── Reputation ───────────────────────────────────────────────────────────────
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq, Default)]
@@ -488,7 +283,13 @@ pub struct Reputation {
     pub last_rating: i128,
 }
 
-// ── Dispute Resolution ───────────────────────────────────────────────────────
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReputationBatchItem {
+    pub contract_id: u32,
+    pub rating: u32,
+    pub comment: String,
+}
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -517,4 +318,23 @@ impl DisputeResolution {
             Self::Split(_) => 3,
         }
     }
+}
+
+// ── State Migration Types ────────────────────────────────────────────────────
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StateV1 {
+    pub client: Address,
+    pub freelancer: Address,
+    pub milestones: Vec<i128>,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StateV2 {
+    pub client: Address,
+    pub freelancer: Address,
+    pub milestones: Vec<i128>,
+    pub status: ContractStatus,
 }

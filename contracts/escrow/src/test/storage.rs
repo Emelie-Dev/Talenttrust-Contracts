@@ -3,11 +3,8 @@ use super::{
     generated_participants, register_client, total_milestone_amount, MILESTONE_ONE, MILESTONE_THREE,
     MILESTONE_TWO,
 };
-use crate::{
-    ContractStatus, DataKey, EscrowError, Milestone, MilestonesKey, ReadinessChecklist,
-    ReleaseAuthorization,
-};
-use soroban_sdk::{testutils::Address as _, Address, Env, Symbol, Vec as SorobanVec};
+use crate::{ContractStatus, DataKey, EscrowError, ReadinessChecklist, ReleaseAuthorization};
+use soroban_sdk::{testutils::Address as _, Address, Env, Vec};
 
 // ─── Initialized / Admin ──────────────────────────────────────────────────────
 
@@ -422,6 +419,127 @@ fn reputation_requires_client_caller() {
     );
 }
 
+// ─── Reputation Batch ─────────────────────────────────────────────────
+
+fn reputation_batch_item(env: &Env, contract_id: u32, rating: u32) -> crate::ReputationBatchItem {
+    crate::ReputationBatchItem {
+        contract_id,
+        rating,
+        comment: String::from_str(&env, "batch comment"),
+    }
+}
+
+#[test]
+fn issue_reputation_batch_empty_is_noop() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+    let (c, _f, _id) = complete_contract(&env, &client);
+
+    let items: Vec<crate::ReputationBatchItem> = Vec::new(&env);
+    let result = client.issue_reputation_batch(&c, &items);
+    assert!(result);
+}
+
+#[test]
+fn issue_reputation_batch_over_cap_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+
+    let (c, _f, id) = complete_contract(&env, &client);
+
+    let mut items: Vec<crate::ReputationBatchItem> = Vec::new(&env);
+    for _ in 0..crate::MAX_REPUTATION_BATCH_SIZE + 1 {
+        let item = crate::ReputationBatchItem {
+            contract_id: id,
+            rating: 5,
+            comment: String::from_str(&env, "batch comment"),
+        };
+        items.push_back(&item);
+    }
+
+    assert_contract_error(
+        client.try_issue_reputation_batch(&c, &items),
+        EscrowError::BatchItemLimitExceeded,
+    );
+}
+
+#[test]
+fn issue_reputation_batch_at_cap_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+
+    let (c, f, id) = complete_contract(&env, &client);
+
+    let mut contract_ids: Vec<u32> = Vec::new(&env);
+    contract_ids.push_back(&id);
+
+    // Create additional contracts to fill up the batch cap.
+    for _ in 1..crate::MAX_REPUTATION_BATCH_SIZE {
+        let c2 = client
+            .create_contract(
+                &c,
+                &f,
+                &None,
+                &default_milestones(&env),
+                &ReleaseAuthorization::ClientOnly,
+            );
+        let total = total_milestone_amount();
+        client.deposit_funds(&c2, &c, &total);
+        for milestone_index in 0..3u32 {
+            client.approve_milestone_release(&c2, &c, &milestone_index);
+            client.release_milestone(&c2, &c, &milestone_index);
+        }
+        contract_ids.push_back(&c2);
+    }
+
+    let mut items: Vec<crate::ReputationBatchItem> = Vec::new(&env);
+    for i in 0..crate::MAX_REPUTATION_BATCH_SIZE {
+        let contract_id = contract_ids.get(i as u32).unwrap();
+        let item = crate::ReputationBatchItem {
+            contract_id: *contract_id,
+            rating: 5,
+            comment: String::from_str(&env, "batch comment"),
+        };
+        items.push_back(&item);
+    }
+
+    let result = client.issue_reputation_batch(&c, &items);
+    assert!(result);
+}
+
+#[test]
+fn issue_reputation_batch_per_item_semantics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+
+    let (c, f, id) = complete_contract(&env, &client);
+
+    let item = reputation_batch_item(&env, id, 4);
+    let mut items: Vec<crate::ReputationBatchItem> = Vec::new(&env);
+    items.push_back(&item);
+
+    let result = client.issue_reputation_batch(&c, &items);
+    assert!(result);
+
+    env.as_contract(&client.address, || {
+        let issued: bool = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ReputationIssued(id))
+            .unwrap_or(false);
+        assert!(issued);
+    });
+
+    let rep = client.get_reputation(&f).unwrap();
+    assert_eq!(rep.completed_contracts, 1);
+    assert_eq!(rep.total_rating, 4);
+    assert_eq!(rep.last_rating, 4);
+}
+
 // ─── ReadinessChecklist ───────────────────────────────────────────────────────
 
 #[test]
@@ -560,299 +678,4 @@ fn deposit_exceeding_total_fails() {
         client.try_deposit_funds(&id, &client_addr, &(total_milestone_amount() + 1)),
         EscrowError::ExactDepositRequired,
     );
-}
-
-// ─── MilestonesKey typed storage key (issue #938) ──────────────────────────
-//
-// These tests pin the byte-compatible contract of [`MilestonesKey`]:
-// reads/writes performed through the typed key are interchangeable with reads
-// and writes performed through the legacy `(DataKey::Contract(id),
-// Symbol::new(&env, "milestones"))` tuple. The on-disk storage bytes must
-// match so contracts persisted before the refactor remain reachable.
-
-/// Build a tiny milestone vector with deterministic amount / funded_amount
-/// values so round-trip equality assertions are robust.
-fn three_milestones(env: &Env) -> SorobanVec<Milestone> {
-    SorobanVec::from_array(
-        env,
-        [
-            Milestone {
-                amount: 100,
-                funded_amount: 0,
-                released: false,
-                refunded: false,
-                work_evidence: None,
-                refunded_amount: 0,
-                deadline: None,
-            },
-            Milestone {
-                amount: 200,
-                funded_amount: 0,
-                released: false,
-                refunded: false,
-                work_evidence: None,
-                refunded_amount: 0,
-                deadline: None,
-            },
-            Milestone {
-                amount: 300,
-                funded_amount: 0,
-                released: false,
-                refunded: false,
-                work_evidence: None,
-                refunded_amount: 0,
-                deadline: None,
-            },
-        ],
-    )
-}
-
-#[test]
-fn milestones_key_into_val_matches_legacy_tuple_into_val() {
-    let env = Env::default();
-    let contract_id: u32 = 17;
-
-    let key_val: soroban_sdk::Val = MilestonesKey::new(contract_id).into_val(&env);
-    let tuple_val: soroban_sdk::Val = (
-        DataKey::Contract(contract_id),
-        Symbol::new(&env, crate::MILESTONES_STORAGE_SYMBOL),
-    )
-        .into_val(&env);
-
-    // Forcing both through the same SCVal conversion path proves the two
-    // keys collide on the host's storage hash map. Any drift here would
-    // silently brick contracts that were written before the refactor.
-    let key_scval: soroban_sdk::xdr::ScVal = (&key_val).try_into_val(&env).unwrap();
-    let tuple_scval: soroban_sdk::xdr::ScVal = (&tuple_val).try_into_val(&env).unwrap();
-    assert_eq!(key_scval, tuple_scval);
-}
-
-#[test]
-fn milestones_key_try_from_val_round_trips_legacy_tuple_val() {
-    let env = Env::default();
-    let contract_id: u32 = 42;
-
-    let tuple_val: soroban_sdk::Val = (
-        DataKey::Contract(contract_id),
-        Symbol::new(&env, crate::MILESTONES_STORAGE_SYMBOL),
-    )
-        .into_val(&env);
-    let key: MilestonesKey = (&tuple_val).try_into_val(&env).unwrap();
-    assert_eq!(key, MilestonesKey::new(contract_id));
-    assert_eq!(key.contract_id(), contract_id);
-}
-
-#[test]
-fn milestones_key_try_from_val_rejects_wrong_first_component() {
-    let env = Env::default();
-    // A mis-typed first component (e.g. DataKey::Admin) must NOT resolve to a
-    // milestones key, even though soroban-sdk can technically decode a
-    // tuple-shaped Val. This is the protective invariant.
-    let bogus_val: soroban_sdk::Val = (
-        DataKey::Admin,
-        Symbol::new(&env, crate::MILESTONES_STORAGE_SYMBOL),
-    )
-        .into_val(&env);
-    let result: Result<MilestonesKey, _> = (&bogus_val).try_into_val(&env);
-    assert!(
-        result.is_err(),
-        "MilestonesKey::try_from_val must reject non-Contract first components; got {:?}",
-        result.ok()
-    );
-}
-
-#[test]
-fn milestones_key_try_from_val_rejects_wrong_symbol() {
-    let env = Env::default();
-    // A wrong second component (different symbol) must NOT resolve.
-    let bogus_val: soroban_sdk::Val =
-        (DataKey::Contract(7u32), Symbol::new(&env, "not-milestones")).into_val(&env);
-    let result: Result<MilestonesKey, _> = (&bogus_val).try_into_val(&env);
-    assert!(
-        result.is_err(),
-        "MilestonesKey::try_from_val must reject foreign symbols; got {:?}",
-        result.ok()
-    );
-}
-
-#[test]
-fn write_with_legacy_tuple_read_with_milestones_key() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let client = register_client(&env);
-
-    let escrow_addr = client.address.clone();
-    let contract_id: u32 = 1;
-
-    env.as_contract(&escrow_addr, || {
-        let store = env.storage().persistent();
-        // Write via the legacy tuple (this is what write_sites pre-#938 did).
-        store.set(
-            &(DataKey::Contract(contract_id), Symbol::new(&env, "milestones")),
-            &three_milestones(&env),
-        );
-    });
-
-    env.as_contract(&escrow_addr, || {
-        // Read via the typed key. Must return the same vector.
-        let read_typed: SorobanVec<Milestone> = env
-            .storage()
-            .persistent()
-            .get(&MilestonesKey::new(contract_id))
-            .expect("milestones should be readable via typed key");
-        let read_legacy: SorobanVec<Milestone> = env
-            .storage()
-            .persistent()
-            .get(&(DataKey::Contract(contract_id), Symbol::new(&env, "milestones")))
-            .expect("milestones should be readable via legacy tuple");
-        assert_eq!(read_typed, read_legacy);
-        assert_eq!(read_typed.len(), 3);
-        assert_eq!(read_typed.get(0).unwrap().amount, 100);
-        assert_eq!(read_typed.get(2).unwrap().amount, 300);
-    });
-}
-
-#[test]
-fn write_with_milestones_key_read_with_legacy_tuple() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let client = register_client(&env);
-
-    let escrow_addr = client.address.clone();
-    let contract_id: u32 = 1;
-
-    env.as_contract(&escrow_addr, || {
-        // Write via the typed key (this is what write_sites post-#938 do).
-        env.storage()
-            .persistent()
-            .set(&MilestonesKey::new(contract_id), &three_milestones(&env));
-    });
-
-    env.as_contract(&escrow_addr, || {
-        // Read via the legacy tuple. Must return the same vector.
-        let via_legacy: SorobanVec<Milestone> = env
-            .storage()
-            .persistent()
-            .get(&(DataKey::Contract(contract_id), Symbol::new(&env, "milestones")))
-            .expect("legacy tuple read must succeed after typed-key write");
-        assert_eq!(via_legacy.len(), 3);
-        assert_eq!(via_legacy.get(1).unwrap().amount, 200);
-
-        // Also confirm `has_milestones()` (the typed `has`) returns true.
-        assert!(crate::ttl::has_milestones(&env, contract_id));
-    });
-}
-
-#[test]
-fn milestones_key_has_returns_false_for_absent_contract() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let client = register_client(&env);
-
-    env.as_contract(&client.address, || {
-        assert!(
-            !crate::ttl::has_milestones(&env, 9999),
-            "absent milestones entry must report false (typed `has`)"
-        );
-        assert!(
-            !env.storage()
-                .persistent()
-                .has(&MilestonesKey::new(9999)),
-            "absent milestones entry must report false (direct `has` call)"
-        );
-    });
-}
-
-#[test]
-fn milestones_key_has_returns_true_after_store() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let client = register_client(&env);
-
-    env.as_contract(&client.address, || {
-        env.storage()
-            .persistent()
-            .set(&MilestonesKey::new(99), &three_milestones(&env));
-        assert!(crate::ttl::has_milestones(&env, 99));
-        assert!(
-            env.storage()
-                .persistent()
-                .has(&MilestonesKey::new(99)),
-            "present milestones entry must report true"
-        );
-        // A neighbouring id was never written — must remain false.
-        assert!(!crate::ttl::has_milestones(&env, 100));
-    });
-}
-
-#[test]
-fn milestones_key_extend_ttl_succeeds_via_typed_key() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let client = register_client(&env);
-
-    env.ledger().with_mut(|li| {
-        li.max_entry_ttl = 10_000;
-        li.min_persistent_entry_ttl = 10_000;
-    });
-
-    let contract_id: u32 = 5;
-    env.as_contract(&client.address, || {
-        env.storage()
-            .persistent()
-            .set(&MilestonesKey::new(contract_id), &three_milestones(&env));
-    });
-
-    env.as_contract(&client.address, || {
-        // Generic extend_ttl through the typed key. Must not panic; this
-        // exercises every call site that uses
-        // `env.storage().persistent().extend_ttl(&MilestonesKey::new(id), ...)`.
-        env.storage().persistent().extend_ttl(
-            &MilestonesKey::new(contract_id),
-            100,
-            5_000,
-        );
-        let stored: SorobanVec<Milestone> = env
-            .storage()
-            .persistent()
-            .get(&MilestonesKey::new(contract_id))
-            .expect("value should survive extend_ttl");
-        assert_eq!(stored.len(), 3);
-    });
-}
-
-#[test]
-fn has_milestones_returns_false_after_remove() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let client = register_client(&env);
-
-    env.as_contract(&client.address, || {
-        env.storage()
-            .persistent()
-            .set(&MilestonesKey::new(3), &three_milestones(&env));
-        assert!(crate::ttl::has_milestones(&env, 3));
-        env.storage()
-            .persistent()
-            .remove(&MilestonesKey::new(3));
-        assert!(
-            !crate::ttl::has_milestones(&env, 3),
-            "removed milestones entry must report false"
-        );
-        assert!(
-            env.storage()
-                .persistent()
-                .get::<_, SorobanVec<Milestone>>(&MilestonesKey::new(3))
-                .is_none(),
-            "removed milestones entry must return None on read"
-        );
-    });
-}
-
-#[test]
-fn milestone_storage_key_helper_returns_milestones_key() {
-    let env = Env::default();
-    let k = crate::ttl::milestone_storage_key(&env, 8);
-    assert_eq!(k, MilestonesKey::new(8));
-    assert_eq!(k.contract_id(), 8);
 }
