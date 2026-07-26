@@ -56,6 +56,7 @@ mod approvals;
 mod deposit;
 mod finalize;
 mod migration;
+mod storage;
 mod ttl;
 mod types;
 mod utils;
@@ -1591,15 +1592,8 @@ impl Escrow {
     /// * `AlreadyCancelled` - If the contract was already cancelled.
     /// * `InvalidStatusTransition` - If the contract is not `Created`/`Funded` or has already released funds.
     pub fn cancel_contract(env: Env, contract_id: u32, client: Address) -> bool {
-        Self::require_not_paused(&env);
-        let mut contract: Contract = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Contract(contract_id))
-            .unwrap_or_else(|| env.panic_with_error(EscrowError::ContractNotFound));
+        let mut contract = Self::require_contract_mutable(&env, contract_id);
         ttl::extend_contract_ttl(&env, contract_id);
-
-        Self::require_not_finalized(&env, contract_id);
 
         if client != contract.client {
             env.panic_with_error(EscrowError::UnauthorizedRole);
@@ -2185,17 +2179,11 @@ impl Escrow {
         /// Gate: contract must have been initialized so pause and emergency rails
         /// are always in scope before any state mutation can occur.
         Self::require_initialized(&env);
-        Self::require_not_paused(&env);
         caller.require_auth();
 
-        let mut contract: Contract = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Contract(contract_id))
-            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
+        let mut contract = Self::require_contract_mutable(&env, contract_id);
 
         ttl::extend_contract_ttl(&env, contract_id);
-        Self::require_not_finalized(&env, contract_id);
 
         // Verify caller is client or freelancer
         if caller != contract.client && caller != contract.freelancer {
@@ -2269,17 +2257,11 @@ impl Escrow {
         /// Gate: contract must have been initialized so pause and emergency rails
         /// are always in scope before any state mutation can occur.
         Self::require_initialized(&env);
-        Self::require_not_paused(&env);
         arbiter.require_auth();
 
-        let mut contract: Contract = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Contract(contract_id))
-            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
+        let mut contract = Self::require_contract_mutable(&env, contract_id);
 
         ttl::extend_contract_ttl(&env, contract_id);
-        Self::require_not_finalized(&env, contract_id);
 
         // Verify contract is in Disputed state
         if contract.status != ContractStatus::Disputed {

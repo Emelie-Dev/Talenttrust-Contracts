@@ -1,7 +1,8 @@
 use crate::{
-    accumulate_amounts, ttl, Contract, ContractStatus, DataKey, Error, EscrowError, Milestone,
+    accumulate_amounts, storage, ttl, Contract, ContractStatus, DataKey, Error, EscrowError,
+    Milestone,
 };
-use soroban_sdk::{Address, Env, Symbol, Vec};
+use soroban_sdk::{Address, Env, Vec};
 
 /// Validated deposit data that is safe to use before any token transfer.
 pub struct ValidatedDeposit {
@@ -26,11 +27,7 @@ pub fn validate_deposit(
         env.panic_with_error(Error::AmountMustBePositive);
     }
 
-    let contract: Contract = env
-        .storage()
-        .persistent()
-        .get(&DataKey::Contract(contract_id))
-        .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
+    let contract: Contract = storage::load_contract(env, contract_id);
 
     if caller != &contract.client {
         env.panic_with_error(Error::UnauthorizedRole);
@@ -51,17 +48,12 @@ pub fn validate_deposit(
         env.panic_with_error(Error::InvalidState);
     }
 
-    let milestone_key = Symbol::new(env, "milestones");
-    let milestones: Vec<Milestone> = env
-        .storage()
-        .persistent()
-        .get(&(DataKey::Contract(contract_id), milestone_key))
-        .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
+    let milestones: Vec<Milestone> = storage::load_milestones(env, contract_id);
 
-    /// Calculate the total amount from milestones with checked arithmetic.
-    /// This prevents overflow panics that would brick the contract if a malformed
-    /// contract with many large milestones were created (unlikely given the
-    /// validation in create_contract, but defense-in-depth).
+    // Calculate the total amount from milestones with checked arithmetic.
+    // This prevents overflow panics that would brick the contract if a malformed
+    // contract with many large milestones were created (unlikely given the
+    // validation in create_contract, but defense-in-depth).
     let total_amount: i128 = accumulate_amounts(milestones.iter().map(|m| m.amount))
         .unwrap_or_else(|err| env.panic_with_error(err));
     let new_funded_amount = contract

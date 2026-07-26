@@ -1,5 +1,5 @@
 use crate::ttl::{read_if_live, remove_transient, store_with_ttl, PENDING_MIGRATION_TTL_LEDGERS};
-use crate::{Contract, ContractStatus, DataKey, Error, Escrow, EscrowError};
+use crate::{storage, ContractStatus, DataKey, Error, Escrow, EscrowError};
 use soroban_sdk::{contracttype, Address, Env, Symbol};
 
 #[contracttype]
@@ -14,13 +14,6 @@ pub struct PendingClientMigration {
 impl Escrow {
     pub(crate) fn pending_migration_key(contract_id: u32) -> DataKey {
         DataKey::PendingClientMigration(contract_id)
-    }
-
-    pub(crate) fn load_contract(env: &Env, contract_id: u32) -> Contract {
-        env.storage()
-            .persistent()
-            .get::<_, Contract>(&DataKey::Contract(contract_id))
-            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound))
     }
 
     pub(crate) fn require_migration_allowed(env: &Env, status: ContractStatus) {
@@ -51,11 +44,9 @@ impl Escrow {
         current_client: Address,
         new_client: Address,
     ) -> bool {
-        Self::require_not_paused(&env);
         current_client.require_auth();
 
-        let contract = Self::load_contract(&env, contract_id);
-        Self::require_not_finalized(&env, contract_id);
+        let contract = Self::require_contract_mutable(&env, contract_id);
         if current_client != contract.client {
             env.panic_with_error(EscrowError::UnauthorizedRole);
         }
@@ -95,11 +86,9 @@ impl Escrow {
         contract_id: u32,
         new_client: Address,
     ) -> bool {
-        Self::require_not_paused(&env);
         new_client.require_auth();
 
-        let mut contract = Self::load_contract(&env, contract_id);
-        Self::require_not_finalized(&env, contract_id);
+        let contract = Self::require_contract_mutable(&env, contract_id);
         Self::require_migration_allowed(&env, contract.status);
 
         let key = Self::pending_migration_key(contract_id);
@@ -129,11 +118,9 @@ impl Escrow {
     /// The current client must authorize the call, be the contract's client, and a live pending migration must exist.
     /// The pending migration entry is removed and a `client_migration_cancelled` event is emitted.
     pub fn cancel_client_migration(env: Env, contract_id: u32, current_client: Address) -> bool {
-        Self::require_not_paused(&env);
         current_client.require_auth();
 
-        let contract = Self::load_contract(&env, contract_id);
-        Self::require_not_finalized(&env, contract_id);
+        let contract = Self::require_contract_mutable(&env, contract_id);
         if current_client != contract.client {
             env.panic_with_error(EscrowError::UnauthorizedRole);
         }
