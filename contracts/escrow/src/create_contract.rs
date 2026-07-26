@@ -1,6 +1,9 @@
 use crate::{
     amount_validation, ttl, Contract, ContractStatus, DataKey, Escrow, EscrowArgs, EscrowClient,
     EscrowError, GovernedParameters, Milestone, ReleaseAuthorization, Error, MAX_MILESTONES,
+    amount_validation, ttl, Contract, ContractStatus, DataKey, Error, Escrow, EscrowArgs,
+    EscrowClient, EscrowError, GovernedParameters, Milestone, ReleaseAuthorization, MAX_MILESTONES,
+
 };
 use soroban_sdk::{contractimpl, symbol_short, Address, Env, Symbol, Vec};
 
@@ -68,49 +71,49 @@ impl Escrow {
             _ => {}
         }
 
-    // Validate arbiter is distinct from both client and freelancer.
-    if let Some(ref arb) = arbiter {
-        if arb == &client || arb == &freelancer {
-            env.panic_with_error(EscrowError::InvalidArbiter);
+        // Validate arbiter is distinct from both client and freelancer.
+        if let Some(ref arb) = arbiter {
+            if arb == &client || arb == &freelancer {
+                env.panic_with_error(EscrowError::InvalidArbiter);
+            }
         }
-    }
 
-    // Validate at least one milestone is specified.
-    if milestones.is_empty() {
-        env.panic_with_error(EscrowError::EmptyMilestones);
-    }
+        // Validate at least one milestone is specified.
+        if milestones.is_empty() {
+            env.panic_with_error(EscrowError::EmptyMilestones);
+        }
 
-    // Enforce maximum number of milestones.
-    if milestones.len() > MAX_MILESTONES {
-        env.panic_with_error(EscrowError::TooManyMilestones);
-    }
+        // Enforce maximum number of milestones.
+        if milestones.len() > MAX_MILESTONES {
+            env.panic_with_error(EscrowError::TooManyMilestones);
+        }
 
-    // Retrieve governed parameters for total escrow cap; allow any total if unset.
-    let max_total = env
-        .storage()
-        .persistent()
-        .get::<_, GovernedParameters>(&DataKey::GovernedParameters)
-        .map(|params| params.max_escrow_total_stroops)
-        .unwrap_or(i128::MAX);
+        // Retrieve governed parameters for total escrow cap; allow any total if unset.
+        let max_total = env
+            .storage()
+            .persistent()
+            .get::<_, GovernedParameters>(&DataKey::GovernedParameters)
+            .map(|params| params.max_escrow_total_stroops)
+            .unwrap_or(i128::MAX);
 
-    // Validate milestone amounts and enforce the total cap via the canonical helper.
-    let mut native_milestones = [0_i128; MAX_MILESTONES as usize];
-    let len = milestones.len() as usize;
-    for i in 0..len {
-        native_milestones[i] = milestones.get(i as u32).unwrap();
-    }
-    match amount_validation::validate_milestone_amounts(&native_milestones[..len], max_total) {
-        Ok(_) => (),
-        Err(err) => match err {
-            EscrowError::InvalidMilestoneAmount => {
-                env.panic_with_error(EscrowError::InvalidMilestoneAmount)
-            }
-            EscrowError::TotalCapExceeded => {
-                env.panic_with_error(EscrowError::TotalCapExceeded)
-            }
-            _ => env.panic_with_error(EscrowError::InvalidMilestoneAmount),
-        },
-    }
+        // Validate milestone amounts and enforce the total cap via the canonical helper.
+        let mut native_milestones = [0_i128; MAX_MILESTONES as usize];
+        let len = milestones.len() as usize;
+        for i in 0..len {
+            native_milestones[i] = milestones.get(i as u32).unwrap();
+        }
+        match amount_validation::validate_milestone_amounts(&native_milestones[..len], max_total) {
+            Ok(_) => (),
+            Err(err) => match err {
+                EscrowError::InvalidMilestoneAmount => {
+                    env.panic_with_error(EscrowError::InvalidMilestoneAmount)
+                }
+                EscrowError::TotalCapExceeded => {
+                    env.panic_with_error(EscrowError::TotalCapExceeded)
+                }
+                _ => env.panic_with_error(EscrowError::InvalidMilestoneAmount),
+            },
+        }
 
         // Extend TTL for the next-contract-id counter before reading it.
         ttl::extend_next_contract_id_ttl(&env);
@@ -118,6 +121,9 @@ impl Escrow {
         let id = next_contract_id(&env);
 
         let freelancer_addr = freelancer.clone();
+
+        // Construct the contract with all required fields, initialising accounting
+        // counters to zero and reputation_issued to false.
         let contract = Contract {
             client: client.clone(),
             freelancer: freelancer.clone(),
@@ -161,13 +167,14 @@ impl Escrow {
             .persistent()
             .set(&DataKey::NextContractId, &next_id);
 
-    // Emit creation event for indexers and off-chain subscribers.
-    env.events().publish(
-        (symbol_short!("created"), id),
-        (client, freelancer_addr, env.ledger().timestamp()),
-    );
+        // Emit creation event for indexers and off-chain subscribers.
+        env.events().publish(
+            (symbol_short!("created"), id),
+            (client, freelancer_addr, env.ledger().timestamp()),
+        );
 
-    id
+        id
+
     }
 }
 

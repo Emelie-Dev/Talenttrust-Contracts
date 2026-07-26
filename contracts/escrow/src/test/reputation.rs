@@ -342,6 +342,7 @@ fn get_average_rating_fractional_average_is_preserved() {
 }
 
 
+
 #[test]
 fn issue_reputation_rejects_invalid_contract_id_zero() {
     let env = Env::default();
@@ -410,3 +411,4 @@ fn get_reputation_comment_rejects_invalid_contract_id_out_of_bounds() {
     // Try to use contract_id = 2 (which is next_contract_id)
     assert!(client.get_reputation_comment(&2).is_none());
 }
+
