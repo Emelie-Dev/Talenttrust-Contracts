@@ -202,6 +202,21 @@ impl Escrow {
             .persistent()
             .set(&DataKey::SettlementToken, token);
     }
+
+    /// Return a ready-to-use `token::Client` for the bound settlement token.
+    ///
+    /// Panics with `SettlementTokenNotConfigured` when no token has been bound
+    /// yet (i.e. `bind_settlement_token` has not been called). This is the
+    /// single place that enforces the "token must be configured before any
+    /// value-moving operation" precondition; all transfer-bearing entrypoints
+    /// (`deposit_funds`, `release_milestone`, `refund_unreleased_milestones`,
+    /// `cancel_contract`, `withdraw_protocol_fees`) route through here rather
+    /// than repeating the inline fetch-and-panic pattern.
+    pub(crate) fn require_settlement_token(env: &Env) -> token::Client {
+        let addr = Self::read_settlement_token(env)
+            .unwrap_or_else(|| env.panic_with_error(Error::SettlementTokenNotConfigured));
+        token::Client::new(env, &addr)
+    }
 }
 
 #[contractimpl]
@@ -540,10 +555,7 @@ impl Escrow {
         // rejected deposits cannot debit the client and then fail state checks.
         let validated = deposit::validate_deposit(&env, contract_id, &caller, amount);
 
-        let token = Self::read_settlement_token(&env)
-            .unwrap_or_else(|| env.panic_with_error(Error::SettlementTokenNotConfigured));
-
-        let token_client = token::Client::new(&env, &token);
+        let token_client = Self::require_settlement_token(&env);
         token_client.transfer(&caller, &env.current_contract_address(), &amount);
 
         deposit::apply_validated_deposit(&env, contract_id, caller, validated)
@@ -938,9 +950,7 @@ impl Escrow {
         // Transfer the net amount (gross minus fee) to the freelancer.
         // The fee portion remains in the contract's token balance and is
         // tracked separately in AccumulatedProtocolFees.
-        let token = Self::read_settlement_token(&env)
-            .unwrap_or_else(|| env.panic_with_error(Error::SettlementTokenNotConfigured));
-        let token_client = token::Client::new(&env, &token);
+        let token_client = Self::require_settlement_token(&env);
         token_client.transfer(
             &env.current_contract_address(),
             &contract.freelancer,
@@ -1266,10 +1276,7 @@ impl Escrow {
         }
 
         // Transfer tokens from contract to client
-        let token = Self::read_settlement_token(&env)
-            .unwrap_or_else(|| env.panic_with_error(Error::SettlementTokenNotConfigured));
-
-        let token_client = token::Client::new(&env, &token);
+        let token_client = Self::require_settlement_token(&env);
         token_client.transfer(
             &env.current_contract_address(),
             &contract.client,
@@ -1964,9 +1971,7 @@ impl Escrow {
         let refund_amount =
             contract.funded_amount - contract.released_amount - contract.refunded_amount;
         if refund_amount > 0 {
-            let token = Self::read_settlement_token(&env)
-                .unwrap_or_else(|| env.panic_with_error(EscrowError::NotInitialized));
-            token::Client::new(&env, &token).transfer(
+            Self::require_settlement_token(&env).transfer(
                 &env.current_contract_address(),
                 &client,
                 &refund_amount,
@@ -2457,10 +2462,7 @@ impl Escrow {
             env.panic_with_error(EscrowError::InsufficientAccumulatedFees);
         }
 
-        let token = match Self::read_settlement_token(&env) {
-            Some(t) => t,
-            None => env.panic_with_error(Error::SettlementTokenNotConfigured),
-        };
+        let token_client = Self::require_settlement_token(&env);
 
         let new_accumulated = accumulated - amount;
         env.storage()
@@ -2473,7 +2475,6 @@ impl Escrow {
             ttl::PERSISTENT_TTL_LEDGERS,
         );
 
-        let token_client = soroban_sdk::token::Client::new(&env, &token);
         token_client.transfer(&env.current_contract_address(), &to, &amount);
 
         env.events().publish(
