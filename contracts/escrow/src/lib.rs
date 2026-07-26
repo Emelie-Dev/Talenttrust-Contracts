@@ -97,10 +97,10 @@ pub use ttl::{
 // re-exported here; `dispute.rs` uses them via `crate::DisputeResolution`.
 pub use milestones::{Milestone, MilestoneApprovals, MilestoneSummary, ReleaseAuthorization};
 pub use types::{
-    ArbiterEntry, Contract, ContractBounds, ContractStatus, ContractSummary, DataKey, DepositMode,
-    DisputeResolution, DisputeSplit, Error, GovernedParameters, Milestone, MilestoneApprovals,
-    MilestoneSummary, PendingAdminProposal, ReadinessChecklist, ReleaseAuthorization, Reputation,
-    SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION,
+    Contract, ContractBounds, ContractStatus, ContractSummary, DataKey, DepositMode,
+    DisputeOutcome, DisputeRecord, DisputeResolution, DisputeSplit, Error, GovernedParameters,
+    Milestone, MilestoneApprovals, MilestoneSummary, PendingAdminProposal, ReadinessChecklist,
+    ReleaseAuthorization, Reputation, SplitAmounts, CONTRACT_SUMMARY_SCHEMA_VERSION,
 };
 
 /// Default maximum number of milestones allowed per contract.
@@ -2358,9 +2358,20 @@ impl Escrow {
             .persistent()
             .set(&DataKey::Contract(contract_id), &contract);
 
-        ttl::extend_contract_ttl(env, contract_id);
+        // Write a typed dispute record so reads/writes go through a named key
+        // rather than ad-hoc tuples embedded in the Contract struct.
+        let dispute_record = DisputeRecord {
+            raised_by: caller.clone(),
+            raised_at: env.ledger().timestamp(),
+            outcome: DisputeOutcome::Open,
+            resolved_at: None,
+        };
+        env.storage()
+            .persistent()
+            .set(&DataKey::Dispute(contract_id), &dispute_record);
+        ttl::extend_dispute_ttl(&env, contract_id);
 
-        Self::increment_dispute_count(&env, contract_id);
+        ttl::extend_contract_ttl(&env, contract_id);
 
         env.events().publish(
             (symbol_short!("dispute"), symbol_short!("opened")),
@@ -2471,6 +2482,20 @@ impl Escrow {
             .set(&DataKey::Contract(contract_id), &contract);
         rollback::clear_dispute_rollback(&env, contract_id);
 
+        // Update the typed dispute record with the resolution outcome.
+        if let Some(mut record) = env
+            .storage()
+            .persistent()
+            .get::<_, DisputeRecord>(&DataKey::Dispute(contract_id))
+        {
+            record.outcome = DisputeOutcome::from_resolution(&resolution);
+            record.resolved_at = Some(env.ledger().timestamp());
+            env.storage()
+                .persistent()
+                .set(&DataKey::Dispute(contract_id), &record);
+            ttl::extend_dispute_ttl(&env, contract_id);
+        }
+
         ttl::extend_contract_ttl(&env, contract_id);
 
         env.events().publish(
@@ -2491,6 +2516,17 @@ impl Escrow {
         );
 
         true
+    }
+
+    /// Returns the typed dispute record for `contract_id`, or `None` if no
+    /// dispute has been raised for that contract.
+    pub fn get_dispute_record(env: Env, contract_id: u32) -> Option<DisputeRecord> {
+        let key = DataKey::Dispute(contract_id);
+        let record = env.storage().persistent().get(&key);
+        if record.is_some() {
+            ttl::extend_dispute_ttl(&env, contract_id);
+        }
+        record
     }
 }
 

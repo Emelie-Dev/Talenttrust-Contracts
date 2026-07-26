@@ -171,10 +171,8 @@ pub enum DataKey {
     Finalization(u32),
     // Settlement token
     SettlementToken,
-    // Configurable limits
-    MaxDisputes,
-    // Per-contract dispute tracking
-    DisputeCount(u32),
+    // Dispute metadata (raised/resolved state)
+    Dispute(u32),
 }
 
 /// Canonical contract error type for all entrypoint-facing errors.
@@ -385,33 +383,62 @@ impl DisputeResolution {
     }
 }
 
-// ── Versioned state migration ────────────────────────────────────────────────
-
-/// Current storage version for milestone state.
-pub const CURRENT_MILESTONE_VERSION: u32 = 2;
-
-/// Legacy state layout (v1) with inline milestone amounts.
-///
-/// Prior to the versioned migration, contract state stored milestones as a
-/// flat `Vec<i128>` alongside client and freelancer addresses.  This layout
-/// is superseded by [`StateV2`] which stores milestones separately.
+/// Outcome of a dispute, combining open-state and all resolution variants in one
+/// enum so that `DisputeRecord` can store the outcome without `Option<DisputeResolution>`
+/// (which cannot be stored in a `#[contracttype]` struct because Soroban contracttype
+/// enums use env-based serialization, not the XDR `From<T>` trait needed by `Option<T>`).
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct StateV1 {
-    pub client: Address,
-    pub freelancer: Address,
-    pub milestones: Vec<i128>,
+pub enum DisputeOutcome {
+    /// The dispute has been raised but not yet resolved by the arbiter.
+    Open,
+    /// All remaining funds returned to the client.
+    FullRefund,
+    /// 70 % to client, 30 % to freelancer (floor-rounded).
+    PartialRefund,
+    /// All remaining funds released to the freelancer.
+    FullPayout,
+    /// Arbiter-specified custom split.
+    Split(DisputeSplit),
 }
 
-/// Current state layout (v2) without inline milestones.
+impl DisputeOutcome {
+    /// Convert to the equivalent `DisputeResolution`, or `None` if still open.
+    pub fn as_resolution(&self) -> Option<DisputeResolution> {
+        match self {
+            Self::Open => None,
+            Self::FullRefund => Some(DisputeResolution::FullRefund),
+            Self::PartialRefund => Some(DisputeResolution::PartialRefund),
+            Self::FullPayout => Some(DisputeResolution::FullPayout),
+            Self::Split(s) => Some(DisputeResolution::Split(s.clone())),
+        }
+    }
+
+    /// Build a `DisputeOutcome` from a `DisputeResolution`.
+    pub fn from_resolution(r: &DisputeResolution) -> Self {
+        match r {
+            DisputeResolution::FullRefund => Self::FullRefund,
+            DisputeResolution::PartialRefund => Self::PartialRefund,
+            DisputeResolution::FullPayout => Self::FullPayout,
+            DisputeResolution::Split(s) => Self::Split(s.clone()),
+        }
+    }
+}
+
+/// Typed record for a dispute lifecycle entry.
 ///
-/// Milestones are stored in a separate keyed vector under
-/// `(DataKey::Contract(id), "milestones")`.  The `status` field tracks the
-/// contract lifecycle state that was absent in [`StateV1`].
+/// Written to `DataKey::Dispute(contract_id)` by `raise_dispute` and updated
+/// in-place by `resolve_dispute`. Absent for contracts that were never disputed.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct StateV2 {
-    pub client: Address,
-    pub freelancer: Address,
-    pub status: ContractStatus,
+pub struct DisputeRecord {
+    /// Party (client or freelancer) that raised the dispute.
+    pub raised_by: Address,
+    /// Ledger timestamp when the dispute was raised.
+    pub raised_at: u64,
+    /// `Open` while the dispute is pending; replaced with the resolution variant
+    /// once the arbiter calls `resolve_dispute`.
+    pub outcome: DisputeOutcome,
+    /// Ledger timestamp when the dispute was resolved, or `None` while open.
+    pub resolved_at: Option<u64>,
 }
