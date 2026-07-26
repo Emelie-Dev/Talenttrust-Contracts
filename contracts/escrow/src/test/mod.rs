@@ -16,6 +16,7 @@ mod accounting_invariants;
 mod approval_expiry;
 mod bounds_validation;
 mod cancel_contract;
+mod batch_settlement;
 mod client_migration;
 mod contracts;
 mod create_contract_bounds;

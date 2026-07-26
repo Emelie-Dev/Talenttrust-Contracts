@@ -645,3 +645,39 @@ pub struct DisputeRecord {
     /// Ledger timestamp when the dispute was resolved, or `None` while open.
     pub resolved_at: Option<u64>,
 }
+
+// ── Batch settlement ─────────────────────────────────────────────────────────
+
+/// A single item in a [`Escrow::finalize_contracts_batch`] request.
+///
+/// Each entry pairs a `contract_id` with the `finalizer` address that is
+/// authorizing closure of that contract.  The finalizer must be the stored
+/// client, freelancer, or assigned arbiter — the same role check as the
+/// single-item [`Escrow::finalize_contract`] entrypoint.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SettlementItem {
+    /// The escrow contract to finalize.
+    pub contract_id: u32,
+    /// The address authorizing finalization (client, freelancer, or arbiter).
+    pub finalizer: Address,
+}
+
+/// Per-item outcome returned by [`Escrow::finalize_contracts_batch`].
+///
+/// Every item in the input vector produces exactly one `BatchSettlementResult`
+/// at the same position.  Inspect `success` first; when `false`, `error_code`
+/// carries the numeric discriminant of the [`EscrowError`] that would have
+/// been returned by the equivalent single-item call.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BatchSettlementResult {
+    /// Zero-based position of this item in the input vector.
+    pub index: u32,
+    /// The contract ID from the corresponding [`SettlementItem`].
+    pub contract_id: u32,
+    /// `true` when finalization succeeded; `false` on any per-item error.
+    pub success: bool,
+    /// Error discriminant when `success` is `false`; `None` on success.
+    pub error_code: Option<u32>,
+}

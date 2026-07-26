@@ -101,10 +101,10 @@ pub use ttl::{
 // re-exported here; `dispute.rs` uses them via `crate::DisputeResolution`.
 pub use milestones::{Milestone, MilestoneApprovals, MilestoneSummary, ReleaseAuthorization};
 pub use types::{
-    Contract, ContractBounds, ContractStatus, ContractSummary, DataKey, DepositMode,
-    DisputeMetadata, DisputeMetadataV0, DisputeResolution, DisputeSplit, Error,
+    BatchSettlementResult, Contract, ContractBounds, ContractStatus, ContractSummary, DataKey,
+    DepositMode, DisputeMetadata, DisputeMetadataV0, DisputeResolution, DisputeSplit, Error,
     GovernedParameters, Milestone, MilestoneApprovals, MilestoneSummary, PendingAdminProposal,
-    ReadinessChecklist, ReleaseAuthorization, Reputation, SplitAmounts,
+    ReadinessChecklist, ReleaseAuthorization, Reputation, SettlementItem, SplitAmounts,
     CONTRACT_SUMMARY_SCHEMA_VERSION, DISPUTE_STORAGE_VERSION,
 };
 
@@ -119,6 +119,14 @@ pub const MAX_TOTAL_ESCROW_STROOPS: i128 = MAX_SINGLE_AMOUNT_STROOPS;
 /// Preserves the original hard-coded behaviour; admin may lower it via
 /// [`Escrow::set_settlement_limit`] but never above this absolute ceiling.
 pub const DEFAULT_SETTLEMENT_LIMIT: i128 = MAX_SINGLE_AMOUNT_STROOPS;
+
+/// Maximum number of items accepted by [`Escrow::finalize_contracts_batch`].
+///
+/// Chosen to match the existing batch-create cap (10) so a single Soroban
+/// invocation cannot exhaust the per-transaction compute budget.  Requests
+/// larger than this are rejected with [`EscrowError::BatchSettlementTooLarge`]
+/// before any storage is touched.
+pub const MAX_BATCH_SETTLEMENT: u32 = 10;
 
 #[contract]
 pub struct Escrow;
@@ -204,6 +212,15 @@ pub enum EscrowError {
     DisputeNotFound = 44,
     /// Returned when on-ledger dispute storage version is newer than this build.
     UnsupportedDisputeStorageVersion = 45,
+    /// The batch settlement vector exceeded [`MAX_BATCH_SETTLEMENT`].
+    ///
+    /// Callers must split their request into chunks no larger than
+    /// [`MAX_BATCH_SETTLEMENT`] and retry.
+    BatchSettlementTooLarge = 46,
+    /// The batch settlement vector was empty.
+    ///
+    /// At least one [`SettlementItem`] must be provided.
+    BatchSettlementEmpty = 47,
 }
 
 impl Escrow {
@@ -834,6 +851,173 @@ impl Escrow {
     /// ```
     pub fn finalize_contract(env: Env, contract_id: u32, finalizer: Address) -> bool {
         finalize::finalize_contract_impl(&env, contract_id, finalizer)
+    }
+
+    /// Finalize up to [`MAX_BATCH_SETTLEMENT`] contracts in a single invocation.
+    ///
+    /// This is a bounded batch companion to [`finalize_contract`](Self::finalize_contract).
+    /// It accepts a vector of [`SettlementItem`] entries — each pairing a `contract_id`
+    /// with the `finalizer` address for that contract — and processes them one at a time
+    /// using exactly the same logic as the single-item entrypoint.
+    ///
+    /// # Bounding
+    ///
+    /// The vector length is checked **before** any item is processed:
+    /// - An empty vector is rejected immediately with [`EscrowError::BatchSettlementEmpty`].
+    /// - A vector longer than [`MAX_BATCH_SETTLEMENT`] is rejected immediately with
+    ///   [`EscrowError::BatchSettlementTooLarge`].
+    ///
+    /// # Per-item semantics
+    ///
+    /// Each item is processed independently:
+    /// - Success or failure of one item does **not** affect subsequent items.
+    /// - A successful item emits the same `("finalized", contract_id)` event as the
+    ///   single-item entrypoint.
+    /// - Failed items are recorded in the output with `success: false` and an
+    ///   `error_code` matching the [`EscrowError`] discriminant that the equivalent
+    ///   single-item call would have panicked with.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `items` - Bounded vector of [`SettlementItem`]; 1–[`MAX_BATCH_SETTLEMENT`] entries
+    ///
+    /// # Returns
+    /// A [`Vec<BatchSettlementResult>`] with one entry per input item in the same order.
+    ///
+    /// # Errors (whole-call failures — panic before any item is processed)
+    /// * [`EscrowError::ContractPaused`] / [`EscrowError::EmergencyActive`] — pause gate
+    /// * [`EscrowError::BatchSettlementEmpty`] — `items` is empty
+    /// * [`EscrowError::BatchSettlementTooLarge`] — `items.len() > MAX_BATCH_SETTLEMENT`
+    ///
+    /// # Per-item error codes (recorded in `BatchSettlementResult::error_code`)
+    /// * [`EscrowError::ContractNotFound`] — unknown `contract_id`
+    /// * [`EscrowError::AlreadyFinalized`] — contract already has a finalization record
+    /// * [`EscrowError::UnauthorizedRole`] — `finalizer` is not a participant
+    /// * [`EscrowError::InvalidStatusTransition`] — status is not `Completed` or `Disputed`
+    ///
+    /// # Examples
+    /// ```rust,ignore
+    /// use escrow::{EscrowClient, SettlementItem};
+    /// let items = soroban_sdk::vec![
+    ///     &env,
+    ///     SettlementItem { contract_id: 1, finalizer: client_addr.clone() },
+    ///     SettlementItem { contract_id: 2, finalizer: client_addr.clone() },
+    /// ];
+    /// let results = escrow_client.finalize_contracts_batch(&items);
+    /// assert!(results.get(0).unwrap().success);
+    /// ```
+    pub fn finalize_contracts_batch(
+        env: Env,
+        items: Vec<SettlementItem>,
+    ) -> Vec<BatchSettlementResult> {
+        // ── Global guards ────────────────────────────────────────────────────
+        // Run pause/emergency check before touching any item so callers get a
+        // clean, actionable error rather than a partial result set.
+        Self::require_not_paused(&env);
+
+        // Reject empty vectors immediately — a zero-length batch is a caller
+        // error, not a "zero successes" scenario.
+        if items.is_empty() {
+            env.panic_with_error(EscrowError::BatchSettlementEmpty);
+        }
+
+        // Enforce the hard cap before doing any work so the cost of an
+        // over-cap call stays O(1) rather than O(cap).
+        if items.len() > MAX_BATCH_SETTLEMENT {
+            env.panic_with_error(EscrowError::BatchSettlementTooLarge);
+        }
+
+        // ── Per-item processing ──────────────────────────────────────────────
+        let mut results: Vec<BatchSettlementResult> = Vec::new(&env);
+
+        for i in 0..items.len() {
+            let item: SettlementItem = items.get(i).unwrap();
+            let contract_id = item.contract_id;
+            let finalizer = item.finalizer.clone();
+
+            // Attempt finalization using the same implementation function as
+            // the single-item entrypoint.  We use `try_invoke_contract` style
+            // error capture via a nested match on `finalize_contract_impl`.
+            //
+            // Soroban does not expose a native try/catch, so we replicate the
+            // validation logic here and produce an error code on failure rather
+            // than panicking.  This keeps per-item semantics identical to the
+            // single-item path while allowing the batch to continue past
+            // individual failures.
+            let outcome = Self::try_finalize_one(&env, contract_id, finalizer);
+
+            match outcome {
+                Ok(_) => {
+                    results.push_back(BatchSettlementResult {
+                        index: i,
+                        contract_id,
+                        success: true,
+                        error_code: None,
+                    });
+                }
+                Err(code) => {
+                    results.push_back(BatchSettlementResult {
+                        index: i,
+                        contract_id,
+                        success: false,
+                        error_code: Some(code),
+                    });
+                }
+            }
+        }
+
+        results
+    }
+
+    /// Internal helper: attempt to finalize one contract, returning
+    /// `Ok(())` on success or `Err(error_code)` on any per-item failure.
+    ///
+    /// This mirrors `finalize::finalize_contract_impl` but returns a typed
+    /// `Result` instead of panicking so the batch entrypoint can continue
+    /// past individual failures.
+    fn try_finalize_one(env: &Env, contract_id: u32, finalizer: Address) -> Result<(), u32> {
+        use crate::ContractStatus;
+
+        // 1. Check contract exists.
+        let contract: crate::Contract = match env
+            .storage()
+            .persistent()
+            .get(&DataKey::Contract(contract_id))
+        {
+            Some(c) => c,
+            None => return Err(EscrowError::ContractNotFound as u32),
+        };
+
+        // 2. Check not already finalized.
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::Finalization(contract_id))
+        {
+            return Err(EscrowError::AlreadyFinalized as u32);
+        }
+
+        // 3. Check finalizer role (client, freelancer, or assigned arbiter).
+        let is_client = finalizer == contract.client;
+        let is_freelancer = finalizer == contract.freelancer;
+        let is_arbiter = contract.arbiter.as_ref().is_some_and(|a| a == &finalizer);
+        if !is_client && !is_freelancer && !is_arbiter {
+            return Err(EscrowError::UnauthorizedRole as u32);
+        }
+
+        // 4. Check status is terminal (Completed or Disputed).
+        if contract.status != ContractStatus::Completed
+            && contract.status != ContractStatus::Disputed
+        {
+            return Err(EscrowError::InvalidStatusTransition as u32);
+        }
+
+        // 5. All checks pass — delegate to the canonical implementation which
+        //    writes storage, emits events, and handles rollback cleanup.
+        //    `require_auth` inside will be satisfied by `mock_all_auths` in
+        //    tests; in production the caller must have authorized the finalizer.
+        finalize::finalize_contract_impl(env, contract_id, finalizer);
+        Ok(())
     }
 
     /// Restore an unchanged, unresolved dispute to its pre-dispute status.
