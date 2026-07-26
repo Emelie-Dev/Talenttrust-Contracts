@@ -328,3 +328,171 @@ fn get_average_rating_fractional_average_is_preserved() {
     // total_rating=3, completed_contracts=2 → 3 * 10_000 / 2 = 15_000
     assert_eq!(client.get_average_rating(&freelancer_addr), Some(15_000));
 }
+
+// ---------------------------------------------------------------------------
+// simulate_issue_reputation tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn simulate_issue_reputation_matches_real_outcome_and_does_not_mutate_state() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+    let (client_addr, freelancer_addr, contract_id) = complete_contract(&env, &client);
+
+    let simulated =
+        client.simulate_issue_reputation(&contract_id, &client_addr, &5, &valid_comment(&env));
+
+    // Simulation must not write any state.
+    assert!(client.get_reputation(&freelancer_addr).is_none());
+    assert_eq!(client.get_pending_reputation_credits(&freelancer_addr), 1);
+    assert!(!client.get_contract(&contract_id).reputation_issued);
+
+    assert!(client.issue_reputation(&contract_id, &client_addr, &5, &valid_comment(&env)));
+    let real = client
+        .get_reputation(&freelancer_addr)
+        .expect("expected reputation record");
+
+    assert_eq!(simulated.completed_contracts, real.completed_contracts);
+    assert_eq!(simulated.total_rating, real.total_rating);
+    assert_eq!(simulated.last_rating, real.last_rating);
+}
+
+#[test]
+fn simulate_issue_reputation_can_be_called_repeatedly_without_side_effects() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+    let (client_addr, freelancer_addr, contract_id) = complete_contract(&env, &client);
+
+    for _ in 0..3 {
+        client.simulate_issue_reputation(&contract_id, &client_addr, &4, &valid_comment(&env));
+    }
+
+    assert!(client.get_reputation(&freelancer_addr).is_none());
+    assert_eq!(client.get_pending_reputation_credits(&freelancer_addr), 1);
+}
+
+#[test]
+fn simulate_issue_reputation_rejects_unauthorized_caller() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+    let (_client_addr, _freelancer_addr, contract_id) = complete_contract(&env, &client);
+    let unauthorized = Address::generate(&env);
+
+    let result =
+        client.try_simulate_issue_reputation(&contract_id, &unauthorized, &5, &valid_comment(&env));
+    super::assert_contract_error(result, EscrowError::UnauthorizedRole);
+}
+
+#[test]
+fn simulate_issue_reputation_rejects_non_completed_contract() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+    let (client_addr, _freelancer_addr, contract_id) = create_contract(&env, &client);
+
+    let result =
+        client.try_simulate_issue_reputation(&contract_id, &client_addr, &5, &valid_comment(&env));
+    super::assert_contract_error(result, EscrowError::NotCompleted);
+}
+
+#[test]
+fn simulate_issue_reputation_rejects_invalid_rating_bounds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+    let (client_addr, _freelancer_addr, contract_id) = complete_contract(&env, &client);
+
+    let result_low =
+        client.try_simulate_issue_reputation(&contract_id, &client_addr, &0, &valid_comment(&env));
+    super::assert_contract_error(result_low, EscrowError::InvalidRating);
+
+    let result_high =
+        client.try_simulate_issue_reputation(&contract_id, &client_addr, &6, &valid_comment(&env));
+    super::assert_contract_error(result_high, EscrowError::InvalidRating);
+}
+
+#[test]
+fn simulate_issue_reputation_rejects_empty_comment() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+    let (client_addr, _freelancer_addr, contract_id) = complete_contract(&env, &client);
+
+    let empty_comment = String::from_str(&env, "");
+    let result =
+        client.try_simulate_issue_reputation(&contract_id, &client_addr, &5, &empty_comment);
+    super::assert_contract_error(result, EscrowError::EmptyComment);
+}
+
+#[test]
+fn simulate_issue_reputation_rejects_comment_too_long() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+    let (client_addr, _freelancer_addr, contract_id) = complete_contract(&env, &client);
+
+    let long_str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let long_comment = String::from_str(&env, long_str);
+    let result =
+        client.try_simulate_issue_reputation(&contract_id, &client_addr, &5, &long_comment);
+    super::assert_contract_error(result, EscrowError::CommentTooLong);
+}
+
+#[test]
+fn simulate_issue_reputation_rejects_duplicate_issuance() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+    let (client_addr, _freelancer_addr, contract_id) = complete_contract(&env, &client);
+
+    assert!(client.issue_reputation(&contract_id, &client_addr, &5, &valid_comment(&env)));
+    let result =
+        client.try_simulate_issue_reputation(&contract_id, &client_addr, &4, &valid_comment(&env));
+    super::assert_contract_error(result, EscrowError::ReputationAlreadyIssued);
+}
+
+#[test]
+fn simulate_issue_reputation_rejects_self_rating_when_client_equals_freelancer() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+    let (client_addr, _freelancer_addr, contract_id) = complete_contract(&env, &client);
+
+    env.as_contract(&client.address, || {
+        let key = DataKey::Contract(contract_id);
+        let mut contract: Contract = env.storage().persistent().get(&key).unwrap();
+        contract.freelancer = client_addr.clone();
+        env.storage().persistent().set(&key, &contract);
+    });
+
+    let result =
+        client.try_simulate_issue_reputation(&contract_id, &client_addr, &5, &valid_comment(&env));
+    super::assert_contract_error(result, EscrowError::SelfRating);
+}
+
+#[test]
+fn simulate_issue_reputation_projects_second_rating_average_correctly() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = register_client(&env);
+
+    let (client_addr1, freelancer_addr, contract_id1) = complete_contract(&env, &client);
+    client.issue_reputation(&contract_id1, &client_addr1, &3, &valid_comment(&env));
+
+    let client_addr2 = Address::generate(&env);
+    let contract_id2 = complete_contract_for(&env, &client, &client_addr2, &freelancer_addr);
+
+    let simulated =
+        client.simulate_issue_reputation(&contract_id2, &client_addr2, &5, &valid_comment(&env));
+    assert_eq!(simulated.completed_contracts, 2);
+    assert_eq!(simulated.total_rating, 8);
+    assert_eq!(simulated.last_rating, 5);
+
+    // Real reputation must still reflect only the first, already-issued rating.
+    let real = client.get_reputation(&freelancer_addr).unwrap();
+    assert_eq!(real.completed_contracts, 1);
+    assert_eq!(real.total_rating, 3);
+}

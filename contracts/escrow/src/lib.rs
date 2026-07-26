@@ -1760,6 +1760,74 @@ impl Escrow {
         true
     }
 
+    /// Simulates `issue_reputation` and returns the projected reputation outcome
+    /// without writing storage or emitting events.
+    ///
+    /// Runs the exact same validation as `issue_reputation` (pause/emergency
+    /// gate, caller/role checks, rating/comment bounds, contract status,
+    /// duplicate-issuance and self-rating checks) so a caller can preview
+    /// whether a call would succeed and what the resulting reputation record
+    /// would look like. Does not require `caller` authorization, since no
+    /// state is mutated.
+    ///
+    /// # Errors
+    /// Same as `issue_reputation`.
+    pub fn simulate_issue_reputation(
+        env: Env,
+        contract_id: u32,
+        caller: Address,
+        rating: u32,
+        comment: String,
+    ) -> types::Reputation {
+        Self::require_not_paused(&env);
+        let contract: Contract = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Contract(contract_id))
+            .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
+
+        if caller != contract.client {
+            env.panic_with_error(Error::UnauthorizedRole);
+        }
+
+        if rating < 1 || rating > 5 {
+            env.panic_with_error(Error::InvalidRating);
+        }
+
+        if comment.len() == 0 {
+            env.panic_with_error(Error::EmptyComment);
+        }
+
+        if comment.len() > 200 {
+            env.panic_with_error(Error::CommentTooLong);
+        }
+
+        if contract.status != ContractStatus::Completed {
+            env.panic_with_error(Error::NotCompleted);
+        }
+
+        if contract.reputation_issued {
+            env.panic_with_error(Error::ReputationAlreadyIssued);
+        }
+        if contract.client == contract.freelancer {
+            env.panic_with_error(Error::SelfRating);
+        }
+
+        let pending_key = DataKey::PendingReputationCredits(contract.freelancer.clone());
+        let pending: i128 = env.storage().persistent().get(&pending_key).unwrap_or(0);
+        if pending <= 0 {
+            env.panic_with_error(Error::InvalidState);
+        }
+
+        let rep_key = DataKey::Reputation(contract.freelancer.clone());
+        let mut rep: types::Reputation =
+            env.storage().persistent().get(&rep_key).unwrap_or_default();
+        rep.completed_contracts += 1;
+        rep.total_rating += rating as i128;
+        rep.last_rating = rating as i128;
+        rep
+    }
+
     /// Returns the written feedback provided by the client when reputation was issued.
     /// Returns `None` if reputation has not been issued for this contract.
     pub fn get_reputation_comment(env: Env, contract_id: u32) -> Option<String> {
