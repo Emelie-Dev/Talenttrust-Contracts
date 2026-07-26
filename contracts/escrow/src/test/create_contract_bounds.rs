@@ -28,8 +28,8 @@
 use soroban_sdk::{testutils::Address as _, vec, Address, Env, Vec};
 
 use crate::{
-    ContractBounds, Escrow, EscrowClient, EscrowError, ReleaseAuthorization, MAX_MILESTONES,
-    MAX_SINGLE_AMOUNT_STROOPS, MAX_TOTAL_ESCROW_STROOPS, DEFAULT_MAX_DISPUTES,
+    ContractBounds, ContractStatus, Escrow, EscrowClient, EscrowError, ReleaseAuthorization,
+    MAX_BPS, MAX_MILESTONES, MAX_SINGLE_AMOUNT_STROOPS, MAX_TOTAL_ESCROW_STROOPS,
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -109,15 +109,16 @@ fn get_bounds_max_total_escrow_stroops_equals_constant() {
     );
 }
 
-/// `max_fee_bps` must be `MAX_FEE_BPS` (100%).
+/// `max_fee_bps` must be 10_000 (100 %).
 #[test]
 fn get_bounds_max_fee_bps_is_max_fee_bps() {
     let (env, cid) = setup();
     let client = EscrowClient::new(&env, &cid);
     let bounds = client.get_bounds();
     assert_eq!(
-        bounds.max_fee_bps, MAX_FEE_BPS,
-        "max_fee_bps must be MAX_FEE_BPS (100 %)"
+        bounds.max_fee_bps, MAX_BPS,
+        "max_fee_bps must be {} (100 %)",
+        MAX_BPS
     );
 }
 
@@ -178,16 +179,17 @@ fn get_bounds_all_fields_are_positive() {
     assert!(bounds.max_disputes > 0, "max_disputes must be > 0");
 }
 
-/// `max_fee_bps` must not exceed `MAX_FEE_BPS` — higher values would imply a
-/// fee greater than the payout itself.
+/// `max_fee_bps` must not exceed `MAX_BPS` — higher values would imply a fee
+/// greater than the payout itself.
 #[test]
 fn get_bounds_fee_bps_does_not_exceed_max_fee_bps() {
     let (env, cid) = setup();
     let client = EscrowClient::new(&env, &cid);
     let bounds = client.get_bounds();
     assert!(
-        bounds.max_fee_bps <= MAX_FEE_BPS,
-        "max_fee_bps must not exceed MAX_FEE_BPS (100 %)"
+        bounds.max_fee_bps <= MAX_BPS,
+        "max_fee_bps must not exceed {} (100 %)",
+        MAX_BPS
     );
 }
 

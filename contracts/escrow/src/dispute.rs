@@ -10,8 +10,8 @@
 use soroban_sdk::{symbol_short, Address, Env};
 
 use crate::{
-    amount_validation, safe_add_amounts, Contract, ContractStatus, DisputeResolution, DisputeSplit,
-    EscrowError, MAX_SINGLE_AMOUNT_STROOPS,
+    safe_add_amounts, Contract, ContractStatus, DataKey, DisputeResolution, DisputeSplit, Error,
+    Escrow, EscrowArgs, EscrowClient, PARTIAL_REFUND_DENOMINATOR, PARTIAL_REFUND_FREELANCER_SHARE,
 };
 
 // ---------------------------------------------------------------------------
@@ -115,11 +115,11 @@ pub fn resolution_payouts(
     match resolution {
         DisputeResolution::FullRefund => Ok((available, 0)),
         DisputeResolution::PartialRefund => {
-            // freelancer gets floor(available * NUMERATOR / DENOMINATOR), client gets remainder
+            // freelancer gets floor(available * PARTIAL_REFUND_FREELANCER_SHARE / PARTIAL_REFUND_DENOMINATOR), client gets remainder
             let freelancer_payout = available
-                .checked_mul(30)
-                .and_then(|value| value.checked_div(100))
-                .ok_or(EscrowError::PotentialOverflow)?;
+                .checked_mul(PARTIAL_REFUND_FREELANCER_SHARE)
+                .and_then(|value| value.checked_div(PARTIAL_REFUND_DENOMINATOR))
+                .ok_or(Error::PotentialOverflow)?;
             Ok((available - freelancer_payout, freelancer_payout))
         }
         DisputeResolution::FullPayout => Ok((0, available)),

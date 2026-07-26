@@ -1,16 +1,8 @@
-//! Milestone release entrypoints.
-//!
-//! This module owns the money-movement path that pays a freelancer for a
-//! completed milestone: `release_milestone` and its read-only companion
-//! `is_milestone_overdue`. It performs the settlement-token transfer,
-//! protocol-fee accrual, and the `Contract`/milestone accounting mutations
-//! that keep the balance-conservation invariant
-//! (`funded_amount == released_amount + refunded_amount + accumulated_fees`
-//! plus refundable balance) intact.
-//!
-//! Moved out of `lib.rs` verbatim (issue #1021 — split escrow logic into a
-//! dedicated module). Behaviour, error codes, event topics, and the public
-//! ABI are unchanged.
+use crate::{
+    approvals, ttl, Contract, ContractStatus, DataKey, Error, Escrow, Milestone,
+    ReleaseAuthorization, REPUTATION_CREDIT_INCREMENT,
+};
+use soroban_sdk::{Address, Env, Symbol, Vec};
 
 use crate::utils::now_seconds;
 use crate::{
@@ -273,7 +265,9 @@ impl Escrow {
         let all_released = milestones.iter().all(|m| m.released || m.refunded);
         if all_released {
             contract.status = ContractStatus::Completed;
-            Self::grant_pending_reputation_credit(&env, &contract.freelancer);
+            let pending_key = DataKey::PendingReputationCredits(contract.freelancer.clone());
+            let pending: i128 = env.storage().persistent().get(&pending_key).unwrap_or(0);
+            env.storage().persistent().set(&pending_key, &(pending + REPUTATION_CREDIT_INCREMENT));
         }
 
         ttl::store_milestones(&env, contract_id, &milestones);

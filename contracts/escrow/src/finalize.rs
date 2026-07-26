@@ -110,7 +110,7 @@ impl Escrow {
             .unwrap_or(false);
 
         ContractSummary {
-            schema_version: 1,
+            schema_version: CONTRACT_SUMMARY_SCHEMA_VERSION,
             client: contract.client.clone(),
             freelancer: contract.freelancer.clone(),
             arbiter: contract.arbiter.clone(),

@@ -1,7 +1,8 @@
 pub use crate::Escrow;
 use crate::{
-    amount_validation, ttl, Contract, ContractStatus, DataKey, Escrow, EscrowError,
-    GovernedParameters, Milestone, ReleaseAuthorization, MAX_MILESTONES,
+    amount_validation, ttl, Contract, ContractStatus, DataKey, Error, Escrow, EscrowArgs,
+    EscrowClient, EscrowError, GovernedParameters, Milestone, ReleaseAuthorization,
+    INITIAL_CONTRACT_ID, MAX_MILESTONES,
 };
 use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
 
@@ -156,4 +157,27 @@ impl Escrow {
 
         id
     }
+}
+
+/// Returns the next available contract ID and asserts it is not already occupied.
+///
+/// # Errors
+/// * `ContractIdCollision` - If the allocated id slot is already occupied
+pub(crate) fn next_contract_id(env: &Env) -> u32 {
+    let id: u32 = env
+        .storage()
+        .persistent()
+        .get(&DataKey::NextContractId)
+        .unwrap_or(INITIAL_CONTRACT_ID);
+
+    if env
+        .storage()
+        .persistent()
+        .get::<_, Contract>(&DataKey::Contract(id))
+        .is_some()
+    {
+        env.panic_with_error(Error::ContractIdCollision);
+    }
+
+    id
 }

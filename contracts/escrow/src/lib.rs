@@ -53,7 +53,7 @@
 
 mod amount_validation;
 mod approvals;
-mod contracts;
+mod constants;
 mod deposit;
 mod dispute;
 mod finalize;
@@ -75,7 +75,11 @@ pub use amount_validation::safe_subtract_amounts;
 pub use amount_validation::validate_deposit_amount;
 pub use amount_validation::validate_milestone_amounts;
 pub use amount_validation::validate_single_amount;
-pub use amount_validation::MAX_SINGLE_AMOUNT_STROOPS;
+pub use constants::{
+    BPS_DENOMINATOR, INITIAL_CONTRACT_ID, MAX_BPS, MAX_COMMENT_BYTES, MAX_EVIDENCE_BYTES,
+    MAX_RATING, MIN_RATING, PARTIAL_REFUND_DENOMINATOR, PARTIAL_REFUND_FREELANCER_SHARE,
+    REPUTATION_CREDIT_INCREMENT,
+};
 pub use dispute::final_status_after_resolution;
 pub use dispute::resolution_payouts;
 pub use migration::PendingClientMigration;
@@ -458,7 +462,7 @@ impl Escrow {
         env.storage().persistent().set(&DataKey::Admin, &admin);
         env.storage()
             .persistent()
-            .set(&DataKey::NextContractId, &1u32);
+            .set(&DataKey::NextContractId, &INITIAL_CONTRACT_ID);
 
         let mut checklist: ReadinessChecklist = env
             .storage()
@@ -529,7 +533,7 @@ impl Escrow {
             max_milestones: MAX_MILESTONES,
             max_single_milestone_stroops: MAX_SINGLE_AMOUNT_STROOPS,
             max_total_escrow_stroops: MAX_TOTAL_ESCROW_STROOPS,
-            max_fee_bps: 10_000,
+            max_fee_bps: MAX_BPS,
         }
     }
 
@@ -1082,7 +1086,9 @@ impl Escrow {
     pub(crate) fn grant_pending_reputation_credit(env: &Env, freelancer: &Address) {
         let pending_key = DataKey::PendingReputationCredits(freelancer.clone());
         let pending: i128 = env.storage().persistent().get(&pending_key).unwrap_or(0);
-        env.storage().persistent().set(&pending_key, &(pending + 1));
+        env.storage()
+            .persistent()
+            .set(&pending_key, &(pending + REPUTATION_CREDIT_INCREMENT));
     }
 
     /// Releases a specific milestone, transferring the net payout to the freelancer.
@@ -1733,7 +1739,7 @@ impl Escrow {
         env.storage()
             .persistent()
             .get(&DataKey::NextContractId)
-            .unwrap_or(1)
+            .unwrap_or(INITIAL_CONTRACT_ID)
     }
 
     /// Returns a structured summary of the contract and its milestones.
@@ -2373,16 +2379,16 @@ impl Escrow {
             env.panic_with_error(EscrowError::UnauthorizedRole);
         }
 
-        if rating < 1 || rating > 5 {
-            env.panic_with_error(EscrowError::InvalidRating);
+        if rating < MIN_RATING || rating > MAX_RATING {
+            env.panic_with_error(Error::InvalidRating);
         }
 
         if comment.len() == 0 {
             env.panic_with_error(EscrowError::EmptyComment);
         }
 
-        if comment.len() > 200 {
-            env.panic_with_error(EscrowError::CommentTooLong);
+        if comment.len() > MAX_COMMENT_BYTES {
+            env.panic_with_error(Error::CommentTooLong);
         }
 
         if contract.status != ContractStatus::Completed {
@@ -2415,19 +2421,15 @@ impl Escrow {
         if pending <= 0 {
             env.panic_with_error(EscrowError::InvalidState);
         }
-        env.storage().persistent().set(&pending_key, &(pending - 1));
+        env.storage()
+            .persistent()
+            .set(&pending_key, &(pending - REPUTATION_CREDIT_INCREMENT));
 
         let rep_key = DataKey::Reputation(ReputationKey { user: contract.freelancer.clone() });
         let mut rep: types::Reputation =
             env.storage().persistent().get(&rep_key).unwrap_or_default();
-        rep.completed_contracts = rep
-            .completed_contracts
-            .checked_add(1)
-            .unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
-        rep.total_rating = rep
-            .total_rating
-            .checked_add(rating as i128)
-            .unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
+        rep.completed_contracts += REPUTATION_CREDIT_INCREMENT;
+        rep.total_rating += rating as i128;
         rep.last_rating = rating as i128;
         env.storage().persistent().set(&rep_key, &rep);
 
@@ -2670,7 +2672,7 @@ impl Escrow {
         }
 
         // Bound evidence to 256 bytes to prevent storage bloat.
-        if evidence.len() > 256 {
+        if evidence.len() > MAX_EVIDENCE_BYTES {
             env.panic_with_error(Error::EvidenceTooLong);
         }
 
@@ -2940,8 +2942,8 @@ impl Escrow {
 
     /// Computes the protocol fee for a given `amount` at `fee_bps` basis points.
     ///
-    /// Uses integer **floor division**: `fee = amount * fee_bps / 10_000`.
-    /// The result always rounds down Ã¢â‚¬â€ it never rounds up Ã¢â‚¬â€ so the freelancer
+    /// Uses integer **floor division**: `fee = amount * fee_bps / BPS_DENOMINATOR`.
+    /// The result always rounds down — it never rounds up — so the freelancer
     /// receives at least `amount - fee` stroops and the protocol receives at most
     /// the floored value. Callers must ensure `fee <= amount` holds; this is
     /// guaranteed for any `fee_bps` in `[0, 10_000]` and a non-negative `amount`.
@@ -2973,8 +2975,8 @@ impl Escrow {
         }
         let product = amount
             .checked_mul(fee_bps as i128)
-            .unwrap_or_else(|| env.panic_with_error(EscrowError::PotentialOverflow));
-        product / 10_000
+            .unwrap_or_else(|| env.panic_with_error(Error::PotentialOverflow));
+        product / BPS_DENOMINATOR as i128
     }
 
     // Ã¢â€â‚¬Ã¢â€â‚¬ Internal guards Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
