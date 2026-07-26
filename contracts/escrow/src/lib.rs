@@ -2891,6 +2891,14 @@ impl Escrow {
             (contract_id, resolution.code()),
         );
 
+        // A dedicated event lets indexers observe the arbiter's state-changing
+        // decision without inferring it from the generic dispute event. Keep the
+        // short, distinct topic separate from `dispute` to avoid collisions.
+        env.events().publish(
+            (symbol_short!("arbiter"), contract_id),
+            (arbiter, resolution.code(), client_payout, freelancer_payout),
+        );
+
         true
     }
 
