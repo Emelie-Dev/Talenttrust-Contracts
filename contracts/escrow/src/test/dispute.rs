@@ -763,3 +763,155 @@ fn resolve_after_finalize_is_rejected() {
         Error::AlreadyFinalized,
     );
 }
+
+// ===========================================================================
+//  Batch raise_dispute entrypoint
+// ===========================================================================
+
+/// Mark a Created contract as Funded without SAC transfers so batch tests can
+/// exercise dispute gates without binding a settlement token.
+fn mark_contract_funded(env: &Env, escrow_addr: &Address, contract_id: u32, amount: i128) {
+    env.as_contract(escrow_addr, || {
+        let key = crate::DataKey::Contract(contract_id);
+        let mut contract: Contract = env.storage().persistent().get(&key).unwrap();
+        contract.status = ContractStatus::Funded;
+        contract.funded_amount = amount;
+        contract.total_deposited = amount;
+        env.storage().persistent().set(&key, &contract);
+    });
+}
+
+/// Create `count` funded contracts that share the same client and arbiter.
+fn funded_contracts_for_batch(
+    env: &Env,
+    client: &EscrowClient<'_>,
+    count: u32,
+) -> (Address, Address, soroban_sdk::Vec<u32>) {
+    let client_addr = Address::generate(env);
+    let freelancer_addr = Address::generate(env);
+    let arbiter_addr = Address::generate(env);
+    let milestones = vec![env, 100_i128];
+    let mut ids = soroban_sdk::Vec::new(env);
+    for _ in 0..count {
+        let contract_id = client.create_contract(
+            &client_addr,
+            &freelancer_addr,
+            &Some(arbiter_addr.clone()),
+            &milestones,
+            &ReleaseAuthorization::ClientOnly,
+        );
+        mark_contract_funded(env, &client.address, contract_id, 100);
+        ids.push_back(contract_id);
+    }
+    (client_addr, arbiter_addr, ids)
+}
+
+#[test]
+fn batch_raise_dispute_empty_succeeds() {
+    let env = make_env();
+    let client = make_client(&env);
+    let caller = Address::generate(&env);
+    let empty: soroban_sdk::Vec<u32> = vec![&env];
+    assert!(client.raise_dispute_batch(&caller, &empty));
+}
+
+#[test]
+fn batch_raise_dispute_at_cap_succeeds() {
+    let env = make_env();
+    let client = make_client(&env);
+    let (client_addr, _, ids) =
+        funded_contracts_for_batch(&env, &client, crate::MAX_BATCH_DISPUTES);
+
+    assert_eq!(ids.len(), crate::MAX_BATCH_DISPUTES);
+    assert!(client.raise_dispute_batch(&client_addr, &ids));
+
+    for i in 0..ids.len() {
+        let id = ids.get(i).unwrap();
+        assert_eq!(
+            client.get_contract(&id).status,
+            ContractStatus::Disputed,
+            "contract {id} should be disputed"
+        );
+    }
+}
+
+#[test]
+fn batch_raise_dispute_over_cap_rejected() {
+    let env = make_env();
+    let client = make_client(&env);
+    let caller = Address::generate(&env);
+
+    let over_cap = crate::MAX_BATCH_DISPUTES + 1;
+    let mut ids = soroban_sdk::Vec::new(&env);
+    for i in 0..over_cap {
+        ids.push_back(i);
+    }
+
+    super::assert_contract_error(
+        client.try_raise_dispute_batch(&caller, &ids),
+        crate::EscrowError::BatchCapExceeded,
+    );
+}
+
+#[test]
+fn batch_raise_dispute_emits_per_item_events() {
+    let env = make_env();
+    let client = make_client(&env);
+    let (client_addr, _, ids) = funded_contracts_for_batch(&env, &client, 2);
+
+    assert!(client.raise_dispute_batch(&client_addr, &ids));
+
+    for i in 0..ids.len() {
+        let id = ids.get(i).unwrap();
+        assert_eq!(
+            client.get_contract(&id).status,
+            ContractStatus::Disputed,
+            "contract {id} should be disputed after batch"
+        );
+    }
+}
+
+#[test]
+fn batch_raise_dispute_fails_on_first_invalid_item() {
+    let env = make_env();
+    let client = make_client(&env);
+    let (client_addr, _, mut ids) = funded_contracts_for_batch(&env, &client, 1);
+
+    // Append a non-existent contract id so the batch fails mid-way.
+    ids.push_back(u32::MAX);
+
+    super::assert_contract_error(
+        client.try_raise_dispute_batch(&client_addr, &ids),
+        Error::ContractNotFound,
+    );
+
+    // First item must not remain disputed — transaction rolled back.
+    let first_id = ids.get(0).unwrap();
+    assert_eq!(
+        client.get_contract(&first_id).status,
+        ContractStatus::Funded,
+        "failed batch must roll back earlier items"
+    );
+}
+
+#[test]
+fn batch_raise_dispute_preserves_per_item_semantics() {
+    let env = make_env();
+    let client = make_client(&env);
+    let (client_addr, _, ids) = funded_contracts_for_batch(&env, &client, 2);
+
+    let first = ids.get(0).unwrap();
+    let second = ids.get(1).unwrap();
+
+    // Raise on the first contract individually, then include it in a batch.
+    assert!(client.raise_dispute(&first, &client_addr));
+
+    super::assert_contract_error(
+        client.try_raise_dispute_batch(&client_addr, &ids),
+        Error::InvalidState,
+    );
+
+    // Second contract must remain funded because the batch rolled back.
+    assert_eq!(client.get_contract(&second).status, ContractStatus::Funded);
+    assert_eq!(client.get_contract(&first).status, ContractStatus::Disputed);
+}

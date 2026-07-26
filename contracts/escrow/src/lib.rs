@@ -90,6 +90,8 @@ pub use types::{
 pub const MAX_MILESTONES: u32 = 10;
 pub const MAX_SINGLE_AMOUNT_STROOPS: i128 = crate::amount_validation::MAX_SINGLE_AMOUNT_STROOPS;
 pub const MAX_TOTAL_ESCROW_STROOPS: i128 = MAX_SINGLE_AMOUNT_STROOPS;
+/// Maximum number of contract IDs accepted by [`Escrow::raise_dispute_batch`].
+pub const MAX_BATCH_DISPUTES: u32 = 10;
 
 #[contract]
 pub struct Escrow;
@@ -171,6 +173,8 @@ pub enum EscrowError {
     EmptyComment = 42,
     /// Reputation feedback comment exceeded the 200-character maximum.
     CommentTooLong = 43,
+    /// The batch disputes vector exceeds the maximum allowed cap.
+    BatchCapExceeded = 44,
 }
 
 impl Escrow {
@@ -2187,18 +2191,26 @@ impl Escrow {
         Self::require_initialized(&env);
         Self::require_not_paused(&env);
         caller.require_auth();
+        Self::raise_dispute_inner(&env, contract_id, &caller);
+        true
+    }
 
+    /// Shared raise-dispute mutation used by the single and batch entrypoints.
+    ///
+    /// Callers must already have completed `require_initialized`, `require_not_paused`,
+    /// and `caller.require_auth()` so batch invocations authenticate once.
+    fn raise_dispute_inner(env: &Env, contract_id: u32, caller: &Address) {
         let mut contract: Contract = env
             .storage()
             .persistent()
             .get(&DataKey::Contract(contract_id))
             .unwrap_or_else(|| env.panic_with_error(Error::ContractNotFound));
 
-        ttl::extend_contract_ttl(&env, contract_id);
-        Self::require_not_finalized(&env, contract_id);
+        ttl::extend_contract_ttl(env, contract_id);
+        Self::require_not_finalized(env, contract_id);
 
         // Verify caller is client or freelancer
-        if caller != contract.client && caller != contract.freelancer {
+        if *caller != contract.client && *caller != contract.freelancer {
             env.panic_with_error(Error::UnauthorizedRole);
         }
 
@@ -2218,12 +2230,51 @@ impl Escrow {
             .persistent()
             .set(&DataKey::Contract(contract_id), &contract);
 
-        ttl::extend_contract_ttl(&env, contract_id);
+        ttl::extend_contract_ttl(env, contract_id);
 
         env.events().publish(
             (symbol_short!("dispute"), symbol_short!("opened")),
-            (contract_id, caller),
+            (contract_id, caller.clone()),
         );
+    }
+
+    /// Batch variant of [`raise_dispute`](Self::raise_dispute) that accepts a
+    /// bounded vector of contract IDs.
+    ///
+    /// If the vector length exceeds [`MAX_BATCH_DISPUTES`], the call is rejected
+    /// with [`EscrowError::BatchCapExceeded`]. Per-item semantics are preserved:
+    /// each contract ID goes through the same authorization and state checks as
+    /// the single entrypoint, and a `("dispute", "opened")` event is emitted per
+    /// successfully disputed contract. On any per-item failure the whole call
+    /// panics and the transaction rolls back (all-or-nothing).
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `caller` - The address of the caller (must be a party on every contract)
+    /// * `contract_ids` - Bounded vector of contract IDs to dispute
+    ///
+    /// # Errors
+    /// * `BatchCapExceeded` - If `contract_ids` length exceeds the cap
+    /// * All errors from [`raise_dispute`](Self::raise_dispute)
+    ///
+    /// # Events
+    /// Emits `("dispute", "opened")` with payload `(contract_id, caller)` for
+    /// each successfully opened dispute.
+    pub fn raise_dispute_batch(env: Env, caller: Address, contract_ids: Vec<u32>) -> bool {
+        Self::require_initialized(&env);
+        Self::require_not_paused(&env);
+        caller.require_auth();
+
+        if contract_ids.len() > MAX_BATCH_DISPUTES {
+            env.panic_with_error(EscrowError::BatchCapExceeded);
+        }
+
+        let mut i: u32 = 0;
+        while i < contract_ids.len() {
+            let contract_id = contract_ids.get(i).unwrap();
+            Self::raise_dispute_inner(&env, contract_id, &caller);
+            i += 1;
+        }
 
         true
     }

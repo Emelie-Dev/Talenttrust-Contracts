@@ -2,8 +2,10 @@ use std::{fs, path::Path};
 
 #[test]
 fn abi_reference_document_lists_current_public_entrypoints() {
+    // Integration test lives under contracts/escrow; ABI docs are at repo root.
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let doc_path = manifest_dir
+        .join("../..")
         .join("docs")
         .join("escrow")
         .join("abi-reference.md");
@@ -37,6 +39,7 @@ fn abi_reference_document_lists_current_public_entrypoints() {
         "is_emergency",
         "cancel_contract",
         "raise_dispute",
+        "raise_dispute_batch",
         "resolve_dispute",
         "issue_reputation",
         "get_reputation_comment",
