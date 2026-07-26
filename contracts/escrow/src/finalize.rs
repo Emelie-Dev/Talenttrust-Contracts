@@ -173,3 +173,53 @@ pub fn get_finalization_record_impl(env: &Env, contract_id: u32) -> Option<Final
         .persistent()
         .get(&Escrow::finalization_key(contract_id))
 }
+
+/// Roll back a finalized contract by removing its immutable close record.
+///
+/// `admin` must be the stored admin and authorize the call. Rollback is only
+/// safe while the contract is finalized and in either `Completed` or `Disputed`
+/// status; no accounting fields are modified.
+///
+/// # Errors
+/// - `NotInitialized` if the contract has not been initialized.
+/// - `UnauthorizedRole` if `admin` is not the stored admin.
+/// - `RollbackNotAllowed` if the contract is not finalized or not in a safe status.
+pub fn rollback_contract_impl(env: &Env, contract_id: u32, admin: Address) -> bool {
+    Escrow::require_initialized(env);
+
+    admin.require_auth();
+
+    let stored_admin: Address = env
+        .storage()
+        .persistent()
+        .get(&DataKey::Admin)
+        .unwrap_or_else(|| env.panic_with_error(EscrowError::NotInitialized));
+    if admin != stored_admin {
+        env.panic_with_error(EscrowError::UnauthorizedRole);
+    }
+
+    let contract = Escrow::load_contract_for_finalization(env, contract_id);
+
+    if !Escrow::is_finalized(env, contract_id) {
+        env.panic_with_error(EscrowError::RollbackNotAllowed);
+    }
+
+    if contract.status != ContractStatus::Completed && contract.status != ContractStatus::Disputed {
+        env.panic_with_error(EscrowError::RollbackNotAllowed);
+    }
+
+    let status = contract.status;
+
+    env.storage()
+        .persistent()
+        .remove(&Escrow::finalization_key(contract_id));
+
+    crate::ttl::extend_contract_ttl(env, contract_id);
+
+    env.events().publish(
+        (symbol_short!("rollback"), contract_id),
+        (admin, status, env.ledger().timestamp()),
+    );
+
+    true
+}
