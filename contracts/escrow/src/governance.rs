@@ -287,8 +287,43 @@ impl Escrow {
     }
 
     /// Retrieve the current governed parameters.
-    pub(crate) fn get_governed_parameters_impl(env: Env) -> Option<GovernedParameters> {
-        env.storage().persistent().get(&DataKey::GovernedParameters)
+    ///
+    /// Returns a [`GovernedParameters`] value populated from storage when
+    /// `set_governed_params` has been called, or from the same default
+    /// constants the enforcement code uses when storage is empty.
+    ///
+    /// The defaults match what the enforcement paths apply when no
+    /// governance parameters have been configured:
+    /// - `protocol_fee_bps`: `0` (no protocol fee withheld on release)
+    /// - `max_escrow_total_stroops`: `i128::MAX` (no effective cap)
+    ///
+    /// Callers that need to distinguish "governance has not written" from
+    /// "governance wrote values that happen to match defaults" should use
+    /// [`is_governed_params_set`](Self::is_governed_params_set) which
+    /// checks whether `set_governed_params` has ever succeeded.
+    pub fn get_governed_parameters(env: Env) -> GovernedParameters {
+        env.storage()
+            .persistent()
+            .get::<_, GovernedParameters>(&DataKey::GovernedParameters)
+            .unwrap_or(GovernedParameters {
+                protocol_fee_bps: 0,
+                max_escrow_total_stroops: i128::MAX,
+            })
+    }
+
+    /// Returns `true` if `set_governed_params` has ever been called
+    /// successfully, `false` otherwise.
+    ///
+    /// This lets integrators distinguish between "governance wrote defaults"
+    /// and "governance has not written anything yet". The underlying flag
+    /// is the `governed_params_set` field of the [`ReadinessChecklist`]
+    /// stored under [`DataKey::ReadinessChecklist`].
+    pub fn is_governed_params_set(env: Env) -> bool {
+        env.storage()
+            .persistent()
+            .get::<_, crate::ReadinessChecklist>(&DataKey::ReadinessChecklist)
+            .map(|c| c.governed_params_set)
+            .unwrap_or(false)
     }
 
     /// Set the admin-configurable per-contract storage limit (in bytes).

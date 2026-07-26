@@ -441,10 +441,19 @@ The list intentionally omits planned or reserved entrypoints that are not implem
 
 ### get_governed_parameters
 
-- Signature: `get_governed_parameters(env: Env) -> Option<GovernedParameters>`
+- Signature: `get_governed_parameters(env: Env) -> GovernedParameters`
 - Kind: Read-only
 - Auth: None
-- Semantics: Returns the stored governance parameters, if present.
+- Semantics: Returns the current governance parameters. When `set_governed_params` has not been called, returns safe defaults (`protocol_fee_bps: 0`, `max_escrow_total_stroops: i128::MAX`) that match the enforcement code's fallback values. Use [`is_governed_params_set`](#is_governed_params_set) to distinguish "unset" from "set to matching defaults".
+- Events: None
+- Errors: None
+
+### is_governed_params_set
+
+- Signature: `is_governed_params_set(env: Env) -> bool`
+- Kind: Read-only
+- Auth: None
+- Semantics: Returns `true` if `set_governed_params` has ever been called successfully, `false` otherwise. This lets integrators distinguish between "governance has not written anything yet" (defaults active, flag is `false`) and "governance wrote values that happen to match defaults" (defaults active, flag is `true`).
 - Events: None
 - Errors: None
 
