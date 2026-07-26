@@ -763,3 +763,159 @@ fn resolve_after_finalize_is_rejected() {
         Error::AlreadyFinalized,
     );
 }
+
+// ---------------------------------------------------------------------------
+// Overflow, saturation, and extreme value dispute arithmetic tests (#885)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn resolution_payouts_extreme_i128_max_full_refund() {
+    let env = make_env();
+    let contract = payout_contract(&env, i128::MAX, 0, 0);
+    assert_eq!(
+        resolution_payouts(&contract, &DisputeResolution::FullRefund),
+        Ok((i128::MAX, 0))
+    );
+}
+
+#[test]
+fn resolution_payouts_extreme_i128_max_full_payout() {
+    let env = make_env();
+    let contract = payout_contract(&env, i128::MAX, 0, 0);
+    assert_eq!(
+        resolution_payouts(&contract, &DisputeResolution::FullPayout),
+        Ok((0, i128::MAX))
+    );
+}
+
+#[test]
+fn resolution_payouts_extreme_i128_partial_refund_overflow_rejected() {
+    let env = make_env();
+    // i128::MAX * 30 overflows i128, must safely return PotentialOverflow error.
+    let contract = payout_contract(&env, i128::MAX, 0, 0);
+    assert_eq!(
+        resolution_payouts(&contract, &DisputeResolution::PartialRefund),
+        Err(Error::PotentialOverflow)
+    );
+}
+
+#[test]
+fn resolution_payouts_extreme_i128_partial_refund_large_valid() {
+    let env = make_env();
+    // funded = i128::MAX / 30 is large enough to test extreme value math without overflowing * 30.
+    let funded = i128::MAX / 30;
+    let contract = payout_contract(&env, funded, 0, 0);
+    let (client_payout, freelancer_payout) =
+        resolution_payouts(&contract, &DisputeResolution::PartialRefund)
+            .expect("Large valid amount should not overflow");
+    assert_eq!(client_payout + freelancer_payout, funded);
+    assert!(freelancer_payout > 0);
+    assert!(client_payout > freelancer_payout);
+}
+
+#[test]
+fn resolution_payouts_split_extreme_near_max() {
+    let env = make_env();
+    let funded = i128::MAX;
+    let client_amt = i128::MAX - 5000;
+    let freelancer_amt = 5000;
+    let contract = payout_contract(&env, funded, 0, 0);
+    let split = DisputeSplit {
+        client_amount: client_amt,
+        freelancer_amount: freelancer_amt,
+    };
+    assert_eq!(
+        resolution_payouts(&contract, &DisputeResolution::Split(split)),
+        Ok((client_amt, freelancer_amt))
+    );
+}
+
+#[test]
+fn resolution_payouts_subtraction_near_zero_available() {
+    let env = make_env();
+    // funded = 100, released = 50, refunded = 50 -> available = 0
+    let contract = payout_contract(&env, 100, 50, 50);
+    assert_eq!(
+        resolution_payouts(&contract, &DisputeResolution::FullRefund),
+        Ok((0, 0))
+    );
+    assert_eq!(
+        resolution_payouts(&contract, &DisputeResolution::FullPayout),
+        Ok((0, 0))
+    );
+    assert_eq!(
+        resolution_payouts(&contract, &DisputeResolution::PartialRefund),
+        Ok((0, 0))
+    );
+    let split = DisputeSplit {
+        client_amount: 0,
+        freelancer_amount: 0,
+    };
+    assert_eq!(
+        resolution_payouts(&contract, &DisputeResolution::Split(split)),
+        Ok((0, 0))
+    );
+}
+
+#[test]
+fn resolution_payouts_subtraction_underflow_corrupted_state() {
+    let env = make_env();
+    // funded = 100, released = 60, refunded = 50 -> available = -10 < 0
+    let contract = payout_contract(&env, 100, 60, 50);
+    assert_eq!(
+        resolution_payouts(&contract, &DisputeResolution::FullRefund),
+        Err(Error::AccountingInvariantViolated)
+    );
+    assert_eq!(
+        resolution_payouts(&contract, &DisputeResolution::FullPayout),
+        Err(Error::AccountingInvariantViolated)
+    );
+}
+
+#[test]
+fn resolve_dispute_accounting_overflow_protection_refunded() {
+    let env = make_env();
+    let client = make_client(&env);
+    let (client_addr, _freelancer_addr, arbiter_addr, contract_id) =
+        funded_contract_with_arbiter(&env, &client);
+
+    assert!(client.raise_dispute(&contract_id, &client_addr));
+
+    // Manually manipulate contract state in storage to simulate refunded_amount near i128::MAX
+    let mut contract = client.get_contract(&contract_id);
+    contract.refunded_amount = i128::MAX - 10;
+    contract.funded_amount = i128::MAX;
+    env.storage()
+        .persistent()
+        .set(&crate::DataKey::Contract(contract_id), &contract);
+
+    // FullRefund attempts to add client_payout (i128::MAX) to refunded_amount (i128::MAX - 10), causing overflow.
+    super::assert_contract_error(
+        client.try_resolve_dispute(&contract_id, &arbiter_addr, &DisputeResolution::FullRefund),
+        Error::PotentialOverflow,
+    );
+}
+
+#[test]
+fn resolve_dispute_accounting_overflow_protection_released() {
+    let env = make_env();
+    let client = make_client(&env);
+    let (client_addr, _freelancer_addr, arbiter_addr, contract_id) =
+        funded_contract_with_arbiter(&env, &client);
+
+    assert!(client.raise_dispute(&contract_id, &client_addr));
+
+    // Manually manipulate contract state in storage to simulate released_amount near i128::MAX
+    let mut contract = client.get_contract(&contract_id);
+    contract.released_amount = i128::MAX - 10;
+    contract.funded_amount = i128::MAX;
+    env.storage()
+        .persistent()
+        .set(&crate::DataKey::Contract(contract_id), &contract);
+
+    // FullPayout attempts to add freelancer_payout (i128::MAX) to released_amount (i128::MAX - 10), causing overflow.
+    super::assert_contract_error(
+        client.try_resolve_dispute(&contract_id, &arbiter_addr, &DisputeResolution::FullPayout),
+        Error::PotentialOverflow,
+    );
+}

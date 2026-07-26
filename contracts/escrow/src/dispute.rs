@@ -48,7 +48,10 @@ pub fn resolution_payouts(
                 .checked_mul(30)
                 .and_then(|value| value.checked_div(100))
                 .ok_or(Error::PotentialOverflow)?;
-            Ok((available - freelancer_payout, freelancer_payout))
+            let client_payout = available
+                .checked_sub(freelancer_payout)
+                .ok_or(Error::PotentialOverflow)?;
+            Ok((client_payout, freelancer_payout))
         }
         DisputeResolution::FullPayout => Ok((0, available)),
         DisputeResolution::Split(split) => {
