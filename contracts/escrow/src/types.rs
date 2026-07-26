@@ -193,6 +193,8 @@ pub enum Error {
     SettlementTokenNotConfigured = 52,
     /// The milestone deadline has not yet passed.
     MilestoneNotOverdue = 53,
+    /// Milestone rollback is not allowed in the current state.
+    RollbackNotAllowed = 54,
 }
 
 /// Contract lifecycle states
@@ -230,6 +232,7 @@ pub struct Contract {
 pub struct Milestone {
     pub amount: i128,
     pub funded_amount: i128,
+    pub protocol_fee: i128,
     pub released: bool,
     pub refunded: bool,
     pub work_evidence: Option<String>,

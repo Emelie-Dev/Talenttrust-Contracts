@@ -246,6 +246,7 @@ mod tests {
                 [Milestone {
                     amount: 1000,
                     funded_amount: 0,
+                    protocol_fee: 0,
                     released: false,
                     refunded: false,
                     work_evidence: None,
@@ -296,6 +297,7 @@ mod tests {
                 [Milestone {
                     amount: 1000,
                     funded_amount: 0,
+                    protocol_fee: 0,
                     released: false,
                     refunded: false,
                     work_evidence: None,
@@ -353,6 +355,7 @@ mod tests {
                 [Milestone {
                     amount: 1000,
                     funded_amount: 0,
+                    protocol_fee: 0,
                     released: false,
                     refunded: false,
                     work_evidence: None,
@@ -417,6 +420,7 @@ mod tests {
                 [Milestone {
                     amount: 1000,
                     funded_amount: 0,
+                    protocol_fee: 0,
                     released: false,
                     refunded: false,
                     work_evidence: None,
