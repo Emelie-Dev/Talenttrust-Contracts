@@ -234,6 +234,53 @@ fn bind_settlement_token_rejects_uninit() {
     );
 }
 
+#[test]
+fn bind_settlement_token_rejects_when_paused() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+    let client = register_client(&env);
+    let admin = client.get_admin().unwrap();
+    let sac = env.register_stellar_asset_contract(admin.clone());
+
+    client.pause();
+
+    super::assert_contract_error(
+        client.try_bind_settlement_token(&admin, &sac),
+        EscrowError::ContractPaused,
+    );
+    assert!(client.get_settlement_token().is_none());
+}
+
+#[test]
+fn bind_settlement_token_allows_when_unpaused() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+    let client = register_client(&env);
+    let admin = client.get_admin().unwrap();
+    let sac = env.register_stellar_asset_contract(admin.clone());
+
+    client.pause();
+    client.unpause();
+
+    assert!(client.bind_settlement_token(&admin, &sac));
+    assert_eq!(client.get_settlement_token(), Some(sac));
+}
+
+#[test]
+fn read_only_settlement_queries_work_while_paused() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+    let client = register_client(&env);
+    let admin = client.get_admin().unwrap();
+    let sac = env.register_stellar_asset_contract(admin.clone());
+
+    assert!(client.bind_settlement_token(&admin, &sac));
+    client.pause();
+
+    assert_eq!(client.get_settlement_token(), Some(sac));
+    assert!(client.is_settlement_token_bound());
+}
+
 /// Returns `true` when at least one published event carries
 /// `settlement_token_bound` as its first topic.
 fn has_settlement_token_bound_event(env: &Env) -> bool {
