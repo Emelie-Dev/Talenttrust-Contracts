@@ -276,6 +276,15 @@ The list intentionally omits planned or reserved entrypoints that are not implem
 - Events: `("dispute", "opened")`
 - Errors: `ContractPaused`, `EmergencyActive`, `ContractNotFound`, `UnauthorizedRole`, `ArbiterRequired`, `InvalidState`, `AlreadyFinalized`
 
+### raise_dispute_batch
+
+- Signature: `raise_dispute_batch(env: Env, caller: Address, contract_ids: Vec<u32>) -> bool`
+- Kind: Mutating
+- Auth: `caller.require_auth()` (per item via `raise_dispute`)
+- Semantics: Opens disputes for each contract ID in a bounded vector (`MAX_BATCH_DISPUTES = 10`). Per-item checks match `raise_dispute`. Over-cap batches are rejected with `BatchCapExceeded`. Failure on any item aborts the whole call (all-or-nothing).
+- Events: `("dispute", "opened")` per successfully disputed contract
+- Errors: `BatchCapExceeded`, plus all errors from `raise_dispute`
+
 ### resolve_dispute
 
 - Signature: `resolve_dispute(env: Env, contract_id: u32, arbiter: Address, resolution: DisputeResolution) -> bool`
